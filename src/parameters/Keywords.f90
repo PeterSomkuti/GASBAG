@@ -1,4 +1,9 @@
-module Keywords
+!! This module contains the list of accepted keywords for the config file. They
+!! are hard-coded in here, so the config_check subroutine can check against this
+!! list. This is a bit on the annoying side, but we want to make sure that
+!! no superfluous item is present in the config file.
+
+module keywords
 
     use stringifor
 
@@ -14,6 +19,7 @@ contains
         ! Everything is lowercase
 
         valid_sections(1) = "logger"
+        valid_sections(2) = "algorithm"
     end subroutine
 
 

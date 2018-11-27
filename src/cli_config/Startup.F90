@@ -107,7 +107,7 @@ contains
         ! If the check failed, stop the program.
         if (.not. config_file_OK) then
             call logger%fatal(fname, "Config file " // trim(config_file) // &
-                              "has not passed the check. Aborting.")
+                              " has not passed the check. Aborting.")
             stop
         else
             call logger%info(fname, "Config file seems OK!")
@@ -135,15 +135,17 @@ contains
         logical, intent(out) :: config_file_OK ! Is the config OK?
 
         character(len=*), parameter :: fname = 'Check_Config'
+
         character(len=:), allocatable :: sections(:) ! All sections in the file
         type(string) :: tmp_str
 
         logical :: found_section ! Have we found the section yet?
         integer :: i, j ! Loop variables
 
-        ! Initialise valid_sections here
+        ! Initialise valid_sections from the keywords module here
         call initialize_valid_sections()
 
+        ! Assume the config file is OK for now
         config_file_OK = .true.
 
         ! First, check if each section is a valid one
@@ -157,14 +159,15 @@ contains
             do j=1, size(valid_sections)
                 if (trim(tmp_str%lower()) == valid_sections(j)%chars()) then
                     found_section = .true.
+                    call logger%info(fname, "Found section [" // trim(tmp_str%chars()) // "]")
                 end if
             end do
 
             if (.not. found_section) then
                 ! Oh boy, this is not a valid section
-                call logger%error(fname, 'Sorry, section keyword "' // &
+                call logger%error(fname, 'Sorry, section keyword [' // &
                                       tmp_str%chars() // &
-                                      '" is not in the list of known sections.')
+                                      '] is not in the list of known sections.')
                 config_file_OK = .false.
             endif
         end do

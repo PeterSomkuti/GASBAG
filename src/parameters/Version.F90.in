@@ -1,3 +1,8 @@
+!! This module contains the GIT revision information that is parsed by CMAKE
+!! CMAKE then turns this into Version.f90, which contains the proper string
+!! literals for the various variables, that can then be accessed from the
+!! rest of the code.
+
 module version
     implicit none
 

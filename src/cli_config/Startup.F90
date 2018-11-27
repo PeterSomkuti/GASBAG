@@ -135,10 +135,12 @@ contains
             loglevel = 10
         end if
 
+        ! Initialize the logger entity with the path to the logfile and keep all
+        ! loggers at the same log-level (stdout, stderr, logfile)
         call logger_init(trim(logfile), loglevel, loglevel, loglevel)
 
-        write(tmp_str, '(A, I2.0)') "Logger initialized at " // trim(logfile) // &
-                                    " with loglevel: ", loglevel
+        write(tmp_str, '(A, I2.0)') "Logger initialized at [" // trim(logfile) // &
+                                    "] with loglevel: ", loglevel
         call logger%info(fname, trim(tmp_str))
 
         ! Now push all the configuration file contents into the global
@@ -156,8 +158,6 @@ contains
         ! are made down the line, when the respective item is actually used.
 
         use finer, only: file_ini ! CLI argument parser module
-        ! Pick up the logging module for status messages
-        use logger_mod, only: logger => master_logger
         use stringifor, only: string, trim ! For maniupulating strings
         use keywords, only: initialize_valid_sections, valid_sections, valid_options
 
@@ -165,8 +165,6 @@ contains
         ! DUMMY ARGUMENTS
         type(file_ini), intent(in out) :: fini ! Config file interface handler
         logical, intent(out) :: config_file_OK ! Is the config OK?
-
-        character(len=*), parameter :: fname = 'Check_Config'
 
         character(len=:), allocatable :: sections(:) ! All sections in the file
         character(len=:), allocatable :: option_pairs(:) ! Options in section
@@ -176,7 +174,7 @@ contains
         logical :: found_option ! .. or the option?
         ! The index used for valid_sections when a valid section has been found
         integer :: section_idx
-        integer :: i, j, k, m ! Loop variables
+        integer :: i, j, k ! Loop variables
 
         ! Initialise valid_sections from the keywords module here, so we can
         ! access them from outside.
@@ -224,16 +222,21 @@ contains
                     tmp_option = option_pairs(1)
 
                     do k=1, size(valid_options, 2)
+                        ! Loop over the 'dictionary' of valid options, corresponding
+                        ! to this particular section.
+
+                        ! If that option is emtpy, just skip it
                         if (trim(valid_options(section_idx, k)) == "") then
                             cycle
                         end if
 
+                        ! .. otherwise, compare it against the config entry
                         if (trim(tmp_option%lower()) == &
                             valid_options(section_idx, k)%chars()) then
                             ! Yes, we found a valid option!
                             write(*, '(A)') 'Option: "' &
                                             // trim(option_pairs(1)) // '" found'
-                            write(*, '(A)') 'Option values: ' // option_pairs(2)
+                            write(*, '(A)') trim(option_pairs(1)) // ' value(s): ' // option_pairs(2)
 
                             found_option = .true.
                         end if

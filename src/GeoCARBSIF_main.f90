@@ -5,8 +5,6 @@
 !
 program GeoCARBSIF
 
-    ! Pick up the logging module for status messages
-    use logger_mod, only: logger_init, logger => master_logger
     use startup, only: initialize_config
     use version, only: git_branch, git_commit_hash
 

@@ -1,7 +1,6 @@
-#ifndef VERSION_H
-#define VERSION_H
+module version
+    implicit none
 
-#define GIT_BRANCH "@GIT_BRANCH@"
-#define GIT_COMMIT_HASH "@GIT_COMMIT_HASH@"
-
-#endif
+    character(len=*), parameter :: git_branch = "@GIT_BRANCH@"
+    character(len=*), parameter :: git_commit_hash = "@GIT_COMMIT_HASH@"
+end module

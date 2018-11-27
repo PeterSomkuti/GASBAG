@@ -20,7 +20,9 @@ contains
         use finer, only: file_ini
         ! And the CLI argument parser module
         use flap, only : command_line_interface
-        use face
+        use stringifor
+
+        use version
 
         implicit none
 
@@ -29,17 +31,23 @@ contains
         integer :: error ! Error variable
 
         character(len=*), parameter :: fname = 'initialize_config'
+        type(string) :: version_string
 
         character(999) :: config_file ! Path to the configuration file
         logical :: config_file_exists ! Does the file exist?
         integer :: config_file_size ! What size is the file?
         logical :: config_file_OK ! Is the config OK (resonable)?
 
+
+        version_string = " -- Branch: " // git_branch // ", Hash: " // git_commit_hash
+
         ! Initialize the CLI interface - we only really need that one option,
         ! which is the location to the configuration file. Everything else
         ! should be contained within that text file.
         call cli%init(description = 'GeoCARBSIF Retrieval Algorithm', &
-                      authors='Peter Somkuti')
+                      authors='Peter Somkuti (CSU/CIRA)', &
+                      version=version_string%chars())
+
         call cli%add(switch='--config', &
                      switch_ab='-c', &
                      help='Path to the configuration file', &

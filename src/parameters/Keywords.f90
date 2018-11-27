@@ -14,7 +14,6 @@ contains
         ! Everything is lowercase
 
         valid_sections(1) = "logger"
-        valid_sections(2) = "adasd"
     end subroutine
 
 

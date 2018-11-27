@@ -42,7 +42,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-O0 ${bounds} ${warnings}")
+set(CMAKE_Fortran_FLAGS_DEBUG "-g -Os ${bounds} ${warnings}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 
 # Here are the standard modules we need in order to compile

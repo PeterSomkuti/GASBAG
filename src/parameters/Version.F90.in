@@ -8,4 +8,5 @@ module version
 
     character(len=*), parameter :: git_branch = "@GIT_BRANCH@"
     character(len=*), parameter :: git_commit_hash = "@GIT_COMMIT_HASH@"
+    character(len=*), parameter :: git_rev_no = "@GIT_REV_NO@"
 end module

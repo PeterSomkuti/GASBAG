@@ -12,7 +12,7 @@ set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
 
 execute_process(
   COMMAND git rev-parse --abbrev-ref HEAD
-  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE GIT_BRANCH
   OUTPUT_STRIP_TRAILING_WHITESPACE
 )
@@ -22,14 +22,22 @@ execute_process(
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE GIT_COMMIT_HASH
   OUTPUT_STRIP_TRAILING_WHITESPACE
-)
+  )
+
+execute_process(
+  COMMAND git rev-list --count HEAD
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE GIT_REV_NO
+  OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
 
 add_definitions("-DGIT_COMMIT_HASH=${GIT_COMMIT_HASH}")
 add_definitions("-DGIT_BRANCH=${GIT_BRANCH}")
+add_definitions("-DGIT_REV_NO=${GIT_REV_NO}")
 
 configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/Version.F90.in
-  ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.F90
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/Version.f90.in
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.f90
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
@@ -42,7 +50,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-g -Os ${bounds} ${warnings}")
+set(CMAKE_Fortran_FLAGS_DEBUG "-g ${bounds} ${warnings}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 
 # Here are the standard modules we need in order to compile

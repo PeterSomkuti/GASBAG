@@ -21,8 +21,10 @@ module keywords
 contains
 
     subroutine initialize_valid_sections()
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! Everything is lowercase here!!
-
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        
         ! Related to logging, messaging, verbosity
         valid_sections(1) = "logger"
             ! Where to write the logfile to?
@@ -35,6 +37,16 @@ contains
         valid_sections(2) = "algorithm"
             ! Which SIF algorithm(s) to use?
             valid_options(2,1) = "sif_algorithm"
+
+        ! Related to the instrument in question
+        valid_sections(3) = "instrument"
+            ! Which one?
+            valid_options(3,1) = "name"
+
+        ! Related to input files
+        valid_sections(4) = "input"
+            valid_options(4,1) = 'l1b_file'
+            valid_options(4,2) = 'met_file'
     end subroutine
 
 

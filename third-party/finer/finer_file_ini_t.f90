@@ -627,6 +627,7 @@ contains
         endif
       enddo
       tokens(s) = trim(adjustl(dummy))
+      tokens(s) = tokens(s)%lower()
     endif
   enddo
 

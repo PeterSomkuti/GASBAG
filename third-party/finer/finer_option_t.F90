@@ -249,11 +249,16 @@ contains
   type(string),  intent(in)    :: source !< String containing option data.
   integer(I4P),  intent(out)   :: error  !< Error code.
   integer(I4P)                 :: pos    !< Characters counter.
+  type(string) :: tmp_str
 
   error = ERR_OPTION_NAME
   pos = index(source, sep)
   if (pos > 0) then
-    self%oname = trim(adjustl(source%slice(1, pos-1)))
+    !self%oname = trim(adjustl(source%slice(1, pos-1)))
+      ! Change by Peter Somkuti to keep options lower case
+    tmp_str = trim(adjustl(source%slice(1, pos-1)))
+    tmp_str = tmp_str%lower()
+    self%oname = tmp_str%chars()
     error = 0
   endif
   endsubroutine parse_name

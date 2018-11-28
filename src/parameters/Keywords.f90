@@ -24,7 +24,7 @@ contains
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! Everything is lowercase here!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        
+
         ! Related to logging, messaging, verbosity
         valid_sections(1) = "logger"
             ! Where to write the logfile to?

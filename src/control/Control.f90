@@ -65,11 +65,15 @@ contains
 
         call logger%debug(fname, "Populating main program control structure..")
 
+        ! ----------------------------------------------------------------------
         ! Check which algoirthms the user wants
         ! First make sure that the config file does not have more than the
         ! max. allowed number of algorithms
+
+        alg_count = 0 ! Initialize with zero, otherwise we'll have garbage
         alg_count = fini%count_values(section_name="algorithm", &
                                       option_name="sif_algorithm")
+
 
 
         if (alg_count > MAX_ALGORITHMS) then
@@ -77,6 +81,9 @@ contains
             " algorithms at most, but you want ", alg_count, '.'
             call logger%fatal(fname, trim(tmp_str))
             stop 1
+        else if (alg_count == 0) then
+            call logger%warning(fname, "No SIF algorithms selected? " // &
+            "Hope you know what you're doing!")
         else
             MCS%algorithm%N_algorithms = alg_count
             allocate(alg_strings(alg_count))
@@ -88,23 +95,35 @@ contains
         ! a 'string' object fini_string, so we can perform the split operation
         ! where the results are going into a new string-array object.
 
-        call fini%get(section_name='algorithm', option_name='sif_algorithm', &
-                      val=fini_char, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Failure to get option value for " // &
-                                     "algorithm/sif_algorithm")
-            stop 1
+        if (alg_count > 0) then
+            call fini%get(section_name='algorithm', option_name='sif_algorithm', &
+                          val=fini_char, error=fini_error)
+            if (fini_error /= 0) then
+                call logger%fatal(fname, "Failure to get option value for " // &
+                                         "algorithm/sif_algorithm")
+                stop 1
+            end if
+
+            ! fini_string here is now hopefully space-delimited, i.e.
+            ! ALG1 ALG2 ALG3
+            fini_string = trim(fini_char)
+            ! .. and is split and saved into alg_strings, such that
+            ! alg_strings(1) = ALG1, alg_strings(2) = ALG2, etc.
+            call fini_string%split(tokens=alg_strings, sep=' ', &
+                                   max_tokens=alg_count)
+
+            ! Stick names of algorithms into MCS
+            do i=1, MCS%algorithm%N_algorithms
+                MCS%algorithm%name(i) = alg_strings(i)
+            end do
         end if
 
-        fini_string = trim(fini_char)
+        ! Algorithm section over------------------------------------------------
 
-        call fini_string%split(tokens=alg_strings, sep=' ', &
-                               max_tokens=alg_count)
 
-        ! Stick names of algorithms into MCS
-        do i=1, MCS%algorithm%N_algorithms
-            MCS%algorithm%name(i) = alg_strings(i)
-        end do
+        ! Inputs section
+
+
 
     end subroutine
 

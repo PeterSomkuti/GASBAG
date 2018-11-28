@@ -627,7 +627,10 @@ contains
         endif
       enddo
       tokens(s) = trim(adjustl(dummy))
-      tokens(s) = tokens(s)%lower()
+      ! This addition here was done by Peter Somkuti, it automatically
+      ! converts all tokens (sections, options or values) to lower case
+      ! BAD FOR FILENAMES!!!!
+      !tokens(s) = tokens(s)%lower()
     endif
   enddo
 

@@ -11,7 +11,8 @@ program GeoCARBSIF
     use finer, only: file_ini
 
     use iso_fortran_env
-
+    use HDF5
+    
     implicit none
 
 

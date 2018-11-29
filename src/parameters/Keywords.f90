@@ -45,8 +45,8 @@ contains
 
         ! Related to input files
         valid_sections(4) = "input"
-            valid_options(4,1) = 'l1b_file'
-            valid_options(4,2) = 'met_file'
+            valid_options(4,1) = 'l1b_file' ! L1b file location
+            valid_options(4,2) = 'met_file' ! MET file location
     end subroutine
 
 

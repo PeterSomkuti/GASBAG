@@ -65,8 +65,8 @@ set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 # properly. Most machines should have these by now.
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
-find_package(HDF5 REQUIRED)
-find_package(NETCDF REQUIRED)
+find_package(HDF5 REQUIRED COMPONENTS Fortran)
+find_package(NETCDF REQUIRED COMPONENTS Fortran)
 
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
@@ -80,7 +80,8 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 
 # Now we want warnings, but not for third-party libraries,
 # we sort of trust those to be working. So just disable warnings for
-# all files in the third-party directory.
+# all files in the third-party directory. Also, most third party stuff has not
+# been written to the latest standard, or best practices..
 set_source_files_properties(
   ${third-party}
   PROPERTIES
@@ -89,5 +90,7 @@ set_source_files_properties(
 
 # Define the executable
 add_executable(GeoCARBSIF ${sources} ${third-party} ${generated})
-# Link the BLAS and LAPACK libraries here
-target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_LIBRARIES})
+
+# HDF5 needs to be included at compile time already
+target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS})
+target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_Fortran_LIBRARIES})

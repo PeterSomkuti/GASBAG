@@ -7,6 +7,7 @@ module control
     use stringifor
     use finer, only: file_ini
     use logger_mod, only: logger => master_logger
+    use file_utils, only: check_config_files_exist
     implicit none
 
     ! At the moment, we only plan the Guanter and Frankenberg methods
@@ -17,20 +18,20 @@ module control
         integer :: N_algorithms ! Now many do we want to actually use?
     end type
 
-    type, private :: CS_inputs
+    type, private :: CS_input
         type(string) :: L1B_filename ! Path to the L1B file
         type(string) :: MET_filename ! Path to MET file
     end type
 
-    type, private :: CS_outputs
+    type, private :: CS_output
         type(string) :: output_filename ! Where does the ouptut HDF file go?
     end type
 
     ! Main control structure type
     type, private :: CS
         type(CS_algorithm) :: algorithm ! Algorithm-related settings
-        type(CS_inputs) :: inputs ! Input files needed by the program
-        type(CS_outputs) :: outputs ! Output file path(s)
+        type(CS_input) :: input ! Input files needed by the program
+        type(CS_output) :: output ! Output file path(s)
     end type
 
     ! Define it here. Rest of the code should be allowed to change data?
@@ -62,6 +63,7 @@ contains
         type(string) :: fini_string
 
         integer :: i
+        logical :: file_exists
 
         call logger%debug(fname, "Populating main program control structure..")
 
@@ -120,8 +122,22 @@ contains
 
         ! Algorithm section over------------------------------------------------
 
+        ! Inputs section -------------------------------------------------------
 
-        ! Inputs section
+        ! Check the L1b file input - this one is required
+        call check_config_files_exist(fini, "input", "l1b_file", 1, file_exists)
+
+        if(.not. file_exists) then
+            call logger%fatal(fname, "L1b input check failed.")
+            stop 1
+        else
+            ! All good? Stuff it into MCS
+            call fini%get(section_name='input', option_name='l1b_file', &
+                          val=fini_char, error=fini_error)
+            MCS%input%L1B_filename = trim(fini_char)
+        end if
+
+        ! ----------------------------------------------------------------------
 
 
 

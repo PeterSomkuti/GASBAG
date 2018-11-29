@@ -47,6 +47,14 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
   set(opt "-O3")
   set(bounds "-fbounds-check")
+else()
+  # only support Gfortran for now
+endif()
+
+if (CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 8.0)
+    message(FATAL_ERROR "gfortran version must be at least 8.0!")
+else()
+    message(STATUS "gfortran version is sufficcient!")
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
@@ -82,4 +90,4 @@ set_source_files_properties(
 # Define the executable
 add_executable(GeoCARBSIF ${sources} ${third-party} ${generated})
 # Link the BLAS and LAPACK libraries here
-target_link_libraries(GeoCARBSIF lapack blas)
+target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_LIBRARIES})

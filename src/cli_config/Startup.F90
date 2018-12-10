@@ -122,8 +122,6 @@ contains
             write(*, '(A)') "Config file seems OK! Moving on."
         end if
 
-        ! Now, if there is a logfile specified, we need to destroy the current
-        ! logger instance, and re-initialize a new one.
         tmp_str = "logger"
         if (fini%has_option(option_name='logfile', section_name=tmp_str)) then
                 call fini%get(section_name='logger', option_name='logfile', &

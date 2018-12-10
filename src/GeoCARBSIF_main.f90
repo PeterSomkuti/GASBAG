@@ -5,18 +5,32 @@
 !
 program GeoCARBSIF
 
+    use logger_mod, only: logger => master_logger
     use startup, only: initialize_config
     use version, only: git_branch, git_commit_hash, git_rev_no
-    use control, only: populate_control_structure
+    use control, only: MCS, populate_MCS
     use finer, only: file_ini
+    use instruments
+    use oco2
+
 
     use iso_fortran_env
     use HDF5
-    
+
     implicit none
 
 
     type(file_ini) :: fini ! The config file structure
+    class(generic_instrument), allocatable :: my_instrument
+    integer :: hdferr
+
+
+    ! Initilize the HDF5 library program-wide
+    call h5open_f(hdferr)
+    if (hdferr /= 0) then
+        write(*, '(A)') "Error initializing HDF5 library."
+        stop 1
+    end if
 
     ! Greet the user and display information about the build itself.
 
@@ -34,11 +48,21 @@ program GeoCARBSIF
 
     ! Initialize the program control structure with the settings from the
     ! config file.
-    call populate_control_structure(fini)
+    call populate_MCS(fini)
 
-    ! Check the supplied L1B file for sanity - are all variables present that
-    ! we need? Do they have the right shapes?
 
+    if (MCS%input%instrument_name == 'oco2') then
+        allocate(oco2_instrument :: my_instrument)
+        call logger%info("Main", "Using instrument: OCO-2")
+    else
+        call logger%fatal("Main", "Unknown instrument " // MCS%input%instrument_name)
+        stop 1
+    end if
+
+    select type(my_instrument)
+        type is (oco2_instrument)
+            call my_instrument%check_l1b_validity(MCS%input%l1b_filename)
+    end select
     ! Go and perform the retrieval process
 
 end program

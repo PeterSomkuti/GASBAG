@@ -1,6 +1,8 @@
-!! Main control structure (CS) of the program, for easy access of important
-!! quantities throughout the program, such as instrument and retrieval
+!! Main control structure (MCS) of the program, for easy access of important
+!! quantities throughout the program, such as instrument name and retrieval
 !! settings, algorithm modes, .. the whole shebang.
+!! This is designed to be instrument-independent, so apart from the name of the
+!! instrument, no instrument-specifics should be stored here.
 
 module control
 
@@ -21,6 +23,7 @@ module control
     type, private :: CS_input
         type(string) :: L1B_filename ! Path to the L1B file
         type(string) :: MET_filename ! Path to MET file
+        type(string) :: instrument_name ! Name of the instrument
     end type
 
     type, private :: CS_output
@@ -29,7 +32,7 @@ module control
 
     ! Main control structure type
     type, private :: CS
-        type(CS_algorithm) :: algorithm ! Algorithm-related settings
+        type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
         type(CS_input) :: input ! Input files needed by the program
         type(CS_output) :: output ! Output file path(s)
     end type
@@ -37,11 +40,11 @@ module control
     ! Define it here. Rest of the code should be allowed to change data?
     type(CS), public :: MCS
 
-    public populate_control_structure
+    public populate_MCS
 
 contains
 
-    subroutine populate_control_structure(fini)
+    subroutine populate_MCS(fini)
         !! In here, the contents of the config file are being used to populate
         !! the main control structure of the program. It's mostly string/value
         !! parsing and making sure that the contents of the config file are
@@ -134,11 +137,26 @@ contains
             ! All good? Stuff it into MCS
             call fini%get(section_name='input', option_name='l1b_file', &
                           val=fini_char, error=fini_error)
+            if (fini_error /= 0) then
+                call logger%fatal(fname, "Error reading l1b_file string")
+                stop 1
+            end if
             MCS%input%L1B_filename = trim(fini_char)
         end if
-
         ! ----------------------------------------------------------------------
 
+        ! Instrument section ---------------------------------------------------
+        ! Get instrument name
+        call fini%get(section_name='instrument', option_name='name', &
+                      val=fini_char, error=fini_error)
+        if (fini_error /= 0) then
+            call logger%fatal(fname, "Error reading instrument name")
+            stop 1
+        end if
+
+        MCS%input%instrument_name = trim(fini_char)
+
+        ! ----------------------------------------------------------------------
 
 
     end subroutine

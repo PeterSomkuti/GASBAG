@@ -15,6 +15,10 @@ module control
     ! At the moment, we only plan the Guanter and Frankenberg methods
     integer, parameter :: MAX_ALGORITHMS = 2
 
+    type, private :: CS_general
+        integer :: N_soundings ! Number of soundings to be processed
+    end type
+
     type, private :: CS_algorithm
         type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
         integer :: N_algorithms ! Now many do we want to actually use?
@@ -35,6 +39,7 @@ module control
         type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
         type(CS_input) :: input ! Input files needed by the program
         type(CS_output) :: output ! Output file path(s)
+        type(CS_general) :: general
     end type
 
     ! Define it here. Rest of the code should be allowed to change data?
@@ -69,6 +74,13 @@ contains
         logical :: file_exists
 
         call logger%debug(fname, "Populating main program control structure..")
+
+
+        ! ----------------------------------------------------------------------
+        ! First, we set all those fields to -1 values, that are added/populated
+        ! later in e.g. instrument-specific rountines.
+
+        MCS%general%N_soundings = -1
 
         ! ----------------------------------------------------------------------
         ! Check which algoirthms the user wants
@@ -146,6 +158,7 @@ contains
         ! ----------------------------------------------------------------------
 
         ! Instrument section ---------------------------------------------------
+
         ! Get instrument name
         call fini%get(section_name='instrument', option_name='name', &
                       val=fini_char, error=fini_error)
@@ -155,6 +168,9 @@ contains
         end if
 
         MCS%input%instrument_name = trim(fini_char)
+
+
+
 
         ! ----------------------------------------------------------------------
 

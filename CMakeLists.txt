@@ -92,9 +92,9 @@ set_source_files_properties(
 # Define the executable
 add_executable(GeoCARBSIF ${sources} ${third-party} ${generated})
 
-#message(STATUS "HDF5-HL Libraries at -- " ${HDF5_Fortran_HL_LIBRARIES})
-#message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
+message(STATUS "HDF5-HL Libraries at -- " ${HDF5_Fortran_HL_LIBRARIES})
+message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
 # HDF5 needs to be included at compile time already
-target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS})
-target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_Fortran_LIBRARIES})
+target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS})
+target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES})

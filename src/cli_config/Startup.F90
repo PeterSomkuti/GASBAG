@@ -46,7 +46,8 @@ contains
         character(999) :: tmp_str
 
 
-        version_string = "[ " // git_branch // " " // git_commit_hash // " ]"
+        version_string = "[" // git_branch // " " // git_commit_hash //  &
+                       " #" // git_rev_no // "]"
 
         ! Initialize the CLI interface - we only really need that one option,
         ! which is the location to the configuration file. Everything else

@@ -51,6 +51,12 @@ program GeoCARBSIF
     call populate_MCS(fini)
 
 
+    ! This is where the my_insturment type is properly allocated using one of
+    ! the derived types, depending on the instrument specified in the config.
+    ! From here on, all derived-type bound subroutines MUST be called through
+    ! a (sadly maybe cumbersome) SELECT TYPE statement - but this is just how
+    ! Fortran works with run-time isomorphism.
+
     if (MCS%input%instrument_name == 'oco2') then
         allocate(oco2_instrument :: my_instrument)
         call logger%info("Main", "Using instrument: OCO-2")
@@ -61,7 +67,7 @@ program GeoCARBSIF
 
     select type(my_instrument)
         type is (oco2_instrument)
-            call my_instrument%check_l1b_validity(MCS%input%l1b_filename)
+            call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
     end select
     ! Go and perform the retrieval process
 

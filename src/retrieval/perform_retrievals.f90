@@ -26,8 +26,7 @@ integer(hsize_t), allocatable :: num_pixels(:)
 character(len=999) :: dset_name
 integer(hid_t) :: dset_id
 
-integer :: i,j,k
-
+integer :: i,j
 
 ! Open the L1B_HDF file - this will generally be required
 call h5fopen_f(MCS%input%L1B_filename%chars(), H5F_ACC_RDONLY_F, l1b_file_id, hdferr)
@@ -46,6 +45,14 @@ do i=1, MCS%algorithm%N_algorithms
         using_GK_SIF = .true.
     end if
 end do
+
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+!! Basisfunction read-in from HDF file !!
+!! These are used very often throughout the retrieval process, !!
+!! hence we pre-load them (like ABSCO's) !!
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 if (using_GK_SIF) then
     ! If so, let us open up the basisfunction file
@@ -68,7 +75,10 @@ if (using_GK_SIF) then
     do i=1, my_instrument%num_fp
         do j=1, MCS%algorithm%n_basisfunctions
 
+            ! For now, I've decided the naming pattern for the basisfunctions
+            ! are BasisFunction_SVX_FPY, for basisfunction number X and footprint Y
             write(dset_name, '(A,G0.1,A,G0.1)') "/BasisFunction_SV", j, "_FP", i
+
             call logger%debug(fname, "Looking for " // trim(dset_name))
             call h5dopen_f(basisfunction_file_id, dset_name, dset_id, hdferr)
             if (hdferr /= 0) then
@@ -83,22 +93,26 @@ if (using_GK_SIF) then
             end if
             call logger%debug(fname, "Read in " // trim(dset_name))
 
+            ! Copy over data to basisfunctions array. Note!! This might have a
+            ! good number of NaNs in there. Does not mean the file is bad!
             basisfunctions(:,i,j) = tmp_data(:)
-
 
         end do
     end do
 
+end if ! End reading in basisfunctions
 
-    do i=1, num_pixels(1)
-        write(*,*) basisfunctions(i,1,1)
-    end do
 
+if (MCS%algorithm%using_GK_SIF) then
+    ! Launch Guanter Retrievals!!!
+    !call guanter_retrieval(l1b_file_id, basis_functions, my_instrument)
 end if
 
+! Do the error analysis
+! How do we do this without knowing first which forward models are being run?
 
 
-
+! Save the results into a file
 
 
 end subroutine

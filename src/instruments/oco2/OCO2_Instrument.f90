@@ -33,7 +33,7 @@ contains
         character(len=*), parameter :: fname = "scan_l1b_file"
         character(len=999) :: msg
         integer(hid_t) :: file_id
-        integer(kind=8) :: n_fp_frames(2)
+        integer(kind=8), allocatable :: n_fp_frames(:)
         integer :: hdferr
 
         ! Open the HDF file
@@ -46,6 +46,10 @@ contains
         ! Let's start with the sounding IDs and have a look how many we actually
         ! have in this file.
         call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
+        if (size(n_fp_frames) /= 2) then
+            call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
+            stop 1
+        end if
 
         write(msg, "(A, I1, A, I8.1)") "Number of footprints: ", n_fp_frames(1), ", number of frames: ", n_fp_frames(2)
         call logger%info(fname, trim(msg))
@@ -56,7 +60,6 @@ contains
         ! that later to allocate all those big arrays.
         MCS%general%N_soundings = n_fp_frames(1)*n_fp_frames(2)
 
-        
 
 
 

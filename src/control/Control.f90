@@ -16,12 +16,20 @@ module control
     integer, parameter :: MAX_ALGORITHMS = 2
 
     type, private :: CS_general
-        integer :: N_soundings ! Number of soundings to be processed
+        integer(8) :: N_soundings ! Number of soundings to be processed
     end type
 
     type, private :: CS_algorithm
         type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
-        integer :: N_algorithms ! Now many do we want to actually use?
+        integer :: N_algorithms ! How many do we want to actually use?
+        integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
+    end type
+
+    type, private :: CS_window
+        type(string) :: name
+        double precision :: wl_min
+        double precision :: wl_max
+        type(string) :: basisfunction_file
     end type
 
     type, private :: CS_input
@@ -37,6 +45,7 @@ module control
     ! Main control structure type
     type, private :: CS
         type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
+        type(CS_window) :: window
         type(CS_input) :: input ! Input files needed by the program
         type(CS_output) :: output ! Output file path(s)
         type(CS_general) :: general
@@ -69,9 +78,11 @@ contains
         integer :: fini_error
         character(len=999) :: fini_char
         type(string) :: fini_string
+        double precision :: fini_val
 
         integer :: i
         logical :: file_exists
+
 
         call logger%debug(fname, "Populating main program control structure..")
 
@@ -81,6 +92,10 @@ contains
         ! later in e.g. instrument-specific rountines.
 
         MCS%general%N_soundings = -1
+
+        MCS%window%name = ""
+        MCS%window%wl_min = 0.0d0
+        MCS%window%wl_max = 0.0d0
 
         ! ----------------------------------------------------------------------
         ! Check which algoirthms the user wants
@@ -135,6 +150,16 @@ contains
             end do
         end if
 
+        tmp_str = "algorithm"
+        if (fini%has_option(section_name=tmp_str, &
+                            option_name="n_basisfunctions")) then
+
+            call fini%get(section_name='algorithm', option_name='n_basisfunctions', &
+                          val=fini_val, error=fini_error)
+
+            MCS%algorithm%N_basisfunctions = int(fini_val)
+        end if
+
         ! Algorithm section over------------------------------------------------
 
         ! Inputs section -------------------------------------------------------
@@ -155,6 +180,7 @@ contains
             end if
             MCS%input%L1B_filename = trim(fini_char)
         end if
+
         ! ----------------------------------------------------------------------
 
         ! Instrument section ---------------------------------------------------
@@ -168,12 +194,47 @@ contains
         end if
 
         MCS%input%instrument_name = trim(fini_char)
-
-
-
-
         ! ----------------------------------------------------------------------
 
+
+        ! Windows section ------------------------------------------------------
+        call fini%get(section_name='window', option_name='name', &
+                      val=fini_char, error=fini_error)
+        if (fini_error /= 0) then
+            call logger%fatal(fname, "Could not read name in window section!")
+            stop 1
+        else
+            MCS%window%name = trim(fini_char)
+        end if
+
+        call fini%get(section_name='window', option_name='wl_min', &
+                      val=fini_val, error=fini_error)
+        if (fini_error /= 0) then
+            call logger%fatal(fname, "Could not read wl_min in window section!")
+            stop 1
+        else
+            MCS%window%wl_min = fini_val
+        end if
+
+        call fini%get(section_name='window', option_name='wl_max', &
+                      val=fini_val, error=fini_error)
+        if (fini_error /= 0) then
+            call logger%fatal(fname, "Could not read wl_ax in window section!")
+            stop 1
+        else
+            MCS%window%wl_max = fini_val
+        end if
+
+        call fini%get(section_name='window', option_name='basisfunctions', &
+                      val=fini_char, error=fini_error)
+        if (fini_error /= 0) then
+            call logger%fatal(fname, "Could not read wl_ax in window section!")
+            stop 1
+        else
+            MCS%window%basisfunction_file = trim(fini_char)
+        end if
+
+        ! ----------------------------------------------------------------------
 
     end subroutine
 

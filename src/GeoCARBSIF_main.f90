@@ -67,8 +67,18 @@ program GeoCARBSIF
 
     select type(my_instrument)
         type is (oco2_instrument)
+            ! Scan the L1b file - we need some info from there
             call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
+            my_instrument%num_fp = 8
     end select
-    ! Go and perform the retrieval process
+
+
+    ! Go and perform the retrieval process. At this stage, all information from
+    ! the config file should have been passed onto the MCS, hence why the main
+    ! retrieval function needs no arguments, and also does not return anything
+    ! back really.
+
+    call perform_retrievals(my_instrument)
+
 
 end program

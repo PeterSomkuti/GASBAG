@@ -7,11 +7,6 @@ module file_utils
     use logger_mod, only: logger => master_logger
 
     implicit none
-    private
-
-    interface get_HDF5_dset_dims
-        module procedure get_HDF5_dset_dims_2d
-    end interface
 
 
     public check_config_files_exist, get_HDF5_dset_dims
@@ -19,23 +14,24 @@ module file_utils
 contains
 
 
-    subroutine get_HDF5_dset_dims_2d(file_id, dset_name, dset_dims)
+    subroutine get_HDF5_dset_dims(file_id, dset_name, dset_dims)
 
         ! Takes a HDF5 file_id, looks for the dataset with dset_name, and
-        ! reads the shape of the dataset array and puts it into dset_dims
+        ! reads the shape of the dataset array and puts it into the allocatable
+        ! dset_dims variable
 
         integer(hid_t), intent(in) :: file_id
         character(len=*), intent(in) :: dset_name
-        integer(kind=8), intent(out) :: dset_dims(2)
+        integer(kind=8), allocatable, intent(out) :: dset_dims(:)
 
-        character(len=*), parameter :: fname = "get_HDF5_dset_dims_2d"
+        character(len=*), parameter :: fname = "get_HDF5_dset_dims"
 
         integer(hid_t) :: dset_id, dspace_id
-        integer(hsize_t) :: dim_dset_2d(2), max_dim_dset_2d(2)
+        integer :: ndims
+        integer(hsize_t), allocatable :: dim_dset(:), max_dim_dset(:)
         integer :: hdferr
 
-        ! First establish how many measurements we have in total by interr-
-        ! ogating the sounding_id list
+
         call h5dopen_f(file_id, dset_name, dset_id, hdferr)
         if (hdferr /= 0) then
           call logger%fatal(fname, "Error reading field: " // trim(dset_name))
@@ -48,7 +44,17 @@ contains
             stop 1
         end if
 
-        call h5sget_simple_extent_dims_f(dspace_id, dim_dset_2d, max_dim_dset_2d, hdferr)
+        call h5sget_simple_extent_ndims_f(dspace_id, ndims, hdferr)
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error getting ndims for " // trim(dset_name))
+            stop 1
+        end if
+
+        allocate(dim_dset(ndims))
+        allocate(max_dim_dset(ndims))
+        allocate(dset_dims(ndims))
+
+        call h5sget_simple_extent_dims_f(dspace_id, dim_dset, max_dim_dset, hdferr)
         if (hdferr == -1) then
             ! Note, this function returns the non-negative dataspace rank as the
             ! error code on success. -1 on a fail.
@@ -56,11 +62,14 @@ contains
             stop 1
         end if
 
-        dset_dims(:) = dim_dset_2d(:)
+        dset_dims(:) = dim_dset(:)
+
+        call h5dclose_f(dset_id, hdferr)
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error closing dataset " // trim(dset_name))
+        end if
 
     end subroutine
-
-
 
 
     subroutine check_config_files_exist(fini, section_name, option_name, &

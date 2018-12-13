@@ -23,6 +23,8 @@ module control
         type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
         integer :: N_algorithms ! How many do we want to actually use?
         integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
+        logical :: using_GK_SIF
+        logical :: using_physical_SIF
     end type
 
     type, private :: CS_window
@@ -93,6 +95,9 @@ contains
 
         MCS%general%N_soundings = -1
 
+        MCS%algorithm%using_GK_SIF = .false.
+        MCS%algorithm%using_physical_SIF = .false.
+
         MCS%window%name = ""
         MCS%window%wl_min = 0.0d0
         MCS%window%wl_max = 0.0d0
@@ -147,6 +152,14 @@ contains
             ! Stick names of algorithms into MCS
             do i=1, MCS%algorithm%N_algorithms
                 MCS%algorithm%name(i) = alg_strings(i)
+            end do
+
+            ! And also check which one's we have to set the booleans correctly
+            do i=1, MCS%algorithm%N_algorithms
+                if (MCS%algorithm%name(i) == 'GK') then
+                    MCS%algorithm%using_GK_SIF = .true.
+                    call logger%trivia(fname, "Utilizing Guanter-type SIF retrieval!")
+                end if
             end do
         end if
 

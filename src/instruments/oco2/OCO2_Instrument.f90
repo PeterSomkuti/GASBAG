@@ -22,6 +22,8 @@ module oco2
         procedure, nopass :: read_l1b_dispersion
         procedure, nopass :: read_l1b_snr_coef
         procedure, nopass :: read_num_frames
+        procedure, nopass :: calculate_dispersion
+        procedure, nopass :: read_one_spectrum
     end type
 
 
@@ -135,8 +137,6 @@ contains
         character(len=*), parameter :: fname = "read_num_frames(oco2)"
         character(len=*), parameter :: dset_name = "/Metadata/ExpectedFrames"
 
-
-
         call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
         if (hdferr /= 0) then
             call logger%fatal(fname, "Error opening SNR coeffs at: " // trim(dset_name))
@@ -149,6 +149,93 @@ contains
             stop 1
         end if
 
+    end subroutine
+
+    subroutine calculate_dispersion(disp_coef, dispersion, num_pixel)
+
+        double precision, intent(in) :: disp_coef(:,:,:)
+        double precision, intent(out), allocatable :: dispersion(:,:,:)
+        integer(8), intent(in) :: num_pixel
+
+        integer(8) :: pix, fp, order, band
+
+        ! three bands
+        allocate(dispersion(num_pixel, 8, 3))
+        dispersion(:,:,:) = 0.0d0
+
+        do pix=1, num_pixel
+            do band=1, 3
+                do fp=1, 8
+                    do order=1, 6
+                        dispersion(pix,fp,band) = dispersion(pix,fp,band) + pix ** (order-1) * disp_coef(order,fp,band)
+                    end do
+                end do
+            end do
+        end do
+    end subroutine
+
+    subroutine read_one_spectrum(l1b_file_id, i_fr, i_fp, band, spectrum)
+
+        implicit none
+
+        integer(hid_t) :: l1b_file_id
+        integer, intent(in) :: i_fr, i_fp, band
+        double precision, allocatable :: spectrum(:)
+        character(len=*), parameter :: fname = "read_one_spectrum(oco2)"
+        character(len=999) :: dset_name
+        integer(hid_t) :: dset_id, dspace_id, memspace_id
+        logical :: selection_valid
+        integer(hsize_t) :: hs_offset(3), hs_count(3), hs_stride(3), hs_block(3)
+        integer(hsize_t) :: dim_mem(1)
+        integer :: hdferr
+
+
+        ! Set dataset name according to the band we want
+        if (band == 1) then
+            dset_name = "/SoundingMeasurements/radiance_o2"
+        else if (band == 2) then
+            dset_name = "/SoundingMeasurements/radiance_weak_co2"
+        else if (band == 3) then
+            dset_name = "/SoundingMeasurements/radiance_strong_co2"
+        else
+            call logger%fatal(fname, "Band number must be between 1 and 3!")
+            stop 1
+        end if
+
+        call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error opening spectra at: " // trim(dset_name))
+            stop 1
+        end if
+
+        !! Offset - where do we start our hyperslab
+        hs_offset(1) = 0
+        hs_offset(2) = i_fp - 1
+        hs_offset(3) = i_fr - 1
+
+        hs_stride(:) = 1
+        hs_block(:) = 1
+
+        hs_count(1) = 1016
+        hs_count(2) = 0
+        hs_count(3) = 0
+
+        dim_mem(1) = 1016
+
+        allocate(spectrum(1016))
+        spectrum(:) = 0.0d0
+
+        call h5dget_space_f(dset_id, dspace_id, hdferr)
+        write(*,*) "h5dget_space_f", hdferr
+
+        call h5sselect_hyperslab_f(dspace_id, H5S_SELECT_SET_F, &
+                                   hs_offset, hs_count, hdferr)
+        call h5sselect_valid_f(dspace_id, selection_valid, hdferr)
+        write(*,*) "h5sselect_valid_f", selection_valid, hdferr
+        call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
+        write(*,*) "h5screate_simple_f", hdferr
+        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum(:), dim_mem, hdferr, memspace_id)
+        write(*,*) "h5dread_f", hdferr
     end subroutine
 
 end module

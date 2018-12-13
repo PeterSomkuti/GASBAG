@@ -7,6 +7,8 @@ use control, only: MCS
 use instruments, only: generic_instrument
 use logger_mod, only: logger => master_logger
 use file_utils, only: get_HDF5_dset_dims
+
+use guanter_model
 use HDF5
 
 implicit none

@@ -181,6 +181,10 @@ contains
         integer(hid_t) :: l1b_file_id
         integer, intent(in) :: i_fr, i_fp, band
         double precision, allocatable :: spectrum(:)
+
+        double precision :: tmp(1016, 8, 8344)
+        integer(hsize_t) :: tmp_shape(3) = [1016, 8, 8344]
+
         character(len=*), parameter :: fname = "read_one_spectrum(oco2)"
         character(len=999) :: dset_name
         integer(hid_t) :: dset_id, dspace_id, memspace_id
@@ -188,6 +192,10 @@ contains
         integer(hsize_t) :: hs_offset(3), hs_count(3), hs_stride(3), hs_block(3)
         integer(hsize_t) :: dim_mem(1)
         integer :: hdferr
+        integer(hsize_t) :: bbox_start(3), bbox_end(3)
+        integer(hsize_t) :: npoints_1, npoints_2
+        logical :: extent_equal
+        integer :: i, funit
 
 
         ! Set dataset name according to the band we want
@@ -210,15 +218,15 @@ contains
 
         !! Offset - where do we start our hyperslab
         hs_offset(1) = 0
-        hs_offset(2) = i_fp - 1
-        hs_offset(3) = i_fr - 1
+        hs_offset(2) = 0
+        hs_offset(3) = 4444
 
         hs_stride(:) = 1
         hs_block(:) = 1
 
         hs_count(1) = 1016
-        hs_count(2) = 0
-        hs_count(3) = 0
+        hs_count(2) = 1
+        hs_count(3) = 1
 
         dim_mem(1) = 1016
 
@@ -229,13 +237,31 @@ contains
         write(*,*) "h5dget_space_f", hdferr
 
         call h5sselect_hyperslab_f(dspace_id, H5S_SELECT_SET_F, &
-                                   hs_offset, hs_count, hdferr)
+                                   hs_offset, hs_count, hdferr, &
+                                   hs_stride, hs_block)
+        write(*,*) "h5sselect_hyperslab_f", hdferr
+        !call h5sselect_all_f(dspace_id, hdferr)
+        call h5sget_select_bounds_f(dspace_id, bbox_start, bbox_end, hdferr)
+
+        write(*,*) bbox_start
+        write(*,*) bbox_end
+
+
+
         call h5sselect_valid_f(dspace_id, selection_valid, hdferr)
         write(*,*) "h5sselect_valid_f", selection_valid, hdferr
-        call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
+        call h5screate_simple_f(3, dim_mem, memspace_id, hdferr)
         write(*,*) "h5screate_simple_f", hdferr
-        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum(:), dim_mem, hdferr, memspace_id)
+
+        call h5sget_select_npoints_f(memspace_id, npoints_1, hdferr)
+        call h5sget_select_npoints_f(dspace_id, npoints_2, hdferr)
+
+        write(*,*) "Points in dataspaces ", npoints_1, npoints_2
+
+        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, hdferr, memspace_id, dspace_id)
+        !call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum(:), dim_mem, hdferr)!, memspace_id)
         write(*,*) "h5dread_f", hdferr
+
     end subroutine
 
 end module

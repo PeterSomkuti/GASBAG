@@ -6,15 +6,19 @@ module guanter_model
     use logger_mod, only: logger => master_logger
     use file_utils, only: get_HDF5_dset_dims
 
+    use math_utils
+
     implicit none
+
+    public guanter_retrieval
+
+    private
 
     ! In the Guanter-scheme, dispersion is not really touched, hence we can just
     ! keep it as a module-wide fixed set of numbers (pixel, footprint)
-    double precision, allocatable :: dispersion(:,:)
-
-    double precision, allocatable :: basisfunctions(:,:,:)
-
-    public guanter_retrieval
+    double precision, save, allocatable :: dispersion(:,:,:)
+    ! Basisfunctions are stored as (spectral pixel, footprint, #SV)
+    double precision, save, allocatable :: basisfunctions(:,:,:)
 
 
 contains
@@ -35,7 +39,6 @@ contains
 
 
         double precision, allocatable :: dispersion_coefs(:,:,:)
-        double precision, allocatable :: dispersion(:,:,:)
         double precision, allocatable :: snr_coefs(:,:,:,:)
 
         integer :: i_fr, i_fp ! Indices for frames and footprints
@@ -105,7 +108,7 @@ contains
             type is (oco2_instrument)
                 ! Read dispersion coefficients and create dispersion array
                 call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-                call my_instrument%calculate_dispersion(dispersion_coefs, dispersion, num_pixels(1))
+                call my_instrument%calculate_dispersion(dispersion_coefs, dispersion)
 
                 ! Grab the SNR coefficients for noise calculations
                 call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
@@ -116,8 +119,10 @@ contains
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        do i_fp=1, 1!my_instrument%num_fp
-            do i_fr=1, 1!num_frames(1)
+        do i_fp=1, 1 !my_instrument%num_fp
+            do i_fr=1, 1 !num_frames(1)
+
+                write(*,*) i_fp, i_fr
 
                 call guanter_FM(my_instrument, l1b_file_id, i_fr, i_fp, &
                                 snr_coefs)
@@ -134,10 +139,13 @@ contains
                           snr_coefs)
 
         implicit none
+
         class(generic_instrument), intent(in) :: my_instrument
         integer(hid_t) :: l1b_file_id
         integer :: i_fr, i_fp
+        integer :: l1b_wl_idx_min, l1b_wl_idx_max
         double precision :: snr_coefs(:,:,:,:)
+        integer :: i, funit
 
         !! This is where most of the juice is. The retrieval concept is fairly
         !! simple, but there are still some tasks to do to get it done. i_fr and
@@ -148,34 +156,121 @@ contains
         double precision, allocatable :: radiance_work(:)
         double precision, allocatable :: radiance_l1b(:)
 
-
         select type(my_instrument)
             type is (oco2_instrument)
-
                 call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
-
         end select
 
+        !! We now have the full L1b spectrum of a given index, we need to grab
+        !! the relevant portion of the spectrum.
+        l1b_wl_idx_min = 0
+        l1b_wl_idx_max = 0
 
+        do i=1, size(dispersion, 1)
+            if (dispersion(i, i_fp, 1) < MCS%window%wl_min) then
+                l1b_wl_idx_min = i
+            end if
+            if (dispersion(i, i_fp, 1) < MCS%window%wl_max) then
+                l1b_wl_idx_max = i
+            end if
+        end do
 
+        write(*,*) "Dispersion min value: ", dispersion(l1b_wl_idx_min, i_fp, 1)
+        write(*,*) "Dispersion max value: ", dispersion(l1b_wl_idx_max, i_fp, 1)
+
+        ! Allocate some space for the new work array which we can do the
+        ! retrieval with, and copy over the corrsponding part of the spectrum
+        allocate(radiance_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+        radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+
+        ! Do the slope correction for the selected spectrum
+        call slope_correction(radiance_work, 40.0d0)
+        ! And we have our "y" mesurement vector ready!!
+
+        write(*,*) shape(basisfunctions)
+        open(newunit=funit, file="test.dat")
+        do i=1, size(radiance_work)
+            write(funit, *) radiance_work(i), &
+                            basisfunctions(i-1+l1b_wl_idx_min,1,1), &
+                            basisfunctions(i-1+l1b_wl_idx_min,1,2), &
+                            basisfunctions(i-1+l1b_wl_idx_min,1,3)
+        enddo
+        close(funit)
 
 
     end subroutine
 
 
+
+
+
+
     subroutine slope_correction(radiance, perc)
 
         implicit none
-        double precision, intent(in) :: radiance(:)
-        integer, intent(in) :: perc
+        double precision, intent(inout) :: radiance(:)
+        double precision, intent(in) :: perc
 
-        double precision, allocatable :: tmp_rad(:)
+        double precision :: perc_value
+        integer :: num_used
+        double precision, allocatable :: adata(:,:), bdata(:,:)
+        double precision, allocatable :: work(:)
+        integer :: sgels_info
+        character(len=*), parameter :: fname = "slope_correction"
+
+        integer :: i, cnt
         ! Slope normalization works like this: first, we grab the top X percent
         ! all radiance points (to make sure we mostly have continuum). X ~ 60
         ! After that, we fit a linear function through these points to get
         ! slope and intersect - by which linear function we then divide the
         ! radiance.
 
+        ! This is the percentile value from the radiance array
+        perc_value = percentile(radiance, perc)
+        num_used = count(radiance > perc_value)
+
+        ! We need a new container for values ABOVE the percentile one
+        allocate(adata(num_used, 2))
+        allocate(bdata(num_used, 1))
+        allocate(work(2 * num_used))
+
+        ! Take out all the radiance values (with pixel positions) that are
+        ! larger than the percentile value, and stick them into tmp_rad and tmp_coord
+        adata(:, 1) = 1.0 ! For calculating intercepts
+        cnt = 1
+        do i=1, size(radiance)
+            if (radiance(i) > perc_value) then
+                bdata(cnt, 1) = radiance(i)
+                adata(cnt, 2)= i
+                cnt = cnt + 1
+            end if
+        end do
+
+        !! Now we need to perform a linear regression y = ax + b.
+        !! Use the handy LAPACK routine DGELS here.
+
+        call DGELS('N', &          ! TRANS
+                   num_used, &     ! M
+                   2, &            ! N
+                   1, &            ! NRHS
+                   adata, &        ! A
+                   num_used, &     ! LDA
+                   bdata, &        ! B
+                   num_used, &     ! LDB
+                   work, &         ! WORK
+                   2*num_used, &   ! LWORK
+                   sgels_info)
+
+        if (sgels_info /= 0) then
+            call logger%fatal(fname, "Error from DGELS.")
+            stop 1
+        end if
+
+        ! We now have the intercept in bdata(1,1), and the slope in bdata(2,1)
+        ! and can thus slope-correct the spectrum.
+        do i=1, size(radiance)
+            radiance(i) = radiance(i) / (bdata(1,1) + (i * bdata(2,1)))
+        end do
 
 
     end subroutine

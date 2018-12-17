@@ -151,19 +151,18 @@ contains
 
     end subroutine
 
-    subroutine calculate_dispersion(disp_coef, dispersion, num_pixel)
+    subroutine calculate_dispersion(disp_coef, dispersion)
 
         double precision, intent(in) :: disp_coef(:,:,:)
         double precision, intent(out), allocatable :: dispersion(:,:,:)
-        integer(8), intent(in) :: num_pixel
 
         integer(8) :: pix, fp, order, band
 
         ! three bands
-        allocate(dispersion(num_pixel, 8, 3))
+        allocate(dispersion(1016, 8, 3))
         dispersion(:,:,:) = 0.0d0
 
-        do pix=1, num_pixel
+        do pix=1, 1016
             do band=1, 3
                 do fp=1, 8
                     do order=1, 6
@@ -176,26 +175,24 @@ contains
 
     subroutine read_one_spectrum(l1b_file_id, i_fr, i_fp, band, spectrum)
 
+        ! Select one (!) OCO-2 sounding via HDF5 hyperslab selection and feed it
+        ! into the array "spectrum". The chosen spectrum is selected by the indices
+        ! i_fr (frame index), i_fp (footprint index), and band (number)
+
         implicit none
 
         integer(hid_t) :: l1b_file_id
         integer, intent(in) :: i_fr, i_fp, band
         double precision, allocatable :: spectrum(:)
 
-        double precision :: tmp(1016, 8, 8344)
-        integer(hsize_t) :: tmp_shape(3) = [1016, 8, 8344]
-
         character(len=*), parameter :: fname = "read_one_spectrum(oco2)"
         character(len=999) :: dset_name
         integer(hid_t) :: dset_id, dspace_id, memspace_id
         logical :: selection_valid
-        integer(hsize_t) :: hs_offset(3), hs_count(3), hs_stride(3), hs_block(3)
+        integer(hsize_t) :: hs_offset(3), hs_count(3)
         integer(hsize_t) :: dim_mem(1)
         integer :: hdferr
-        integer(hsize_t) :: bbox_start(3), bbox_end(3)
-        integer(hsize_t) :: npoints_1, npoints_2
         logical :: extent_equal
-        integer :: i, funit
 
 
         ! Set dataset name according to the band we want
@@ -216,51 +213,60 @@ contains
             stop 1
         end if
 
-        !! Offset - where do we start our hyperslab
+        !! Offset - where do we start our hyperslab? We read the full spectrum, so
+        !! the first index is 0, the other two depenend on the indices.
+        !! Remember the order in OCO-2 files: (spectral index, footprint, frame)
+        !! .. as seen by Fortran
+
         hs_offset(1) = 0
-        hs_offset(2) = 0
-        hs_offset(3) = 4444
+        hs_offset(2) = i_fp - 1
+        hs_offset(3) = i_fr - 1
 
-        hs_stride(:) = 1
-        hs_block(:) = 1
-
+        !! We step 1016 in the spectral direction to get the full measurement,
+        !! and 1 each in the frame and footprint directions (convention)
         hs_count(1) = 1016
         hs_count(2) = 1
         hs_count(3) = 1
 
+        !! This is the size of the container that we will be writing the spectral
+        !! data into.
         dim_mem(1) = 1016
 
         allocate(spectrum(1016))
         spectrum(:) = 0.0d0
 
+        !! So this is how a hyperslab selection in HDF5 works. First, get the
+        !! dataspace corresponding to the dataset you want to grab from. Then
+        !! call h5sselect_hyperslab, and using offset and count, select the
+        !! data you want to grab. Now we have to create a memory space which has
+        !! the exact same size (not shape necessarily) as the hyperslab selection.
+        !! Now using h5dread, using both memory and dataspace id, the data can
+        !! be read from the file.
+
         call h5dget_space_f(dset_id, dspace_id, hdferr)
-        write(*,*) "h5dget_space_f", hdferr
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error getting dataspace id for " // trim(dset_name))
+            stop 1
+        end if
 
         call h5sselect_hyperslab_f(dspace_id, H5S_SELECT_SET_F, &
-                                   hs_offset, hs_count, hdferr, &
-                                   hs_stride, hs_block)
-        write(*,*) "h5sselect_hyperslab_f", hdferr
-        !call h5sselect_all_f(dspace_id, hdferr)
-        call h5sget_select_bounds_f(dspace_id, bbox_start, bbox_end, hdferr)
+                                   hs_offset, hs_count, hdferr)
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error performing hyperslab selection.")
+            stop 1
+        end if
 
-        write(*,*) bbox_start
-        write(*,*) bbox_end
-
-
-
-        call h5sselect_valid_f(dspace_id, selection_valid, hdferr)
-        write(*,*) "h5sselect_valid_f", selection_valid, hdferr
-        call h5screate_simple_f(3, dim_mem, memspace_id, hdferr)
-        write(*,*) "h5screate_simple_f", hdferr
-
-        call h5sget_select_npoints_f(memspace_id, npoints_1, hdferr)
-        call h5sget_select_npoints_f(dspace_id, npoints_2, hdferr)
-
-        write(*,*) "Points in dataspaces ", npoints_1, npoints_2
+        call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error creating simple memory space.")
+            stop 1
+        end if
 
         call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, hdferr, memspace_id, dspace_id)
-        !call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum(:), dim_mem, hdferr)!, memspace_id)
-        write(*,*) "h5dread_f", hdferr
+        if (hdferr /= 0) then
+            call logger%fatal(fname, "Error reading spectrum data from " // trim(dset_name))
+            stop 1
+        end if
 
     end subroutine
 

@@ -24,6 +24,7 @@ module oco2
         procedure, nopass :: read_num_frames
         procedure, nopass :: calculate_dispersion
         procedure, nopass :: read_one_spectrum
+        procedure, nopass :: calculate_noise
     end type
 
 
@@ -267,6 +268,25 @@ contains
             call logger%fatal(fname, "Error reading spectrum data from " // trim(dset_name))
             stop 1
         end if
+
+    end subroutine
+
+
+    subroutine calculate_noise(snr_coefs, radiance, noise, fp, band, idx_start, idx_end)
+        double precision, intent(in) :: snr_coefs(:,:,:,:)
+        double precision, intent(in) :: radiance(:)
+        double precision, intent(inout) :: noise(:)
+        integer, intent(in) :: fp, band, idx_start, idx_end
+
+        double precision, parameter :: MaxMS(3) = [4.00E20, 2.45E20, 1.25E20]
+        integer :: i
+
+        do i=1, size(noise)
+            noise(i) = (MaxMS(band) / 100) * sqrt(abs(100 * radiance(i) / MaxMS(band)) * &
+                        snr_coefs(1,idx_start+i-1,fp,band)**2 + snr_coefs(2,idx_start+i-1,fp,band))
+        end do
+
+
 
     end subroutine
 

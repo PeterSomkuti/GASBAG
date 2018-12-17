@@ -119,8 +119,8 @@ contains
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        do i_fp=1, 1 !my_instrument%num_fp
-            do i_fr=1, 1 !num_frames(1)
+        do i_fp=3, 3 !my_instrument%num_fp
+            do i_fr=2345, 2345 !num_frames(1)
 
                 write(*,*) i_fp, i_fr
 
@@ -144,8 +144,8 @@ contains
         integer(hid_t) :: l1b_file_id
         integer :: i_fr, i_fp
         integer :: l1b_wl_idx_min, l1b_wl_idx_max
-        double precision :: snr_coefs(:,:,:,:)
-        integer :: i, funit
+        double precision, dimension(:,:,:,:) :: snr_coefs
+        integer :: i, j, funit
 
         !! This is where most of the juice is. The retrieval concept is fairly
         !! simple, but there are still some tasks to do to get it done. i_fr and
@@ -153,8 +153,19 @@ contains
 
         ! The measured radiance coming straight from the L1B file, and then to
         ! be further processed (slope-corrected)
-        double precision, allocatable :: radiance_work(:)
-        double precision, allocatable :: radiance_l1b(:)
+        double precision, dimension(:), allocatable :: radiance_work, noise_work, tmp_rad
+        double precision, dimension(:), allocatable :: radiance_l1b
+
+
+        !! Here are all the retrieval scheme matrices, quantities, etc., and
+        !! temporary matrices
+
+        integer :: N_sv ! Number of statevector elements
+
+        double precision, dimension(:), allocatable :: xhat
+        double precision, dimension(:,:), allocatable :: K, Se_inv, Shat, Shat_inv
+        double precision, dimension(:,:), allocatable :: m_tmp1, m_tmp2, m_tmp3
+
 
         select type(my_instrument)
             type is (oco2_instrument)
@@ -176,31 +187,113 @@ contains
         end do
 
         if (l1b_wl_idx_max < size(dispersion, 1)) then
-            l1b_wl_idx_max = l1b_lw_idx_max + 1
+            l1b_wl_idx_max = l1b_wl_idx_max + 1
         end if
 
-        write(*,*) "Dispersion min value: ", dispersion(l1b_wl_idx_min, i_fp, 1), l1b_wl_idx_min
-        write(*,*) "Dispersion max value: ", dispersion(l1b_wl_idx_max, i_fp, 1), l1b_wl_idx_max
+        if (l1b_wl_idx_max > size(dispersion, 1)) then
+            l1b_wl_idx_max = size(dispersion, 1)
+        end if
+
+        !write(*,*) "Dispersion min value: ", dispersion(l1b_wl_idx_min, i_fp, 1), l1b_wl_idx_min
+        !write(*,*) "Dispersion max value: ", dispersion(l1b_wl_idx_max, i_fp, 1), l1b_wl_idx_max
 
         ! Allocate some space for the new work array which we can do the
         ! retrieval with, and copy over the corrsponding part of the spectrum
         allocate(radiance_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+        allocate(noise_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+
+        ! Copy the relevant part of the spectrum to radiance_work
         radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+
+        ! New calculate the noise-equivalent radiances
+        select type(my_instrument)
+            type is (oco2_instrument)
+                call my_instrument%calculate_noise(snr_coefs, radiance_work, &
+                noise_work, i_fp, 1, l1b_wl_idx_min, l1b_wl_idx_max)
+        end select
 
         ! Do the slope correction for the selected spectrum
         call slope_correction(radiance_work, 40.0d0)
         ! And we have our "y" mesurement vector ready!!
 
-        write(*,*) shape(basisfunctions)
+        ! NOTE: HERE, RADIANCE_L1B IS IS IN PHYSICAL UNITS, AS IS NOISE_WORK.
+        ! RADIANCE_WORK, HOWEVER, HAS BEEN SLOPE-NORMALIZED AND IS OF UNIT 1.
+
+
+
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !! And here is the whole retrieval magic. Simple stuff, linear retrieval
+        !! see Rodgers (2000) for the usual details.
+
+        N_sv = MCS%algorithm%n_basisfunctions + 1
+        allocate(xhat(N_sv))
+        allocate(Shat(N_sv, N_sv))
+        allocate(Shat_inv(N_sv, N_sv))
+
+        !! Stick basisfunctions into Jacobian matrix, which has following
+        !! structure: first M entries are the M basisfunctions, and then there
+        !! is the fluorescence, so we have M+1
+
+        allocate(K(size(radiance_work), N_sv))
+        do i=1, MCS%algorithm%n_basisfunctions
+            K(:,i) = basisfunctions(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i)
+        end do
+        K(:, N_sv) = 1.0d0 ! fluorescence jacobian is flat!
+
+        !! Calculate the inverse(!) noise matrix Se_inv
+        allocate(Se_inv(size(radiance_work), size(radiance_work)))
+
+        !noise_work(:) = noise_work(:) / radiance_l1b(l1b_wl_idx_min)
+        Se_inv(:,:) = 0.0d0
+        do i=1, size(radiance_work)
+            Se_inv(i,i) = 1 / (noise_work(i) ** 2)
+        end do
+
+
+
+        !! Start by calculating posterior covariance for linear case
+        !! Shat = (K^T S_e^-1 K)^-1 (Rodgers 2.27 when S_a is large)
+        allocate(m_tmp1, mold=Shat)
+        m_tmp1 = matmul(matmul(transpose(K), Se_inv), K) ! this is K^T Se_inv K
+        Shat_inv(:,:) = m_tmp1
+
+        allocate(m_tmp2, mold=m_tmp1)
+        call invert_matrix(m_tmp1, m_tmp2)
+        ! m_tmp2 is know (K^T Se_inv K)^-1
+        !allocate(Shat, mold=m_tmp2)
+        !allocate(Shat_inv, mold=m_tmp2)
+
+        Shat(:,:) = m_tmp2(:,:)
+        !write(*,*) shape(Shat), shape(K), shape(transpose(K))
+        !write(*,*) matmul(Shat, transpose(K))
+
+        xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
+
+        allocate(tmp_rad, mold=radiance_work)
+
+        do i=1, N_sv
+            write(*,*) i, xhat(i)
+            tmp_rad(:) = tmp_rad(:) + K(:,i) * xhat(i)
+        end do
+
+        open(newunit=funit, file='K.dat')
+        do i=1, size(K, 1)
+            write(funit, *) (K(i,j), j=1,size(K,2))
+        end do
+
+
         open(newunit=funit, file="test.dat")
         do i=1, size(radiance_work)
             write(funit, *) radiance_work(i), &
-                            basisfunctions(i-1+l1b_wl_idx_min,1,1), &
-                            basisfunctions(i-1+l1b_wl_idx_min,1,2), &
-                            basisfunctions(i-1+l1b_wl_idx_min,1,3)
+                            tmp_rad(i), &
+                            radiance_l1b(l1b_wl_idx_min+i-1), &
+                            noise_work(i), &
+                            basisfunctions(i-1+l1b_wl_idx_min,i_fp,1), &
+                            basisfunctions(i-1+l1b_wl_idx_min,i_fp,2), &
+                            basisfunctions(i-1+l1b_wl_idx_min,i_fp,3)
         enddo
         close(funit)
-
 
     end subroutine
 

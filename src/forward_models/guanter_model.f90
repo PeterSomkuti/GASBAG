@@ -119,8 +119,8 @@ contains
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        do i_fp=3, 3 !my_instrument%num_fp
-            do i_fr=2345, 2345 !num_frames(1)
+        do i_fp=2, 2 !my_instrument%num_fp
+            do i_fr=1111, 1222 !num_frames(1)
 
                 write(*,*) i_fp, i_fr
 
@@ -153,9 +153,11 @@ contains
 
         ! The measured radiance coming straight from the L1B file, and then to
         ! be further processed (slope-corrected)
-        double precision, dimension(:), allocatable :: radiance_work, noise_work, tmp_rad
+        double precision, dimension(:), allocatable :: radiance_work, noise_work, rad_conv, residual
         double precision, dimension(:), allocatable :: radiance_l1b
 
+
+        double precision :: chi2, tmp_chi2
 
         !! Here are all the retrieval scheme matrices, quantities, etc., and
         !! temporary matrices
@@ -204,6 +206,7 @@ contains
 
         ! Copy the relevant part of the spectrum to radiance_work
         radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+        allocate(residual, mold=radiance_work)
 
         ! New calculate the noise-equivalent radiances
         select type(my_instrument)
@@ -250,8 +253,6 @@ contains
             Se_inv(i,i) = 1 / (noise_work(i) ** 2)
         end do
 
-
-
         !! Start by calculating posterior covariance for linear case
         !! Shat = (K^T S_e^-1 K)^-1 (Rodgers 2.27 when S_a is large)
         allocate(m_tmp1, mold=Shat)
@@ -260,33 +261,36 @@ contains
 
         allocate(m_tmp2, mold=m_tmp1)
         call invert_matrix(m_tmp1, m_tmp2)
-        ! m_tmp2 is know (K^T Se_inv K)^-1
-        !allocate(Shat, mold=m_tmp2)
-        !allocate(Shat_inv, mold=m_tmp2)
-
+        ! m_tmp2 is know (K^T Se_inv K)^-1 = Shat
         Shat(:,:) = m_tmp2(:,:)
-        !write(*,*) shape(Shat), shape(K), shape(transpose(K))
-        !write(*,*) matmul(Shat, transpose(K))
 
+        !! Calculate xhat!
         xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
 
-        allocate(tmp_rad, mold=radiance_work)
-
+        allocate(rad_conv, mold=radiance_work)
+        rad_conv(:) = 0.0d0
+        !! Calculate the modeled radiance via xhat
         do i=1, N_sv
-            write(*,*) i, xhat(i)
-            tmp_rad(:) = tmp_rad(:) + K(:,i) * xhat(i)
+            write(*,*) i, xhat(i), sqrt(Shat(i,i))
+            rad_conv(:) = rad_conv(:) + K(:,i) * xhat(i)
         end do
 
-        open(newunit=funit, file='K.dat')
-        do i=1, size(K, 1)
-            write(funit, *) (K(i,j), j=1,size(K,2))
-        end do
+        !! Now we still are in a unitless world, so let's get back to the
+        !! realm of physical units by back-scaling our result here?
+        radiance_work(:) = radiance_work(:) * radiance_l1b(l1b_wl_idx_min)
+        rad_conv(:) = rad_conv(:) * radiance_l1b(l1b_wl_idx_min)
+        ! Get the spectral residual
+        residual(:) = rad_conv(:) - radiance_work(:)
+
+        ! reduced chi2
+        chi2 = SUM((residual ** 2) / noise_work**2)
+        chi2 = chi2 / (size(rad_conv) - N_sv)
 
 
         open(newunit=funit, file="test.dat")
         do i=1, size(radiance_work)
             write(funit, *) radiance_work(i), &
-                            tmp_rad(i), &
+                            rad_conv(i), &
                             radiance_l1b(l1b_wl_idx_min+i-1), &
                             noise_work(i), &
                             basisfunctions(i-1+l1b_wl_idx_min,i_fp,1), &

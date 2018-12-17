@@ -175,8 +175,12 @@ contains
             end if
         end do
 
-        write(*,*) "Dispersion min value: ", dispersion(l1b_wl_idx_min, i_fp, 1)
-        write(*,*) "Dispersion max value: ", dispersion(l1b_wl_idx_max, i_fp, 1)
+        if (l1b_wl_idx_max < size(dispersion, 1)) then
+            l1b_wl_idx_max = l1b_lw_idx_max + 1
+        end if
+
+        write(*,*) "Dispersion min value: ", dispersion(l1b_wl_idx_min, i_fp, 1), l1b_wl_idx_min
+        write(*,*) "Dispersion max value: ", dispersion(l1b_wl_idx_max, i_fp, 1), l1b_wl_idx_max
 
         ! Allocate some space for the new work array which we can do the
         ! retrieval with, and copy over the corrsponding part of the spectrum

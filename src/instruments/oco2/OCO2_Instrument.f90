@@ -158,7 +158,6 @@ contains
 
         integer(8) :: pix, fp, order, band
 
-        ! three bands
         allocate(dispersion(1016, 8, 3))
         dispersion(:,:,:) = 0.0d0
 
@@ -166,11 +165,12 @@ contains
             do band=1, 3
                 do fp=1, 8
                     do order=1, 6
-                        dispersion(pix,fp,band) = dispersion(pix,fp,band) + pix ** (order-1) * disp_coef(order,fp,band)
+                        dispersion(pix,fp,band) = dispersion(pix,fp,band) + (pix-1) ** (order-1) * disp_coef(order,fp,band)
                     end do
                 end do
             end do
         end do
+
     end subroutine
 
     subroutine read_one_spectrum(l1b_file_id, i_fr, i_fp, band, spectrum)

@@ -33,6 +33,7 @@ contains
         integer(hid_t) :: basisfunction_file_id
 
         character(len=*), parameter :: fname = "guanter_retrieval"
+        character(len=999) :: tmp_str
 
         double precision, allocatable :: tmp_data(:)
         integer(hsize_t), allocatable :: num_pixels(:)
@@ -119,11 +120,11 @@ contains
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        do i_fp=2, 2 !my_instrument%num_fp
-            do i_fr=1111, 1222 !num_frames(1)
+        do i_fp=1, my_instrument%num_fp
+            do i_fr=1, num_frames(1)
 
-                write(*,*) i_fp, i_fr
-
+                write(tmp_str,'(A,I7.1,A,I1.1)') "Frame: ", i_fr, ", FP: ", i_fp
+                call logger%trivia(fname, trim(tmp_str))
                 call guanter_FM(my_instrument, l1b_file_id, i_fr, i_fp, &
                                 snr_coefs)
 
@@ -147,6 +148,9 @@ contains
         double precision, dimension(:,:,:,:) :: snr_coefs
         integer :: i, j, funit
 
+        character(len=*), parameter :: fname = "guanter_FM"
+        character(len=999) :: tmp_str
+
         !! This is where most of the juice is. The retrieval concept is fairly
         !! simple, but there are still some tasks to do to get it done. i_fr and
         !! i_fp tell us the location of the sounding we will process here.
@@ -157,12 +161,13 @@ contains
         double precision, dimension(:), allocatable :: radiance_l1b
 
 
-        double precision :: chi2, tmp_chi2
+        double precision :: chi2, tmp_chi2, BIC
 
         !! Here are all the retrieval scheme matrices, quantities, etc., and
         !! temporary matrices
 
         integer :: N_sv ! Number of statevector elements
+        integer :: N_spec
 
         double precision, dimension(:), allocatable :: xhat
         double precision, dimension(:,:), allocatable :: K, Se_inv, Shat, Shat_inv
@@ -206,6 +211,8 @@ contains
 
         ! Copy the relevant part of the spectrum to radiance_work
         radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+        N_spec = size(radiance_work)
+
         allocate(residual, mold=radiance_work)
 
         ! New calculate the noise-equivalent radiances
@@ -238,14 +245,14 @@ contains
         !! structure: first M entries are the M basisfunctions, and then there
         !! is the fluorescence, so we have M+1
 
-        allocate(K(size(radiance_work), N_sv))
+        allocate(K(N_spec, N_sv))
         do i=1, MCS%algorithm%n_basisfunctions
             K(:,i) = basisfunctions(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i)
         end do
         K(:, N_sv) = 1.0d0 ! fluorescence jacobian is flat!
 
         !! Calculate the inverse(!) noise matrix Se_inv
-        allocate(Se_inv(size(radiance_work), size(radiance_work)))
+        allocate(Se_inv(N_spec, N_spec))
 
         !noise_work(:) = noise_work(:) / radiance_l1b(l1b_wl_idx_min)
         Se_inv(:,:) = 0.0d0
@@ -271,9 +278,14 @@ contains
         rad_conv(:) = 0.0d0
         !! Calculate the modeled radiance via xhat
         do i=1, N_sv
-            write(*,*) i, xhat(i), sqrt(Shat(i,i))
+            !write(*,*) i, xhat(i), sqrt(Shat(i,i))
             rad_conv(:) = rad_conv(:) + K(:,i) * xhat(i)
         end do
+
+        write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
+        call logger%trivia(fname, trim(tmp_str))
+        write(tmp_str, '(A, E12.5)') "SIF abs: ", xhat(N_sv) * radiance_l1b(l1b_wl_idx_min)
+        call logger%trivia(fname, trim(tmp_str))
 
         !! Now we still are in a unitless world, so let's get back to the
         !! realm of physical units by back-scaling our result here?
@@ -284,7 +296,12 @@ contains
 
         ! reduced chi2
         chi2 = SUM((residual ** 2) / noise_work**2)
-        chi2 = chi2 / (size(rad_conv) - N_sv)
+        chi2 = chi2 / (N_spec - N_sv)
+
+        write(tmp_str, '(A,F5.2)') "Chi2: ", chi2
+        call logger%trivia(fname, trim(tmp_str))
+
+
 
 
         open(newunit=funit, file="test.dat")
@@ -364,6 +381,11 @@ contains
 
         if (sgels_info /= 0) then
             call logger%fatal(fname, "Error from DGELS.")
+
+            write(*,*) adata
+
+            write(*,*) bdata
+
             stop 1
         end if
 

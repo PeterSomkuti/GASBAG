@@ -6,7 +6,7 @@ subroutine perform_retrievals(my_instrument)
 use control, only: MCS
 use instruments, only: generic_instrument
 use logger_mod, only: logger => master_logger
-use file_utils, only: get_HDF5_dset_dims
+use file_utils, only: get_HDF5_dset_dims, check_hdf_error
 
 use guanter_model
 use HDF5
@@ -22,18 +22,10 @@ integer :: hdferr
 
 ! Open the L1B_HDF file - this will generally be required
 call h5fopen_f(MCS%input%L1B_filename%chars(), H5F_ACC_RDONLY_F, l1b_file_id, hdferr)
-if (hdferr /= 0) then
-  call logger%fatal(fname, "Error opening HDF file: " // trim(MCS%input%L1B_filename%chars()))
-  stop 1
-end if
+call check_hdf_error(hdferr, fname, "Error opening L1B HDF file: " // trim(MCS%input%L1B_filename%chars()))
 
+! .. and store the file ID in the MCS
 MCS%input%l1b_file_id = l1b_file_id
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!! Basisfunction read-in from HDF file !!
-!! These are used very often throughout the retrieval process, !!
-!! hence we pre-load them (like ABSCO's) !!
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
 if (MCS%algorithm%using_GK_SIF) then

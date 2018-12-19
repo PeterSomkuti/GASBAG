@@ -1,10 +1,10 @@
 module guanter_model
 
-    use control, only: MCS
+    use control, only: MCS, MAX_WINDOWS
     use instruments, only: generic_instrument
     use oco2
     use logger_mod, only: logger => master_logger
-    use file_utils, only: get_HDF5_dset_dims, check_hdf_error
+    use file_utils, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset
 
     use math_utils
 
@@ -17,8 +17,8 @@ module guanter_model
     ! In the Guanter-scheme, dispersion is not really touched, hence we can just
     ! keep it as a module-wide fixed set of numbers (pixel, footprint)
     double precision, dimension(:,:,:), allocatable :: dispersion
-    ! Basisfunctions are stored as (spectral pixel, footprint, #SV)
-    double precision, dimension(:,:,:), allocatable :: basisfunctions
+    ! Basisfunctions are stored as (file, spectral pixel, footprint, #SV)
+    double precision, dimension(:,:,:,:), allocatable :: basisfunctions
     ! Sounding_ids
     integer(8), dimension(:,:), allocatable :: sounding_ids
 
@@ -28,8 +28,9 @@ module guanter_model
 
     ! Final statevector for each measurement
     double precision, dimension(:,:,:), allocatable :: final_SV
-    ! Final SIF value in physical radiance units
-    double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, retrieved_SIF_rel
+    ! Final SIF value in physical radiance units, chi2
+    double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, &
+                                                     retrieved_SIF_rel, chi2
 
 contains
 
@@ -46,15 +47,17 @@ contains
 
         double precision, allocatable :: tmp_data(:)
         integer(hsize_t), allocatable :: num_pixels(:)
+        integer(hsize_t), dimension(2) :: out_dims2d
+        integer(hsize_t), dimension(3) :: out_dims3d
 
         double precision, allocatable :: dispersion_coefs(:,:,:)
         double precision, allocatable :: snr_coefs(:,:,:,:)
 
-        integer :: i_fr, i_fp ! Indices for frames and footprints
-        integer :: num_frames(1), num_total_soundings
+        integer :: i_fr, i_fp, i_win ! Indices for frames, footprints, microwindows
+        integer :: num_frames(1), num_total_soundings, cnt
 
         character(len=999) :: dset_name
-        integer(hid_t) :: dset_id, sif_result_gid
+        integer(hid_t) :: dset_id, obj_id, sif_result_gid
         integer :: hdferr
 
         integer :: i,j
@@ -64,53 +67,78 @@ contains
 
         ! We copy the SoundingGeometry group over to the results section, for
         ! easy analysis of the results later on.
+
+        ! TODO: this seems to case the HDF5 library to throw an "infinte loop"
+        ! error on exiting the program. Doesn't seem to cause real problems, but
+        ! looks 'ugly'. The alternative is to write a seperate function that does
+        ! the copying 'bit by bit'. Checking this problem with valgrind makes me
+        ! believe it's a problem in the HDF5 library version 1.10.4; looks like
+        ! there's some memory allocation problems..
+
         call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
                        MCS%output%output_file_id, "/SoundingGeometry", hdferr)
         call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
 
-        !call h5oopen_f(MCS%output%output_file_id, "/SoundingGeometry", obj_id, hdferr)
-        !call h5oclose_f(obj_id, hdferr)
-
-
+        ! And also create the result group in the output file
+        call h5gcreate_f(MCS%output%output_file_id, "linear_fluorescence_results", &
+                         sif_result_gid, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
 
         ! The strategy of this retrieval is:
         ! 1) Read necessary quantities from HDF files (basisfunctions, dispersion, noise)
         ! a) Read-in of the radiance basis functions
-        call h5fopen_f(MCS%window%basisfunction_file%chars(), H5F_ACC_RDONLY_F, &
-                       basisfunction_file_id, hdferr)
-        call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(MCS%window%basisfunction_file%chars()))
 
-        ! And then start reading values into our own arrays
-        ! Get the array dimensions by inquiring the first one..
-        call get_HDF5_dset_dims(basisfunction_file_id, "/BasisFunction_SV1_FP1", num_pixels)
+        do i_win=1, MAX_WINDOWS
 
-        ! Allocate the basisfunction array
-        allocate(basisfunctions(num_pixels(1), my_instrument%num_fp, MCS%algorithm%n_basisfunctions))
-        allocate(tmp_data(num_pixels(1)))
+            if (MCS%window(i_win)%used .eqv. .false.) then
+                cycle ! This window is not used!
+            end if
 
-        ! And read them in, one by one - the number of footprints is conviently
-        ! stored in my_instrument, so we don't need to invoke any type checking YET
-        do i=1, my_instrument%num_fp
-            do j=1, MCS%algorithm%n_basisfunctions
+            call h5fopen_f(MCS%window(i_win)%basisfunction_file%chars(), &
+                           H5F_ACC_RDONLY_F, basisfunction_file_id, hdferr)
+            call check_hdf_error(hdferr, fname, "Error opening HDF file: " &
+                                 // trim(MCS%window(1)%basisfunction_file%chars()))
 
-                ! For now, I've decided the naming pattern for the basisfunctions
-                ! are BasisFunction_SVX_FPY, for basisfunction number X and footprint Y
-                write(dset_name, '(A,G0.1,A,G0.1)') "/BasisFunction_SV", j, "_FP", i
+            if (.not. allocated(basisfunctions)) then
+                ! And then start reading values into our own arrays
+                ! Get the array dimensions by inquiring the first one..
+                call get_HDF5_dset_dims(basisfunction_file_id, "/BasisFunction_SV1_FP1", num_pixels)
 
-                call logger%debug(fname, "Looking for " // trim(dset_name))
-                call h5dopen_f(basisfunction_file_id, dset_name, dset_id, hdferr)
-                call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
+                ! Allocate the basisfunction array
+                allocate(basisfunctions(MAX_WINDOWS, num_pixels(1), &
+                                        my_instrument%num_fp, MCS%algorithm%n_basisfunctions))
+                allocate(tmp_data(num_pixels(1)))
+            end if
 
-                call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tmp_data, num_pixels, hdferr)
-                call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+            ! And read them in, one by one - the number of footprints is conviently
+            ! stored in my_instrument, so we don't need to invoke any type checking YET
+            do i=1, my_instrument%num_fp
+                do j=1, MCS%algorithm%n_basisfunctions
 
-                call logger%debug(fname, "Read in " // trim(dset_name))
+                    ! For now, I've decided the naming pattern for the basisfunctions
+                    ! are BasisFunction_SVX_FPY, for basisfunction number X and footprint Y
+                    write(dset_name, '(A,G0.1,A,G0.1)') "/BasisFunction_SV", j, "_FP", i
 
-                ! Copy over data to basisfunctions array. Note!! This might have a
-                ! good number of NaNs in there. Does not mean the file is bad!
-                basisfunctions(:,i,j) = tmp_data(:)
+                    call logger%debug(fname, "Looking for " // trim(dset_name))
+                    call h5dopen_f(basisfunction_file_id, dset_name, dset_id, hdferr)
+                    call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
+                    call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tmp_data, num_pixels, hdferr)
+                    call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
+                    call logger%debug(fname, "Read in " // trim(dset_name))
+
+                    ! Copy over data to basisfunctions array. Note!! This might have a
+                    ! good number of NaNs in there. Does not mean the file is bad!
+                    basisfunctions(i_win, :, i, j) = tmp_data(:)
+
+                end do
             end do
+
+            call h5fclose_f(basisfunction_file_id, hdferr)
+            call check_hdf_error(hdferr, fname, "Could not close basisfunction file " &
+                                 // trim(MCS%window(i_win)%basisfunction_file%chars()))
+
         end do
 
         ! b) Read-in of dispersion and noise coefficients (THIS IS INSTRUMENT SPECIFIC!)
@@ -136,46 +164,90 @@ contains
 
         allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames(1)))
         allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames(1)))
+        allocate(chi2(my_instrument%num_fp, num_frames(1)))
         allocate(final_SV(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
-
-        retrieved_SIF_abs(:,:) = -9999.99
-        retrieved_SIF_rel(:,:) = -9999.99
-        final_SV(:,:,:) = -9999.99
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !! Loop through all frames and footprints, and perform the retrieval
-        do i_fr=1, 4 !num_frames(1)
-            do i_fp=1, my_instrument%num_fp
+        !! The outermose loop simply does it for the various microwindows
 
-                write(tmp_str,'(A,I7.1,A,I1.1)') "Frame: ", i_fr, ", FP: ", i_fp
-                call logger%trivia(fname, trim(tmp_str))
+        do i_win=1, MAX_WINDOWS
 
-                call guanter_FM(my_instrument, i_fr, i_fp, snr_coefs)
+            if (MCS%window(i_win)%used .eqv. .false.) then
+                cycle ! This window is not used!
+            end if
 
+            call logger%info(fname, "Processing window: " // trim(MCS%window(i_win)%name))
+
+            retrieved_SIF_abs(:,:) = -9999.99
+            retrieved_SIF_rel(:,:) = -9999.99
+            final_SV(:,:,:) = -9999.99
+            chi2(:,:) = -9999.99
+
+            cnt = 0
+            do i_fr=1, num_frames(1)
+                do i_fp=1, my_instrument%num_fp
+
+                    write(tmp_str,'(A,I7.1,A,I1.1)') "Frame: ", i_fr, ", FP: ", i_fp
+                    call logger%trivia(fname, trim(tmp_str))
+
+                    ! Retrieval time!
+                    call guanter_FM(my_instrument, i_fr, i_fp, i_win, snr_coefs)
+
+                    ! Print out progress..
+                    if (MODULO(cnt, floor(0.05 * num_total_soundings)) == 0) then
+                        write(tmp_str, "(A, F6.2, A)") "Progress: ", (1.0 * cnt) / num_total_soundings * 100.0,  "%"
+                        call logger%info(fname, trim(tmp_str))
+                    end if
+                    cnt = cnt + 1
+                end do
             end do
-        end do
-        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-        !! Write the results into the output HDF5 file
-        call h5gcreate_f(MCS%output%output_file_id, "linear_fluorescence_results", &
-                         sif_result_gid, hdferr)
-        call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+            !! Write the results into the output HDF5 file
 
+            ! And then just write out the datasets / arrays
+            out_dims3d = shape(final_SV)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/final_statevector_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+                                      trim(tmp_str), &
+                                      final_SV, out_dims3d)
+
+            out_dims2d = shape(retrieved_SIF_rel)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_sif_rel_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+                                      trim(tmp_str), &
+                                      retrieved_SIF_rel, out_dims2d)
+
+            out_dims2d = shape(retrieved_SIF_abs)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_sif_abs_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+                                      trim(tmp_str), &
+                                      retrieved_SIF_abs, out_dims2d)
+
+            out_dims2d = shape(chi2)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_chi2_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+                                      trim(tmp_str), &
+                                      chi2, out_dims2d)
+
+        end do ! microwindow loop
     end subroutine
 
 
-    subroutine guanter_FM(my_instrument, i_fr, i_fp, &
+    subroutine guanter_FM(my_instrument, i_fr, i_fp, i_win, &
                           snr_coefs)
 
         implicit none
 
         class(generic_instrument), intent(in) :: my_instrument
-        integer :: i_fr, i_fp, i_all
+        integer, intent(in) :: i_fr, i_fp, i_win
+        double precision, dimension(:,:,:,:), intent(in) :: snr_coefs
+
         integer :: l1b_wl_idx_min, l1b_wl_idx_max
-        double precision, dimension(:,:,:,:) :: snr_coefs
-        integer :: i, j, funit
+        integer :: i, j, funit, i_all
         integer(hid_t) :: l1b_file_id
 
         character(len=*), parameter :: fname = "guanter_FM"
@@ -193,7 +265,7 @@ contains
         ! Are the radiances that we process sensible?
         logical :: radiance_OK
 
-        double precision :: chi2, tmp_chi2, BIC
+        double precision :: tmp_chi2, BIC
         logical :: BIC_converged
 
         !! Here are all the retrieval scheme matrices, quantities, etc., and
@@ -223,10 +295,10 @@ contains
         l1b_wl_idx_max = 0
 
         do i=1, size(dispersion, 1)
-            if (dispersion(i, i_fp, 1) < MCS%window%wl_min) then
+            if (dispersion(i, i_fp, 1) < MCS%window(i_win)%wl_min) then
                 l1b_wl_idx_min = i
             end if
-            if (dispersion(i, i_fp, 1) < MCS%window%wl_max) then
+            if (dispersion(i, i_fp, 1) < MCS%window(i_win)%wl_max) then
                 l1b_wl_idx_max = i
             end if
         end do
@@ -309,7 +381,7 @@ contains
         !! is the fluorescence as the last entry
         allocate(K(N_spec, N_sv))
         do i=1, MCS%algorithm%n_basisfunctions
-            K(:,i) = basisfunctions(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i)
+            K(:,i) = basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i)
         end do
         K(:, N_sv) = 1.0d0 ! fluorescence jacobian is flat!
 
@@ -353,31 +425,16 @@ contains
         residual(:) = rad_conv(:) - radiance_work(:)
 
         ! reduced chi2
-        chi2 = SUM((residual ** 2) / (noise_work ** 2))
-        chi2 = chi2 / (N_spec - N_sv)
+        tmp_chi2 = SUM((residual ** 2) / (noise_work ** 2))
+        tmp_chi2 = tmp_chi2 / (N_spec - N_sv)
+        chi2(i_fp, i_fr) = tmp_chi2
 
         BIC = N_spec * log(SUM(residual ** 2) / N_spec) + N_sv * log(1.0 * N_spec)
 
         write(tmp_str, '(A, I3.1)') "N_sv: ", N_sv
         call logger%trivia(fname, trim(tmp_str))
-        write(tmp_str, '(A,F7.3)') "Chi2: ", chi2
+        write(tmp_str, '(A,F7.3)') "Chi2: ", tmp_chi2
         call logger%trivia(fname, trim(tmp_str))
-
-        !open(newunit=funit, file="test.dat")
-        !do i=1, size(radiance_work)
-        !    write(funit, *) radiance_work(i), &
-        !                    rad_conv(i), &
-        !                    radiance_l1b(l1b_wl_idx_min+i-1), &
-        !                    noise_work(i)
-    !                        basisfunctions(i-1+l1b_wl_idx_min,i_fp,1), &
-    !                        basisfunctions(i-1+l1b_wl_idx_min,i_fp,2), &
-    !                        basisfunctions(i-1+l1b_wl_idx_min,i_fp,3)
-        !enddo
-        !close(funit)
-
-        !open(newunit=funit, file='chi2.dat', action='write', position='append')
-        !    write(funit, *) sounding_ids(i_fp, i_fr), chi2, retrieved_SIF_abs(i_fp, i_fr), retrieved_sif_rel(i_fp, i_fr)
-        !close(funit)
 
     end subroutine
 

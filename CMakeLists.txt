@@ -42,7 +42,7 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-ffree-form -std=f2008 -fimplicit-none")
+  set(dialect "-ffree-form -std=f2018 -fimplicit-none")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")

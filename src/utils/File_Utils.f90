@@ -9,16 +9,68 @@ module file_utils
     implicit none
 
 
-    public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims
+    ! Interface for writing double precision arrays into HDF files, subroutines
+    ! exist for several dimensionalities. The output is still always single
+    ! precision, and the conversion is done within the subroutines.
+    interface write_DP_hdf_dataset
+        module procedure write_2D_DP_hdf_dataset
+        module procedure write_3D_DP_hdf_dataset
+    end interface write_DP_hdf_dataset
+
+    public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims, &
+           write_DP_hdf_dataset
 
 contains
+
+
+    subroutine write_2D_DP_hdf_dataset(file_id, dset_name, array, dims, fill_value)
+
+        integer(hid_t), intent(in) :: file_id
+        character(len=*), intent(in) :: dset_name
+        double precision, dimension(:,:), intent(in) :: array
+        integer(hsize_t), dimension(:), intent(in) :: dims
+        double precision, optional, intent(in) :: fill_value
+
+        real, dimension(:,:), allocatable :: conv_array
+        character(len=*), parameter :: fname = "write_2D_DP_hdf_dataset"
+        integer :: hdferr
+        integer(hid_t) :: dspace_id, dset_id, dcpl
+
+        allocate(conv_array(size(array, 1), size(array, 2)))
+        conv_array = real(array)
+
+        include "HDF5_write_DP_array.inc"
+
+    end subroutine
+
+    subroutine write_3D_DP_hdf_dataset(file_id, dset_name, array, dims, fill_value)
+
+        integer(hid_t), intent(in) :: file_id
+        character(len=*), intent(in) :: dset_name
+        double precision, dimension(:,:,:), intent(in) :: array
+        integer(hsize_t), dimension(:), intent(in) :: dims
+        double precision, optional, intent(in) :: fill_value
+
+        real, dimension(:,:,:), allocatable :: conv_array
+        character(len=*), parameter :: fname = "write_3D_DP_hdf_dataset"
+        integer :: hdferr
+        integer(hid_t) :: dspace_id, dset_id, dcpl
+
+        allocate(conv_array(size(array, 1), size(array, 2), size(array, 3)))
+        conv_array = real(array)
+
+        include "HDF5_write_DP_array.inc"
+
+    end subroutine
+
+
 
     subroutine check_hdf_error(hdferr, fname, msg)
         integer, intent(in) :: hdferr
         character(len=*), intent(in) :: fname
         character(len=*), intent(in) :: msg
 
-        if (hdferr /= 0) then
+        if (hdferr < 0) then
             call logger%fatal(fname, msg)
             stop 1
         end if

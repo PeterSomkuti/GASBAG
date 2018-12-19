@@ -16,6 +16,8 @@ module control
 
     ! At the moment, we only plan the Guanter and Frankenberg methods
     integer, parameter :: MAX_ALGORITHMS = 2
+    ! Why would you even need more than 2?
+    integer, parameter :: MAX_WINDOWS = 5
 
     type, private :: CS_general
         integer(8) :: N_soundings ! Number of soundings to be processed
@@ -26,10 +28,11 @@ module control
         integer :: N_algorithms ! How many do we want to actually use?
         integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
         logical :: using_GK_SIF
-        logical :: using_physical_SIF
+        logical :: using_physical
     end type
 
     type, private :: CS_window
+        logical :: used ! Is this CS_window structure used?
         type(string) :: name
         double precision :: wl_min
         double precision :: wl_max
@@ -51,7 +54,7 @@ module control
     ! Main control structure type
     type, private :: CS
         type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
-        type(CS_window) :: window
+        type(CS_window), dimension(MAX_WINDOWS) :: window
         type(CS_input) :: input ! Input files needed by the program
         type(CS_output) :: output ! Output file path(s)
         type(CS_general) :: general
@@ -86,6 +89,7 @@ contains
         type(string) :: fini_string
         double precision :: fini_val
 
+        integer :: window_nr
         integer :: i
         logical :: file_exists
 
@@ -100,7 +104,7 @@ contains
         MCS%general%N_soundings = -1
 
         MCS%algorithm%using_GK_SIF = .false.
-        MCS%algorithm%using_physical_SIF = .false.
+        MCS%algorithm%using_physical = .false.
 
         MCS%window%name = ""
         MCS%window%wl_min = 0.0d0
@@ -228,41 +232,56 @@ contains
 
 
         ! Windows section ------------------------------------------------------
-        call fini%get(section_name='window', option_name='name', &
-                      val=fini_char, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Could not read name in window section!")
-            stop 1
-        else
-            MCS%window%name = trim(fini_char)
-        end if
+        ! The user might specify "window-2", and "window-5", so we need to check
+        ! many possible windows here.
 
-        call fini%get(section_name='window', option_name='wl_min', &
-                      val=fini_val, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Could not read wl_min in window section!")
-            stop 1
-        else
-            MCS%window%wl_min = fini_val
-        end if
+        do window_nr = 1, MAX_WINDOWS
 
-        call fini%get(section_name='window', option_name='wl_max', &
-                      val=fini_val, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Could not read wl_ax in window section!")
-            stop 1
-        else
-            MCS%window%wl_max = fini_val
-        end if
+            ! Is window "window_nr" in the config-file?
+            write(tmp_str, '(A, G0.1)') "window-", window_nr
+            if (fini%has_section(section_name=tmp_str)) then
 
-        call fini%get(section_name='window', option_name='basisfunctions', &
-                      val=fini_char, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Could not read wl_ax in window section!")
-            stop 1
-        else
-            MCS%window%basisfunction_file = trim(fini_char)
-        end if
+                MCS%window(window_nr)%used = .true.
+
+                call fini%get(section_name=tmp_str, option_name='name', &
+                              val=fini_char, error=fini_error)
+                if (fini_error /= 0) then
+                    call logger%fatal(fname, "Could not read name in window section!")
+                    stop 1
+                else
+                    MCS%window(window_nr)%name = trim(fini_char)
+                end if
+
+                call fini%get(section_name=tmp_str, option_name='wl_min', &
+                              val=fini_val, error=fini_error)
+                if (fini_error /= 0) then
+                    call logger%fatal(fname, "Could not read wl_min in window section!")
+                    stop 1
+                else
+                    MCS%window(window_nr)%wl_min = fini_val
+                end if
+
+                call fini%get(section_name=tmp_str, option_name='wl_max', &
+                              val=fini_val, error=fini_error)
+                if (fini_error /= 0) then
+                    call logger%fatal(fname, "Could not read wl_ax in window section!")
+                    stop 1
+                else
+                    MCS%window(window_nr)%wl_max = fini_val
+                end if
+
+                call fini%get(section_name=tmp_str, option_name='basisfunctions', &
+                              val=fini_char, error=fini_error)
+                if (fini_error /= 0) then
+                    call logger%fatal(fname, "Could not read wl_ax in window section!")
+                    stop 1
+                else
+                    MCS%window(window_nr)%basisfunction_file = trim(fini_char)
+                end if
+            else
+                MCS%window(window_nr)%used = .false.
+            end if
+        end do
 
         ! ----------------------------------------------------------------------
 

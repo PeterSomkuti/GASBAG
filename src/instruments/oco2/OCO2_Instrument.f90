@@ -45,10 +45,7 @@ contains
 
         ! Open the HDF file
         call h5fopen_f(l1b_file%chars(), H5F_ACC_RDONLY_F, file_id, hdferr)
-        if (hdferr /= 0) then
-          call logger%fatal(fname, "Error opening HDF file: " // trim(l1b_file%chars()))
-          stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(l1b_file%chars()))
 
         ! Let's start with the sounding IDs and have a look how many we actually
         ! have in this file.
@@ -87,16 +84,10 @@ contains
         allocate(dispersion_coeffs(6,8,3))
 
         call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error opening dispersion coeffs at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error opening dispersion coeffs at: " // trim(dset_name))
 
         call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, dispersion_coeffs, disp_shape, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error reading dispersion coeffs at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error reading dispersion coeffs at: " // trim(dset_name))
 
     end subroutine
 
@@ -115,16 +106,10 @@ contains
         allocate(snr_coefs(2,1016,8,3))
 
         call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error opening SNR coeffs at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error opening SNR coeffs at: " // trim(dset_name))
 
         call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, snr_coefs, snr_shape, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error reading SNR coeffs at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error reading SNR coeffs at: " // trim(dset_name))
 
     end subroutine
 
@@ -141,16 +126,10 @@ contains
         character(len=*), parameter :: dset_name = "/Metadata/ExpectedFrames"
 
         call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error opening SNR coeffs at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error opening SNR coeffs at: " // trim(dset_name))
 
         call h5dread_f(dset_id, H5T_NATIVE_INTEGER, num_frames, num_frames_shape, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error reading SNR coeffs at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error reading SNR coeffs at: " // trim(dset_name))
 
     end subroutine
 
@@ -211,10 +190,7 @@ contains
         end if
 
         call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error opening spectra at: " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error opening spectra at: " // trim(dset_name))
 
         !! Offset - where do we start our hyperslab? We read the full spectrum, so
         !! the first index is 0, the other two depenend on the indices.

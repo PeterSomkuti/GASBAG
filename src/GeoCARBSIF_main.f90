@@ -88,6 +88,9 @@ program GeoCARBSIF
 
     call perform_retrievals(my_instrument)
 
+
+    ! Finishing touches
+
     ! Close the HDF5 files
     call h5fclose_f(MCS%input%l1b_file_id, hdferr)
     call check_hdf_error(hdferr, "Main", "Error closing input HDF5 file")
@@ -95,9 +98,10 @@ program GeoCARBSIF
     call h5fclose_f(MCS%output%output_file_id, hdferr)
     call check_hdf_error(hdferr, "Main", "Error closing output HDF5 file")
 
-
     ! Close the HDF5 library
     call h5close_f(hdferr)
     call check_hdf_error(hdferr, "Main", "Error closing HDF5 library")
+
+    call logger%info("Main", "That's all, folks!")
 
 end program

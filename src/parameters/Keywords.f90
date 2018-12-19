@@ -6,11 +6,12 @@
 module keywords
 
     use stringifor, only: string
+    use control, only: MAX_WINDOWS
 
     implicit none
 
     ! Just parameters/dimensions to generate the string arrays
-    integer, parameter :: max_sections = 10
+    integer, parameter :: max_sections = 50
     integer, parameter :: max_options = 99
 
     type(string) :: valid_sections(max_sections)
@@ -21,6 +22,11 @@ module keywords
 contains
 
     subroutine initialize_valid_sections()
+
+        implicit none
+        character(len=99) :: tmp_str
+        integer :: window_nr
+
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! Everything is lowercase here!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -49,14 +55,19 @@ contains
             valid_options(4,1) = "l1b_file" ! L1b file location
             valid_options(4,2) = "met_file" ! MET file location
 
-        valid_sections(5) = "window"
-            valid_options(5,1) = "name"
-            valid_options(5,2) = "wl_min"
-            valid_options(5,3) = "wl_max"
-            valid_options(5,4) = "basisfunctions"
+        valid_sections(5) = "output"
+            valid_options(5,1) = "output_file"
 
-        valid_sections(6) = "output"
-            valid_options(6,1) = "output_file"
+        ! We have to define our windows manually here, and give them explicit
+        ! numbers!
+        do window_nr=1, MAX_WINDOWS
+            write(tmp_str, '(A, G0.1)') "window-", window_nr
+                valid_sections(5+window_nr) = trim(tmp_str)
+                valid_options(5+window_nr,1) = "name"
+                valid_options(5+window_nr,2) = "wl_min"
+                valid_options(5+window_nr,3) = "wl_max"
+                valid_options(5+window_nr,4) = "basisfunctions"
+        end do
 
 
     end subroutine

@@ -16,10 +16,6 @@ contains
         integer, dimension(size(mat_in,1)) :: ipiv   ! pivot indices
         integer :: n, info
 
-        ! External procedures defined in LAPACK
-        !external DGETRF
-        !external DGETRI
-
         ! Store A in Ainv to prevent it from being overwritten by LAPACK
         mat_out(:,:) = mat_in(:,:)
         n = size(mat_in,1)

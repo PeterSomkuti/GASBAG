@@ -55,6 +55,9 @@ contains
             valid_options(5,3) = "wl_max"
             valid_options(5,4) = "basisfunctions"
 
+        valid_sections(6) = "output"
+            valid_options(6,1) = "output_file"
+
 
     end subroutine
 

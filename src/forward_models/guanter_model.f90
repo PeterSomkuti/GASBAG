@@ -4,7 +4,7 @@ module guanter_model
     use instruments, only: generic_instrument
     use oco2
     use logger_mod, only: logger => master_logger
-    use file_utils, only: get_HDF5_dset_dims
+    use file_utils, only: get_HDF5_dset_dims, check_hdf_error
 
     use math_utils
 
@@ -16,21 +16,30 @@ module guanter_model
 
     ! In the Guanter-scheme, dispersion is not really touched, hence we can just
     ! keep it as a module-wide fixed set of numbers (pixel, footprint)
-    double precision, save, allocatable :: dispersion(:,:,:)
+    double precision, dimension(:,:,:), allocatable :: dispersion
     ! Basisfunctions are stored as (spectral pixel, footprint, #SV)
-    double precision, save, allocatable :: basisfunctions(:,:,:)
+    double precision, dimension(:,:,:), allocatable :: basisfunctions
+    ! Sounding_ids
+    integer(8), dimension(:,:), allocatable :: sounding_ids
 
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !!!!! Retrieval results !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+    !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+    ! Final statevector for each measurement
+    double precision, dimension(:,:,:), allocatable :: final_SV
+    ! Final SIF value in physical radiance units
+    double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, retrieved_SIF_rel
 
 contains
 
-    subroutine guanter_retrieval(l1b_file_id, my_instrument)
+    subroutine guanter_retrieval(my_instrument)
 
         implicit none
-
-        integer(hid_t), intent(in) :: l1b_file_id
         class(generic_instrument), intent(in) :: my_instrument
 
-        integer(hid_t) :: basisfunction_file_id
+
+        integer(hid_t) :: l1b_file_id, basisfunction_file_id, output_file_id
 
         character(len=*), parameter :: fname = "guanter_retrieval"
         character(len=999) :: tmp_str
@@ -38,33 +47,38 @@ contains
         double precision, allocatable :: tmp_data(:)
         integer(hsize_t), allocatable :: num_pixels(:)
 
-
         double precision, allocatable :: dispersion_coefs(:,:,:)
         double precision, allocatable :: snr_coefs(:,:,:,:)
 
         integer :: i_fr, i_fp ! Indices for frames and footprints
-        integer :: num_frames(1)
+        integer :: num_frames(1), num_total_soundings
 
         character(len=999) :: dset_name
-        integer(hid_t) :: dset_id
+        integer(hid_t) :: dset_id, sif_result_gid
         integer :: hdferr
-
 
         integer :: i,j
 
 
+        l1b_file_id = MCS%input%l1b_file_id
+
+        ! We copy the SoundingGeometry group over to the results section, for
+        ! easy analysis of the results later on.
+        call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
+                       MCS%output%output_file_id, "/SoundingGeometry", hdferr)
+        call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
+
+        !call h5oopen_f(MCS%output%output_file_id, "/SoundingGeometry", obj_id, hdferr)
+        !call h5oclose_f(obj_id, hdferr)
+
+
+
         ! The strategy of this retrieval is:
         ! 1) Read necessary quantities from HDF files (basisfunctions, dispersion, noise)
-
-
-
         ! a) Read-in of the radiance basis functions
         call h5fopen_f(MCS%window%basisfunction_file%chars(), H5F_ACC_RDONLY_F, &
                        basisfunction_file_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error opening HDF file: " // trim(MCS%window%basisfunction_file%chars()))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(MCS%window%basisfunction_file%chars()))
 
         ! And then start reading values into our own arrays
         ! Get the array dimensions by inquiring the first one..
@@ -85,16 +99,11 @@ contains
 
                 call logger%debug(fname, "Looking for " // trim(dset_name))
                 call h5dopen_f(basisfunction_file_id, dset_name, dset_id, hdferr)
-                if (hdferr /= 0) then
-                    call logger%fatal(fname, "Error. Could not open " // trim(dset_name))
-                    stop 1
-                end if
+                call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
                 call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tmp_data, num_pixels, hdferr)
-                if (hdferr /= 0) then
-                    call logger%fatal(fname, "Error. Could not read " // trim(dset_name))
-                    stop 1
-                end if
+                call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
                 call logger%debug(fname, "Read in " // trim(dset_name))
 
                 ! Copy over data to basisfunctions array. Note!! This might have a
@@ -115,38 +124,59 @@ contains
                 call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
                 ! How many frames do we have in this file again?
                 call my_instrument%read_num_frames(l1b_file_id, num_frames)
+                ! Read in the sounding id's
+                call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
 
         end select
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        do i_fp=1, my_instrument%num_fp
-            do i_fr=1, num_frames(1)
+        !! Allocate the result arrays here
+        num_total_soundings = my_instrument%num_fp * num_frames(1)
+
+        allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames(1)))
+        allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames(1)))
+        allocate(final_SV(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
+
+        retrieved_SIF_abs(:,:) = -9999.99
+        retrieved_SIF_rel(:,:) = -9999.99
+        final_SV(:,:,:) = -9999.99
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !! Loop through all frames and footprints, and perform the retrieval
+        do i_fr=1, 4 !num_frames(1)
+            do i_fp=1, my_instrument%num_fp
 
                 write(tmp_str,'(A,I7.1,A,I1.1)') "Frame: ", i_fr, ", FP: ", i_fp
                 call logger%trivia(fname, trim(tmp_str))
-                call guanter_FM(my_instrument, l1b_file_id, i_fr, i_fp, &
-                                snr_coefs)
+
+                call guanter_FM(my_instrument, i_fr, i_fp, snr_coefs)
 
             end do
         end do
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+        !! Write the results into the output HDF5 file
+        call h5gcreate_f(MCS%output%output_file_id, "linear_fluorescence_results", &
+                         sif_result_gid, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
     end subroutine
 
 
-    subroutine guanter_FM(my_instrument, l1b_file_id, i_fr, i_fp, &
+    subroutine guanter_FM(my_instrument, i_fr, i_fp, &
                           snr_coefs)
 
         implicit none
 
         class(generic_instrument), intent(in) :: my_instrument
-        integer(hid_t) :: l1b_file_id
-        integer :: i_fr, i_fp
+        integer :: i_fr, i_fp, i_all
         integer :: l1b_wl_idx_min, l1b_wl_idx_max
         double precision, dimension(:,:,:,:) :: snr_coefs
         integer :: i, j, funit
+        integer(hid_t) :: l1b_file_id
 
         character(len=*), parameter :: fname = "guanter_FM"
         character(len=999) :: tmp_str
@@ -160,8 +190,11 @@ contains
         double precision, dimension(:), allocatable :: radiance_work, noise_work, rad_conv, residual
         double precision, dimension(:), allocatable :: radiance_l1b
 
+        ! Are the radiances that we process sensible?
+        logical :: radiance_OK
 
         double precision :: chi2, tmp_chi2, BIC
+        logical :: BIC_converged
 
         !! Here are all the retrieval scheme matrices, quantities, etc., and
         !! temporary matrices
@@ -173,6 +206,11 @@ contains
         double precision, dimension(:,:), allocatable :: K, Se_inv, Shat, Shat_inv
         double precision, dimension(:,:), allocatable :: m_tmp1, m_tmp2, m_tmp3
 
+
+        l1b_file_id = MCS%input%l1b_file_id
+
+        ! Turn frame/FP index into a flat index for saving results
+        i_all = (i_fr - 1) * 8 + i_fp
 
         select type(my_instrument)
             type is (oco2_instrument)
@@ -212,14 +250,29 @@ contains
         ! Copy the relevant part of the spectrum to radiance_work
         radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
         N_spec = size(radiance_work)
-
         allocate(residual, mold=radiance_work)
+
+
+        ! Here we check the radiance
+        select type(my_instrument)
+            type is (oco2_instrument)
+                call my_instrument%check_radiance_valid(l1b_file_id, radiance_work, &
+                                                        l1b_wl_idx_min, l1b_wl_idx_max, &
+                                                        radiance_OK)
+        end select
+
+        if (radiance_OK .eqv. .false.) then
+            call logger%warning(fname, "This sounding has invalid radiances. Skipping")
+            return
+        end if
+
 
         ! New calculate the noise-equivalent radiances
         select type(my_instrument)
             type is (oco2_instrument)
                 call my_instrument%calculate_noise(snr_coefs, radiance_work, &
-                noise_work, i_fp, 1, l1b_wl_idx_min, l1b_wl_idx_max)
+                                                   noise_work, i_fp, 1, &
+                                                   l1b_wl_idx_min, l1b_wl_idx_max)
         end select
 
         ! Do the slope correction for the selected spectrum
@@ -236,29 +289,29 @@ contains
         !! And here is the whole retrieval magic. Simple stuff, linear retrieval
         !! see Rodgers (2000) for the usual details.
 
+        ! Initial statevector number: amount of basisfunctions plus 1 for SIF
         N_sv = MCS%algorithm%n_basisfunctions + 1
+
+        !! Calculate the inverse(!) noise matrix Se_inv
+        allocate(Se_inv(N_spec, N_spec))
+        !noise_work(:) = noise_work(:) / radiance_l1b(l1b_wl_idx_min)
+        Se_inv(:,:) = 0.0d0
+        do i=1, size(radiance_work)
+            Se_inv(i,i) = 1 / (noise_work(i) ** 2)
+        end do
+
         allocate(xhat(N_sv))
         allocate(Shat(N_sv, N_sv))
         allocate(Shat_inv(N_sv, N_sv))
 
         !! Stick basisfunctions into Jacobian matrix, which has following
         !! structure: first M entries are the M basisfunctions, and then there
-        !! is the fluorescence, so we have M+1
-
+        !! is the fluorescence as the last entry
         allocate(K(N_spec, N_sv))
         do i=1, MCS%algorithm%n_basisfunctions
             K(:,i) = basisfunctions(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i)
         end do
         K(:, N_sv) = 1.0d0 ! fluorescence jacobian is flat!
-
-        !! Calculate the inverse(!) noise matrix Se_inv
-        allocate(Se_inv(N_spec, N_spec))
-
-        !noise_work(:) = noise_work(:) / radiance_l1b(l1b_wl_idx_min)
-        Se_inv(:,:) = 0.0d0
-        do i=1, size(radiance_work)
-            Se_inv(i,i) = 1 / (noise_work(i) ** 2)
-        end do
 
         !! Start by calculating posterior covariance for linear case
         !! Shat = (K^T S_e^-1 K)^-1 (Rodgers 2.27 when S_a is large)
@@ -273,6 +326,7 @@ contains
 
         !! Calculate xhat!
         xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
+        final_SV(i_fp, i_fr, :) = xhat(:)
 
         allocate(rad_conv, mold=radiance_work)
         rad_conv(:) = 0.0d0
@@ -282,39 +336,48 @@ contains
             rad_conv(:) = rad_conv(:) + K(:,i) * xhat(i)
         end do
 
+        retrieved_SIF_rel(i_fp, i_fr) = xhat(N_sv)
         write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
         call logger%trivia(fname, trim(tmp_str))
+
+        retrieved_SIF_abs(i_fp, i_fr) = xhat(N_sv) * radiance_l1b(l1b_wl_idx_min)
         write(tmp_str, '(A, E12.5)') "SIF abs: ", xhat(N_sv) * radiance_l1b(l1b_wl_idx_min)
         call logger%trivia(fname, trim(tmp_str))
 
         !! Now we still are in a unitless world, so let's get back to the
-        !! realm of physical units by back-scaling our result here?
+        !! realm of physical units by back-scaling our result here with the first
+        !! pixel of the microwindow.
         radiance_work(:) = radiance_work(:) * radiance_l1b(l1b_wl_idx_min)
         rad_conv(:) = rad_conv(:) * radiance_l1b(l1b_wl_idx_min)
         ! Get the spectral residual
         residual(:) = rad_conv(:) - radiance_work(:)
 
         ! reduced chi2
-        chi2 = SUM((residual ** 2) / noise_work**2)
+        chi2 = SUM((residual ** 2) / (noise_work ** 2))
         chi2 = chi2 / (N_spec - N_sv)
 
-        write(tmp_str, '(A,F5.2)') "Chi2: ", chi2
+        BIC = N_spec * log(SUM(residual ** 2) / N_spec) + N_sv * log(1.0 * N_spec)
+
+        write(tmp_str, '(A, I3.1)') "N_sv: ", N_sv
+        call logger%trivia(fname, trim(tmp_str))
+        write(tmp_str, '(A,F7.3)') "Chi2: ", chi2
         call logger%trivia(fname, trim(tmp_str))
 
+        !open(newunit=funit, file="test.dat")
+        !do i=1, size(radiance_work)
+        !    write(funit, *) radiance_work(i), &
+        !                    rad_conv(i), &
+        !                    radiance_l1b(l1b_wl_idx_min+i-1), &
+        !                    noise_work(i)
+    !                        basisfunctions(i-1+l1b_wl_idx_min,i_fp,1), &
+    !                        basisfunctions(i-1+l1b_wl_idx_min,i_fp,2), &
+    !                        basisfunctions(i-1+l1b_wl_idx_min,i_fp,3)
+        !enddo
+        !close(funit)
 
-
-
-        open(newunit=funit, file="test.dat")
-        do i=1, size(radiance_work)
-            write(funit, *) radiance_work(i), &
-                            rad_conv(i), &
-                            radiance_l1b(l1b_wl_idx_min+i-1), &
-                            noise_work(i), &
-                            basisfunctions(i-1+l1b_wl_idx_min,i_fp,1), &
-                            basisfunctions(i-1+l1b_wl_idx_min,i_fp,2), &
-                            basisfunctions(i-1+l1b_wl_idx_min,i_fp,3)
-        enddo
-        close(funit)
+        !open(newunit=funit, file='chi2.dat', action='write', position='append')
+        !    write(funit, *) sounding_ids(i_fp, i_fr), chi2, retrieved_SIF_abs(i_fp, i_fr), retrieved_sif_rel(i_fp, i_fr)
+        !close(funit)
 
     end subroutine
 

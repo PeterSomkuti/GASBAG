@@ -9,9 +9,20 @@ module file_utils
     implicit none
 
 
-    public check_config_files_exist, get_HDF5_dset_dims
+    public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims
 
 contains
+
+    subroutine check_hdf_error(hdferr, fname, msg)
+        integer, intent(in) :: hdferr
+        character(len=*), intent(in) :: fname
+        character(len=*), intent(in) :: msg
+
+        if (hdferr /= 0) then
+            call logger%fatal(fname, msg)
+            stop 1
+        end if
+    end subroutine
 
 
     subroutine get_HDF5_dset_dims(file_id, dset_name, dset_dims)

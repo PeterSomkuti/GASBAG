@@ -27,6 +27,8 @@ if (hdferr /= 0) then
   stop 1
 end if
 
+MCS%input%l1b_file_id = l1b_file_id
+
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !! Basisfunction read-in from HDF file !!
 !! These are used very often throughout the retrieval process, !!
@@ -36,7 +38,7 @@ end if
 
 if (MCS%algorithm%using_GK_SIF) then
     ! Launch Guanter Retrievals!!!
-    call guanter_retrieval(l1b_file_id, my_instrument)
+    call guanter_retrieval(my_instrument)
 end if
 
 ! Do the error analysis

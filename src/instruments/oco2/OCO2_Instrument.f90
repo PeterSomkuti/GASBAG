@@ -4,10 +4,9 @@ module oco2
     use instruments, only: generic_instrument
     use control, only: MCS
     use logger_mod, only: logger => master_logger
-    use file_utils, only: get_HDF5_dset_dims
+    use file_utils, only: get_HDF5_dset_dims, check_hdf_error
 
     use HDF5
-    use H5LT
 
     implicit none
 
@@ -25,6 +24,8 @@ module oco2
         procedure, nopass :: calculate_dispersion
         procedure, nopass :: read_one_spectrum
         procedure, nopass :: calculate_noise
+        procedure, nopass :: check_radiance_valid
+        procedure, nopass :: read_sounding_ids
     end type
 
 
@@ -57,7 +58,8 @@ contains
             stop 1
         end if
 
-        write(msg, "(A, I1, A, I8.1)") "Number of footprints: ", n_fp_frames(1), ", number of frames: ", n_fp_frames(2)
+        write(msg, "(A, I1, A, I8.1)") "Number of footprints: ", n_fp_frames(1), ", &
+                                        number of frames: ", n_fp_frames(2)
         call logger%info(fname, trim(msg))
         write(msg, "(A, I8.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
         call logger%info(fname, trim(msg))
@@ -245,29 +247,19 @@ contains
         !! be read from the file.
 
         call h5dget_space_f(dset_id, dspace_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error getting dataspace id for " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error getting dataspace id for " // trim(dset_name))
 
         call h5sselect_hyperslab_f(dspace_id, H5S_SELECT_SET_F, &
                                    hs_offset, hs_count, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error performing hyperslab selection.")
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error performing hyperslab selection.")
+
 
         call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error creating simple memory space.")
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error creating simple memory space.")
 
         call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, hdferr, memspace_id, dspace_id)
-        if (hdferr /= 0) then
-            call logger%fatal(fname, "Error reading spectrum data from " // trim(dset_name))
-            stop 1
-        end if
+        call check_hdf_error(hdferr, fname, "Error reading spectrum data from " // trim(dset_name))
+
 
     end subroutine
 
@@ -287,6 +279,43 @@ contains
         end do
 
 
+
+    end subroutine
+
+    subroutine check_radiance_valid(l1b_file_id, radiance, idx_start, idx_end, valid)
+        integer(hid_t), intent(in) :: l1b_file_id
+        double precision, dimension(:), intent(in) :: radiance
+        integer, intent(in) :: idx_start, idx_end
+        logical, intent(out) :: valid
+
+
+        valid = .true.
+
+        if (COUNT(radiance == -999999.0) > 0) then
+            valid = .false.
+        end if
+
+    end subroutine
+
+    subroutine read_sounding_ids(l1b_file_id, sounding_ids)
+
+        integer(hid_t), intent(in) :: l1b_file_id
+        integer(8), dimension(:,:), allocatable, intent(out) :: sounding_ids
+
+        character(len=*), parameter :: fname = "read_sounding_ids"
+        integer(hid_t) :: dset_id
+        integer(hid_t), dimension(:), allocatable :: dset_dims
+        integer :: hdferr
+
+        call h5dopen_f(l1b_file_id, "/SoundingGeometry/sounding_id", dset_id, hdferr)
+        call check_hdf_error(hdferr, fname, "Error opening: /SoundingGeometry/sounding_id")
+
+        call get_HDF5_dset_dims(l1b_file_id, "/SoundingGeometry/sounding_id", dset_dims)
+
+        allocate(sounding_ids(dset_dims(1), dset_dims(2)))
+        ! sounding id's are 64bit little endian
+        call h5dread_f(dset_id, H5T_STD_I64LE, sounding_ids, dset_dims, hdferr)
+        call check_hdf_error(hdferr, fname, "Error reading in: /SoundingGeometry/sounding_id")
 
     end subroutine
 

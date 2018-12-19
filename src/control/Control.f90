@@ -10,6 +10,8 @@ module control
     use finer, only: file_ini
     use logger_mod, only: logger => master_logger
     use file_utils, only: check_config_files_exist
+    use HDF5
+
     implicit none
 
     ! At the moment, we only plan the Guanter and Frankenberg methods
@@ -36,12 +38,14 @@ module control
 
     type, private :: CS_input
         type(string) :: L1B_filename ! Path to the L1B file
+        integer(hid_t) :: l1b_file_id ! HDF file handler of L1B file
         type(string) :: MET_filename ! Path to MET file
         type(string) :: instrument_name ! Name of the instrument
     end type
 
     type, private :: CS_output
         type(string) :: output_filename ! Where does the ouptut HDF file go?
+        integer(hid_t) :: output_file_id
     end type
 
     ! Main control structure type
@@ -193,6 +197,19 @@ contains
             end if
             MCS%input%L1B_filename = trim(fini_char)
         end if
+
+        ! ----------------------------------------------------------------------
+
+        ! Outputs section -------------------------------------------------------
+        call fini%get(section_name='output', option_name='output_file', &
+                      val=fini_char, error=fini_error)
+        if (fini_error /= 0) then
+            call logger%fatal(fname, "Error reading output file name")
+            stop 1
+        end if
+
+        MCS%output%output_filename = trim(fini_char)
+
 
         ! ----------------------------------------------------------------------
 

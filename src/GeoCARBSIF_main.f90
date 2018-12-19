@@ -10,6 +10,7 @@ program GeoCARBSIF
     use version, only: git_branch, git_commit_hash, git_rev_no
     use control, only: MCS, populate_MCS
     use finer, only: file_ini
+    use file_utils, only: check_hdf_error
     use instruments
     use oco2
 
@@ -55,7 +56,7 @@ program GeoCARBSIF
     ! the derived types, depending on the instrument specified in the config.
     ! From here on, all derived-type bound subroutines MUST be called through
     ! a (sadly maybe cumbersome) SELECT TYPE statement - but this is just how
-    ! Fortran works with run-time isomorphism.
+    ! Fortran works with run-time polymorphism.
 
     if (MCS%input%instrument_name == 'oco2') then
         allocate(oco2_instrument :: my_instrument)
@@ -73,6 +74,13 @@ program GeoCARBSIF
     end select
 
 
+    ! Open up the output HDF5 file for writing and save the HDF5 file handler in
+    ! MCS to be used all over the program.
+    call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_TRUNC_F, &
+                     MCS%output%output_file_id, hdferr)
+    call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
+                              // trim(MCS%output%output_filename%chars()))
+
     ! Go and perform the retrieval process. At this stage, all information from
     ! the config file should have been passed onto the MCS, hence why the main
     ! retrieval function needs no arguments, and also does not return anything
@@ -80,5 +88,16 @@ program GeoCARBSIF
 
     call perform_retrievals(my_instrument)
 
+    ! Close the HDF5 files
+    call h5fclose_f(MCS%input%l1b_file_id, hdferr)
+    call check_hdf_error(hdferr, "Main", "Error closing input HDF5 file")
+
+    call h5fclose_f(MCS%output%output_file_id, hdferr)
+    call check_hdf_error(hdferr, "Main", "Error closing output HDF5 file")
+
+
+    ! Close the HDF5 library
+    call h5close_f(hdferr)
+    call check_hdf_error(hdferr, "Main", "Error closing HDF5 library")
 
 end program

@@ -5,6 +5,7 @@ module guanter_model
     use oco2
     use logger_mod, only: logger => master_logger
     use file_utils, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset
+    USE, INTRINSIC:: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
 
     use math_utils
 
@@ -32,6 +33,10 @@ module guanter_model
     double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, &
                                                      retrieved_SIF_rel, chi2
 
+    double precision, dimension(:,:,:), allocatable :: final_radiance, &
+                                                       measured_radiance, &
+                                                       noise_radiance
+
 contains
 
     subroutine guanter_retrieval(my_instrument)
@@ -57,13 +62,14 @@ contains
         integer :: num_frames(1), num_total_soundings, cnt
 
         character(len=999) :: dset_name
-        integer(hid_t) :: dset_id, obj_id, sif_result_gid
+        integer(hid_t) :: dset_id, sif_result_gid
         integer :: hdferr
 
         integer :: i,j
 
 
         l1b_file_id = MCS%input%l1b_file_id
+        output_file_id = MCS%output%output_file_id
 
         ! We copy the SoundingGeometry group over to the results section, for
         ! easy analysis of the results later on.
@@ -76,11 +82,11 @@ contains
         ! there's some memory allocation problems..
 
         call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
-                       MCS%output%output_file_id, "/SoundingGeometry", hdferr)
+                       output_file_id, "/SoundingGeometry", hdferr)
         call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
 
         ! And also create the result group in the output file
-        call h5gcreate_f(MCS%output%output_file_id, "linear_fluorescence_results", &
+        call h5gcreate_f(output_file_id, "linear_fluorescence_results", &
                          sif_result_gid, hdferr)
         call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
 
@@ -167,6 +173,14 @@ contains
         allocate(chi2(my_instrument%num_fp, num_frames(1)))
         allocate(final_SV(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
 
+        allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
+        allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
+        allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
+
+        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+        noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !! Loop through all frames and footprints, and perform the retrieval
@@ -180,10 +194,10 @@ contains
 
             call logger%info(fname, "Processing window: " // trim(MCS%window(i_win)%name))
 
-            retrieved_SIF_abs(:,:) = -9999.99
-            retrieved_SIF_rel(:,:) = -9999.99
-            final_SV(:,:,:) = -9999.99
-            chi2(:,:) = -9999.99
+            retrieved_SIF_abs(:,:) = -9999.99d0
+            retrieved_SIF_rel(:,:) = -9999.99d0
+            final_SV(:,:,:) = -9999.99d0
+            chi2(:,:) = -9999.99d0
 
             cnt = 0
             do i_fr=1, num_frames(1)
@@ -211,28 +225,45 @@ contains
             ! And then just write out the datasets / arrays
             out_dims3d = shape(final_SV)
             write(tmp_str, '(A,A)') "/linear_fluorescence_results/final_statevector_" // MCS%window(i_win)%name
-            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+            call write_DP_hdf_dataset(output_file_id, &
                                       trim(tmp_str), &
-                                      final_SV, out_dims3d)
+                                      final_SV, out_dims3d, -9999.99d0)
 
             out_dims2d = shape(retrieved_SIF_rel)
             write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_sif_rel_" // MCS%window(i_win)%name
-            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+            call write_DP_hdf_dataset(output_file_id, &
                                       trim(tmp_str), &
-                                      retrieved_SIF_rel, out_dims2d)
+                                      retrieved_SIF_rel, out_dims2d, -9999.99d0)
 
             out_dims2d = shape(retrieved_SIF_abs)
             write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_sif_abs_" // MCS%window(i_win)%name
-            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+            call write_DP_hdf_dataset(output_file_id, &
                                       trim(tmp_str), &
-                                      retrieved_SIF_abs, out_dims2d)
+                                      retrieved_SIF_abs, out_dims2d, -9999.99d0)
 
             out_dims2d = shape(chi2)
             write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_chi2_" // MCS%window(i_win)%name
-            call write_DP_hdf_dataset(MCS%output%output_file_id, &
+            call write_DP_hdf_dataset(output_file_id, &
                                       trim(tmp_str), &
-                                      chi2, out_dims2d)
+                                      chi2, out_dims2d, -9999.99d0)
 
+            out_dims3d = shape(final_radiance)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/modelled_radiance_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(output_file_id, &
+                                      trim(tmp_str), &
+                                      final_radiance, out_dims3d)
+
+            out_dims3d = shape(measured_radiance)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/measured_radiance_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(output_file_id, &
+                                      trim(tmp_str), &
+                                      measured_radiance, out_dims3d)
+
+            out_dims3d = shape(noise_radiance)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/noise_radiance_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(output_file_id, &
+                                      trim(tmp_str), &
+                                      noise_radiance, out_dims3d)
         end do ! microwindow loop
     end subroutine
 
@@ -247,7 +278,7 @@ contains
         double precision, dimension(:,:,:,:), intent(in) :: snr_coefs
 
         integer :: l1b_wl_idx_min, l1b_wl_idx_max
-        integer :: i, j, funit, i_all
+        integer :: i, i_all
         integer(hid_t) :: l1b_file_id
 
         character(len=*), parameter :: fname = "guanter_FM"
@@ -276,7 +307,7 @@ contains
 
         double precision, dimension(:), allocatable :: xhat
         double precision, dimension(:,:), allocatable :: K, Se_inv, Shat, Shat_inv
-        double precision, dimension(:,:), allocatable :: m_tmp1, m_tmp2, m_tmp3
+        double precision, dimension(:,:), allocatable :: m_tmp1, m_tmp2
 
 
         l1b_file_id = MCS%input%l1b_file_id
@@ -423,6 +454,10 @@ contains
         rad_conv(:) = rad_conv(:) * radiance_l1b(l1b_wl_idx_min)
         ! Get the spectral residual
         residual(:) = rad_conv(:) - radiance_work(:)
+
+        final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = rad_conv(:)
+        measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_work(:)
+        noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
         ! reduced chi2
         tmp_chi2 = SUM((residual ** 2) / (noise_work ** 2))

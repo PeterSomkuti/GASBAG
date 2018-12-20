@@ -5,7 +5,7 @@ call h5pcreate_f(H5P_DATASET_CREATE_F, dcpl, hdferr)
 call check_hdf_error(hdferr, fname, "Error creating dataset creation property list")
 
 if (present(fill_value)) then
-    call h5pset_fill_value_f(dcpl, H5T_NATIVE_REAL, fill_value, hdferr)
+    call h5pset_fill_value_f(dcpl, H5T_NATIVE_REAL, conv_fill_value, hdferr)
     call check_hdf_error(hdferr, fname, "Error setting dataset fill value")
 end if
 

@@ -640,7 +640,7 @@ if __name__ == '__main__':
     # And finally stick them into an HDF file where we can use them for
     # retrievals. Old file will be overwritten. Control here how many
     # SVs you actually want in the file.
-    N_sv_output = 10
+    N_sv_output = 20
     fname = f'{args.o}_basisfunctions.h5'
     logger.info(f"Writing out the top {N_sv_output} SVDs into the file: "
                 f"{fname}")

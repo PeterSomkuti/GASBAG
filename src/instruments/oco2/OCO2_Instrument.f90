@@ -246,12 +246,20 @@ contains
         double precision, intent(inout) :: noise(:)
         integer, intent(in) :: fp, band, idx_start, idx_end
 
-        double precision, parameter :: MaxMS(3) = [4.00E20, 2.45E20, 1.25E20]
-        integer :: i
+        double precision, dimension(3) :: MaxMS
+        integer(hsize_t), dimension(1) :: dims
+        integer(hid_t) :: dset_id
+        integer :: i, hdferr
+
+        dims(1) = 3
+        call h5dopen_f(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", dset_id, hdferr)
+        call check_hdf_error(hdferr, "calculate_noise", "Error opening: /InstrumentHeader/measureable_signal_max_observed")
+
+        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, MaxMS, dims, hdferr)
 
         do i=1, size(noise)
             noise(i) = (MaxMS(band) / 100) * sqrt(abs(100 * radiance(i) / MaxMS(band)) * &
-                        snr_coefs(1,idx_start+i-1,fp,band)**2 + snr_coefs(2,idx_start+i-1,fp,band))
+                        (snr_coefs(1,idx_start+i-1,fp,band)**2) + (snr_coefs(2,idx_start+i-1,fp,band)**2))
         end do
 
 

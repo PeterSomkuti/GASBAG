@@ -32,12 +32,16 @@ contains
         double precision, optional, intent(in) :: fill_value
 
         real, dimension(:,:), allocatable :: conv_array
+        real :: conv_fill_value
         character(len=*), parameter :: fname = "write_2D_DP_hdf_dataset"
         integer :: hdferr
         integer(hid_t) :: dspace_id, dset_id, dcpl
 
         allocate(conv_array(size(array, 1), size(array, 2)))
         conv_array = real(array)
+        if (present(fill_value)) then
+            conv_fill_value = real(fill_value)
+        end if
 
         include "HDF5_write_DP_array.inc"
 
@@ -52,12 +56,16 @@ contains
         double precision, optional, intent(in) :: fill_value
 
         real, dimension(:,:,:), allocatable :: conv_array
+        real :: conv_fill_value
         character(len=*), parameter :: fname = "write_3D_DP_hdf_dataset"
         integer :: hdferr
         integer(hid_t) :: dspace_id, dset_id, dcpl
 
         allocate(conv_array(size(array, 1), size(array, 2), size(array, 3)))
         conv_array = real(array)
+        if (present(fill_value)) then
+            conv_fill_value = real(fill_value)
+        end if
 
         include "HDF5_write_DP_array.inc"
 

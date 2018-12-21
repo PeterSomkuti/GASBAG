@@ -5,7 +5,7 @@ module guanter_model
     use oco2
     use logger_mod, only: logger => master_logger
     use file_utils, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset
-    USE, INTRINSIC:: IEEE_ARITHMETIC, ONLY: IEEE_VALUE, IEEE_QUIET_NAN
+    use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
     use math_utils
 
@@ -27,8 +27,8 @@ module guanter_model
     !!!!! Retrieval results !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-    ! Final statevector for each measurement
-    double precision, dimension(:,:,:), allocatable :: final_SV
+    ! Final statevector and post-uncert for each measurement
+    double precision, dimension(:,:,:), allocatable :: final_SV, final_SV_uncert
     ! Final SIF value in physical radiance units, chi2
     double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, &
                                                      retrieved_SIF_rel, chi2
@@ -172,14 +172,11 @@ contains
         allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames(1)))
         allocate(chi2(my_instrument%num_fp, num_frames(1)))
         allocate(final_SV(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
+        allocate(final_SV_uncert(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
 
         allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
         allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
         allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
-
-        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-        noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -197,7 +194,12 @@ contains
             retrieved_SIF_abs(:,:) = -9999.99d0
             retrieved_SIF_rel(:,:) = -9999.99d0
             final_SV(:,:,:) = -9999.99d0
+            final_SV_uncert(:,:,:) = -9999.99d0
             chi2(:,:) = -9999.99d0
+
+            final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+            measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+            noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
             cnt = 0
             do i_fr=1, num_frames(1)
@@ -228,6 +230,12 @@ contains
             call write_DP_hdf_dataset(output_file_id, &
                                       trim(tmp_str), &
                                       final_SV, out_dims3d, -9999.99d0)
+
+            out_dims3d = shape(final_SV_uncert)
+            write(tmp_str, '(A,A)') "/linear_fluorescence_results/final_statevector_uncert_" // MCS%window(i_win)%name
+            call write_DP_hdf_dataset(output_file_id, &
+                                      trim(tmp_str), &
+                                      final_SV_uncert, out_dims3d, -9999.99d0)
 
             out_dims2d = shape(retrieved_SIF_rel)
             write(tmp_str, '(A,A)') "/linear_fluorescence_results/retrieved_sif_rel_" // MCS%window(i_win)%name
@@ -278,7 +286,7 @@ contains
         double precision, dimension(:,:,:,:), intent(in) :: snr_coefs
 
         integer :: l1b_wl_idx_min, l1b_wl_idx_max
-        integer :: i, i_all
+        integer :: i, j, i_all
         integer(hid_t) :: l1b_file_id
 
         character(len=*), parameter :: fname = "guanter_FM"
@@ -293,6 +301,7 @@ contains
         double precision, dimension(:), allocatable :: radiance_work, noise_work, rad_conv, residual
         double precision, dimension(:), allocatable :: radiance_l1b
 
+        double precision :: cont_rad, fit_intercept
         ! Are the radiances that we process sensible?
         logical :: radiance_OK
 
@@ -319,6 +328,8 @@ contains
             type is (oco2_instrument)
                 call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
         end select
+
+        cont_rad = percentile(radiance_l1b, 99.9d0)
 
         !! We now have the full L1b spectrum of a given index, we need to grab
         !! the relevant portion of the spectrum.
@@ -365,7 +376,7 @@ contains
         end select
 
         if (radiance_OK .eqv. .false.) then
-            call logger%warning(fname, "This sounding has invalid radiances. Skipping")
+            !call logger%warning(fname, "This sounding has invalid radiances. Skipping")
             return
         end if
 
@@ -379,14 +390,12 @@ contains
         end select
 
         ! Do the slope correction for the selected spectrum
-        call slope_correction(radiance_work, 40.0d0)
+        call slope_correction(radiance_work, 40.0d0, fit_intercept)
         ! And we have our "y" mesurement vector ready!!
 
         ! NOTE: HERE, RADIANCE_L1B IS IS IN PHYSICAL UNITS, AS IS NOISE_WORK.
         ! RADIANCE_WORK, HOWEVER, HAS BEEN SLOPE-NORMALIZED AND IS OF UNIT 1.
-
-
-
+        ! WE THUS NORMALIZE THE NOISE DATA AS WELL (see lines below)
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !! And here is the whole retrieval magic. Simple stuff, linear retrieval
@@ -397,7 +406,10 @@ contains
 
         !! Calculate the inverse(!) noise matrix Se_inv
         allocate(Se_inv(N_spec, N_spec))
-        !noise_work(:) = noise_work(:) / radiance_l1b(l1b_wl_idx_min)
+        ! Since we work in slope-normalized space, we also need to scale our
+        ! noise levels.
+        noise_work(:) = noise_work(:) / fit_intercept
+
         Se_inv(:,:) = 0.0d0
         do i=1, size(radiance_work)
             Se_inv(i,i) = 1 / (noise_work(i) ** 2)
@@ -416,6 +428,17 @@ contains
         end do
         K(:, N_sv) = 1.0d0 ! fluorescence jacobian is flat!
 
+        !! Easy check if we did everything right - are there NaNs in K?
+        do i=1, size(K, 1)
+            do j=1, size(K, 2)
+                if (ieee_is_nan(K(i,j))) then
+                    call logger%fatal(fname, "There are NaN's in the Jacobian.")
+                    stop 1
+                end if
+            end do
+        end do
+
+
         !! Start by calculating posterior covariance for linear case
         !! Shat = (K^T S_e^-1 K)^-1 (Rodgers 2.27 when S_a is large)
         allocate(m_tmp1, mold=Shat)
@@ -426,6 +449,11 @@ contains
         call invert_matrix(m_tmp1, m_tmp2)
         ! m_tmp2 is know (K^T Se_inv K)^-1 = Shat
         Shat(:,:) = m_tmp2(:,:)
+
+        ! Report the state vector posteriori uncertainty
+        do i=1, N_sv
+            final_SV_uncert(i_fp, i_fr, i) = sqrt(Shat(i,i))
+        end do
 
         !! Calculate xhat!
         xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
@@ -439,19 +467,21 @@ contains
             rad_conv(:) = rad_conv(:) + K(:,i) * xhat(i)
         end do
 
-        retrieved_SIF_rel(i_fp, i_fr) = xhat(N_sv)
-        write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
+
+        noise_work(:) = noise_work(:) * fit_intercept
+        retrieved_SIF_abs(i_fp, i_fr) = xhat(N_sv) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
+        write(tmp_str, '(A, E12.5)') "SIF abs: ", xhat(N_sv) * fit_intercept !cont_rad ! radiance_l1b(l1b_wl_idx_min)
         call logger%trivia(fname, trim(tmp_str))
 
-        retrieved_SIF_abs(i_fp, i_fr) = xhat(N_sv) * radiance_l1b(l1b_wl_idx_min)
-        write(tmp_str, '(A, E12.5)') "SIF abs: ", xhat(N_sv) * radiance_l1b(l1b_wl_idx_min)
+        retrieved_SIF_rel(i_fp, i_fr) = xhat(N_sv)
+        write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
         call logger%trivia(fname, trim(tmp_str))
 
         !! Now we still are in a unitless world, so let's get back to the
         !! realm of physical units by back-scaling our result here with the first
         !! pixel of the microwindow.
-        radiance_work(:) = radiance_work(:) * radiance_l1b(l1b_wl_idx_min)
-        rad_conv(:) = rad_conv(:) * radiance_l1b(l1b_wl_idx_min)
+        radiance_work(:) = radiance_work(:) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
+        rad_conv(:) = rad_conv(:) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
         ! Get the spectral residual
         residual(:) = rad_conv(:) - radiance_work(:)
 
@@ -478,11 +508,12 @@ contains
 
 
 
-    subroutine slope_correction(radiance, perc)
+    subroutine slope_correction(radiance, perc, intercept)
 
         implicit none
         double precision, intent(inout) :: radiance(:)
         double precision, intent(in) :: perc
+        double precision, intent(inout) :: intercept
 
         double precision :: perc_value
         integer :: num_used
@@ -514,7 +545,7 @@ contains
         do i=1, size(radiance)
             if (radiance(i) > perc_value) then
                 bdata(cnt, 1) = radiance(i)
-                adata(cnt, 2)= i
+                adata(cnt, 2)= i-1
                 cnt = cnt + 1
             end if
         end do
@@ -536,20 +567,16 @@ contains
 
         if (sgels_info /= 0) then
             call logger%fatal(fname, "Error from DGELS.")
-
-            write(*,*) adata
-
-            write(*,*) bdata
-
             stop 1
         end if
 
         ! We now have the intercept in bdata(1,1), and the slope in bdata(2,1)
         ! and can thus slope-correct the spectrum.
         do i=1, size(radiance)
-            radiance(i) = radiance(i) / (bdata(1,1) + (i * bdata(2,1)))
+            radiance(i) = radiance(i) / (bdata(1,1) + ((i-1) * bdata(2,1)))
         end do
 
+        intercept = bdata(1,1)
 
     end subroutine
 

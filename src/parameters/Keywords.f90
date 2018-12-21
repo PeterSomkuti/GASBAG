@@ -55,11 +55,15 @@ contains
             valid_options(4,1) = "l1b_file" ! L1b file location
             valid_options(4,2) = "met_file" ! MET file location
 
+        ! Output file options
         valid_sections(5) = "output"
             valid_options(5,1) = "output_file"
 
-        valid_sections(6) = ""
-            valid_options(6,1) = ""
+        ! Solar model type and file path
+        valid_sections(6) = "solar"
+            valid_options(6,1) = "solar_type"
+            valid_options(6,2) = "solar_file"
+
         ! We have to define our windows manually here, and give them explicit
         ! numbers!
         window_start = 6

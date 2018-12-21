@@ -51,9 +51,9 @@ contains
         character(len=999) :: tmp_str
 
         double precision, allocatable :: tmp_data(:)
-        integer(hsize_t), allocatable :: num_pixels(:)
         integer(hsize_t), dimension(2) :: out_dims2d
         integer(hsize_t), dimension(3) :: out_dims3d
+        integer(hsize_t), dimension(:), allocatable :: num_pixels
 
         double precision, allocatable :: dispersion_coefs(:,:,:)
         double precision, allocatable :: snr_coefs(:,:,:,:)
@@ -103,13 +103,12 @@ contains
             call h5fopen_f(MCS%window(i_win)%basisfunction_file%chars(), &
                            H5F_ACC_RDONLY_F, basisfunction_file_id, hdferr)
             call check_hdf_error(hdferr, fname, "Error opening HDF file: " &
-                                 // trim(MCS%window(1)%basisfunction_file%chars()))
+                                 // trim(MCS%window(i_win)%basisfunction_file%chars()))
 
             if (.not. allocated(basisfunctions)) then
                 ! And then start reading values into our own arrays
                 ! Get the array dimensions by inquiring the first one..
                 call get_HDF5_dset_dims(basisfunction_file_id, "/BasisFunction_SV1_FP1", num_pixels)
-
                 ! Allocate the basisfunction array
                 allocate(basisfunctions(MAX_WINDOWS, num_pixels(1), &
                                         my_instrument%num_fp, MCS%algorithm%n_basisfunctions))

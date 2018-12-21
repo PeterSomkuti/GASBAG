@@ -27,8 +27,10 @@ module control
         type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
         integer :: N_algorithms ! How many do we want to actually use?
         integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
-        logical :: using_GK_SIF
-        logical :: using_physical
+        logical :: using_GK_SIF ! Do we use the Guanter-type retrival?
+        logical :: using_physical ! Do we use a physics-based retrieval?
+        type(string) :: solar_file ! Path to the solar model file_exists
+        type(string) :: solar_type ! Which type of solar model?
     end type
 
     type, private :: CS_gas
@@ -239,7 +241,34 @@ contains
 
         ! ----------------------------------------------------------------------
 
-        ! Outputs section -------------------------------------------------------
+        ! Solar section ------------------------------------------------------
+        ! If doing physical retrieval, we MUST have the solar section
+        if (MCS%algorithm%using_physical .eqv. .true.) then
+            if (.not. fini%has_section(section_name="solar")) then
+                call logger%fatal(fname, "Need to have solar section when using physical retrieval.")
+                stop 1
+            else
+                call fini%get(section_name='solar', option_name='solar_file', &
+                              val=fini_char, error=fini_error)
+                if (fini_error /= 0) then
+                    call logger%fatal(fname, "Could not read solar model file name.")
+                    stop 1
+                end if
+                MCS%algorithm%solar_file = trim(fini_char)
+
+                call fini%get(section_name='solar', option_name='solar_type', &
+                              val=fini_char, error=fini_error)
+                if (fini_error /= 0) then
+                    call logger%fatal(fname, "Could not read solar model type.")
+                    stop 1
+                end if
+                MCS%algorithm%solar_type = trim(fini_char)
+
+            end if
+        end if
+
+
+        ! Outputs section ------------------------------------------------------
         call fini%get(section_name='output', option_name='output_file', &
                       val=fini_char, error=fini_error)
         if (fini_error /= 0) then

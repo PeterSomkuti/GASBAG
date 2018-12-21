@@ -25,7 +25,7 @@ contains
 
         implicit none
         character(len=99) :: tmp_str
-        integer :: window_nr
+        integer :: window_start, window_nr, this_idx
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! Everything is lowercase here!!
@@ -58,15 +58,20 @@ contains
         valid_sections(5) = "output"
             valid_options(5,1) = "output_file"
 
+        valid_sections(6) = ""
+            valid_options(6,1) = ""
         ! We have to define our windows manually here, and give them explicit
         ! numbers!
+        window_start = 6
         do window_nr=1, MAX_WINDOWS
             write(tmp_str, '(A, G0.1)') "window-", window_nr
-                valid_sections(5+window_nr) = trim(tmp_str)
-                valid_options(5+window_nr,1) = "name"
-                valid_options(5+window_nr,2) = "wl_min"
-                valid_options(5+window_nr,3) = "wl_max"
-                valid_options(5+window_nr,4) = "basisfunctions"
+            this_idx = window_start + window_nr
+                valid_sections(this_idx) = trim(tmp_str)
+                valid_options(this_idx,1) = "name"
+                valid_options(this_idx,2) = "wl_min"
+                valid_options(this_idx,3) = "wl_max"
+                valid_options(this_idx,4) = "basisfunctions"
+                valid_options(this_idx,5) = "gases"
         end do
 
 

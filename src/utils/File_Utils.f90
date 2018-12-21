@@ -15,12 +15,62 @@ module file_utils
     interface write_DP_hdf_dataset
         module procedure write_2D_DP_hdf_dataset
         module procedure write_3D_DP_hdf_dataset
-    end interface write_DP_hdf_dataset
+    end interface
+
+    interface read_DP_hdf_dataset
+        module procedure read_2D_DP_hdf_dataset
+        module procedure read_3D_DP_hdf_dataset
+    end interface
 
     public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims, &
-           write_DP_hdf_dataset
+           write_DP_hdf_dataset, read_DP_hdf_dataset
 
 contains
+
+
+    subroutine read_3D_DP_hdf_dataset(file_id, dset_name, array, dset_dims)
+
+        integer(hid_t), intent(in) :: file_id
+        character(len=*), intent(in) :: dset_name
+        double precision, dimension(:,:,:), allocatable, intent(inout) :: array
+        integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
+
+        integer :: hdferr
+        integer(hid_t) :: dset_id
+        character(len=*), parameter :: fname = "read_3D_DP_dataset"
+
+        call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+        allocate(array(dset_dims(1), dset_dims(2), dset_dims(3)))
+
+        call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
+
+        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
+    end subroutine
+
+    subroutine read_2D_DP_hdf_dataset(file_id, dset_name, array, dset_dims)
+
+        integer(hid_t), intent(in) :: file_id
+        character(len=*), intent(in) :: dset_name
+        double precision, dimension(:,:), allocatable, intent(inout) :: array
+        integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
+
+        integer :: hdferr
+        integer(hid_t) :: dset_id
+        character(len=*), parameter :: fname = "read_2D_DP_dataset"
+
+        call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+        allocate(array(dset_dims(1), dset_dims(2)))
+
+        call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
+
+        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
+    end subroutine
 
 
     subroutine write_2D_DP_hdf_dataset(file_id, dset_name, array, dims, fill_value)

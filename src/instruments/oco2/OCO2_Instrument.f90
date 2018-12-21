@@ -55,10 +55,10 @@ contains
             stop 1
         end if
 
-        write(msg, "(A, I1, A, I8.1)") "Number of footprints: ", n_fp_frames(1), ", &
+        write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), ", &
                                         number of frames: ", n_fp_frames(2)
         call logger%info(fname, trim(msg))
-        write(msg, "(A, I8.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
+        write(msg, "(A, G0.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
         call logger%info(fname, trim(msg))
 
         ! Store the total number of soundings to be processed in the MCS. We need
@@ -117,7 +117,8 @@ contains
     subroutine read_num_frames(l1b_file_id, num_frames)
 
         integer(hid_t), intent(in) :: l1b_file_id
-        integer, intent(out) :: num_frames(1)
+        integer, intent(out) :: num_frames
+        integer, dimension(1) :: tmp_num_frames
 
         integer(hid_t) :: dset_id
         integer(hsize_t) :: num_frames_shape(1) = [1]
@@ -128,8 +129,10 @@ contains
         call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
         call check_hdf_error(hdferr, fname, "Error opening SNR coeffs at: " // trim(dset_name))
 
-        call h5dread_f(dset_id, H5T_NATIVE_INTEGER, num_frames, num_frames_shape, hdferr)
+        call h5dread_f(dset_id, H5T_NATIVE_INTEGER, tmp_num_frames, num_frames_shape, hdferr)
         call check_hdf_error(hdferr, fname, "Error reading SNR coeffs at: " // trim(dset_name))
+
+        num_frames = tmp_num_frames(1)
 
     end subroutine
 

@@ -9,6 +9,7 @@ use logger_mod, only: logger => master_logger
 use file_utils, only: get_HDF5_dset_dims, check_hdf_error
 
 use guanter_model
+use physical_model
 use HDF5
 
 implicit none
@@ -33,11 +34,10 @@ if (MCS%algorithm%using_GK_SIF) then
     call guanter_retrieval(my_instrument)
 end if
 
-! Do the error analysis
-! How do we do this without knowing first which forward models are being run?
-
-
-! Save the results into a file
+if (MCS%algorithm%using_physical) then
+    ! Launch physical-type retrievals
+    call physical_retrieval(my_instrument)
+end if
 
 
 end subroutine

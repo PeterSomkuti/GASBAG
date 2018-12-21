@@ -31,6 +31,13 @@ module control
         logical :: using_physical
     end type
 
+    type, private :: CS_gas
+        type(string) :: name ! Name of the gas
+        type(string) :: filename ! Path to the filename
+        type(string) :: filetype ! Type of the file (ABSCO, ..)
+        double precision :: wl_min, wl_max ! spectral range of the cross sections
+    end type
+
     type, private :: CS_window
         logical :: used ! Is this CS_window structure used?
         type(string) :: name
@@ -40,9 +47,8 @@ module control
     end type
 
     type, private :: CS_input
-        type(string) :: L1B_filename ! Path to the L1B file
-        integer(hid_t) :: l1b_file_id ! HDF file handler of L1B file
-        type(string) :: MET_filename ! Path to MET file
+        type(string) :: l1b_filename , met_filename! Path to the L1B/MET file
+        integer(hid_t) :: l1b_file_id, met_file_id ! HDF file handler of L1B/MET file
         type(string) :: instrument_name ! Name of the instrument
     end type
 
@@ -167,6 +173,9 @@ contains
                 if (MCS%algorithm%name(i) == 'GK') then
                     MCS%algorithm%using_GK_SIF = .true.
                     call logger%trivia(fname, "Utilizing Guanter-type SIF retrieval!")
+                else if(MCS%algorithm%name(i) == 'physical') then
+                    MCS%algorithm%using_physical = .true.
+                    call logger%trivia(fname, "Utilizing phyiscal retrieval!")
                 end if
             end do
         end if
@@ -174,7 +183,6 @@ contains
         tmp_str = "algorithm"
         if (fini%has_option(section_name=tmp_str, &
                             option_name="n_basisfunctions")) then
-
             call fini%get(section_name='algorithm', option_name='n_basisfunctions', &
                           val=fini_val, error=fini_error)
 
@@ -199,7 +207,34 @@ contains
                 call logger%fatal(fname, "Error reading l1b_file string")
                 stop 1
             end if
-            MCS%input%L1B_filename = trim(fini_char)
+            MCS%input%l1b_filename = trim(fini_char)
+        end if
+
+        ! Do the same for the MET file
+        ! If doing physical retrieval, we MUST have the MET file
+        if (MCS%algorithm%using_physical .eqv. .true.) then
+            tmp_str = "input"
+            if (.not. fini%has_option(section_name=tmp_str, &
+                                      option_name="met_file")) then
+                call logger%fatal(fname, "When using physical retrieval, you MUST supply a MET file.")
+                stop 1
+            end if
+
+            call check_config_files_exist(fini, "input", "met_file", 1, file_exists)
+            if (.not. file_exists) then
+                call logger%fatal(fname, "MET file check failed.")
+                stop 1
+            end if
+
+            call fini%get(section_name='input', option_name='met_file', &
+                          val=fini_char, error=fini_error)
+            if (fini_error /= 0) then
+                call logger%fatal(fname, "Error reading met_file string")
+                stop 1
+            end if
+
+            MCS%input%met_filename = trim(fini_char)
+
         end if
 
         ! ----------------------------------------------------------------------

@@ -59,7 +59,7 @@ contains
         double precision, allocatable :: snr_coefs(:,:,:,:)
 
         integer :: i_fr, i_fp, i_win ! Indices for frames, footprints, microwindows
-        integer :: num_frames(1), num_total_soundings, cnt
+        integer :: num_frames, num_total_soundings, cnt
 
         character(len=999) :: dset_name
         integer(hid_t) :: dset_id, sif_result_gid
@@ -165,18 +165,18 @@ contains
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        !! Allocate the result arrays here
-        num_total_soundings = my_instrument%num_fp * num_frames(1)
+        !! Allocate the (module-wide) result arrays here
+        num_total_soundings = my_instrument%num_fp * num_frames
 
-        allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames(1)))
-        allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames(1)))
-        allocate(chi2(my_instrument%num_fp, num_frames(1)))
-        allocate(final_SV(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
-        allocate(final_SV_uncert(my_instrument%num_fp, num_frames(1), MCS%algorithm%n_basisfunctions + 1))
+        allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames))
+        allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames))
+        allocate(chi2(my_instrument%num_fp, num_frames))
+        allocate(final_SV(my_instrument%num_fp, num_frames, MCS%algorithm%n_basisfunctions + 1))
+        allocate(final_SV_uncert(my_instrument%num_fp, num_frames, MCS%algorithm%n_basisfunctions + 1))
 
-        allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
-        allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
-        allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames(1)))
+        allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
+        allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
+        allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -202,7 +202,7 @@ contains
             noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
             cnt = 0
-            do i_fr=1, num_frames(1)
+            do i_fr=1, num_frames
                 do i_fp=1, my_instrument%num_fp
 
                     write(tmp_str,'(A,I7.1,A,I1.1)') "Frame: ", i_fr, ", FP: ", i_fp
@@ -224,6 +224,7 @@ contains
 
             !! Write the results into the output HDF5 file
 
+            call logger%info(fname, "Writing out results.")
             ! And then just write out the datasets / arrays
             out_dims3d = shape(final_SV)
             write(tmp_str, '(A,A)') "/linear_fluorescence_results/final_statevector_" // MCS%window(i_win)%name
@@ -272,6 +273,8 @@ contains
             call write_DP_hdf_dataset(output_file_id, &
                                       trim(tmp_str), &
                                       noise_radiance, out_dims3d)
+
+            call logger%info(fname, "Finished writing out results.")
         end do ! microwindow loop
     end subroutine
 
@@ -376,7 +379,9 @@ contains
         end select
 
         if (radiance_OK .eqv. .false.) then
-            !call logger%warning(fname, "This sounding has invalid radiances. Skipping")
+            write(tmp_str, '(A,G0.1,A,G0.1,A)') "Sounding (", i_fr, ",", i_fp, &
+                                                ") has invalid radiances. Skipping."
+            call logger%warning(fname, trim(tmp_str))
             return
         end if
 

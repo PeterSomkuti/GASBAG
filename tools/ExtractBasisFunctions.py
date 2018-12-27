@@ -181,7 +181,7 @@ OCO-2 specific things like checking for spikes etc.
     # Construct the wavelength grid from the dispersion coefficients
     for fp in range(8):
         num_pix = wl_grid[fp].shape[0]
-        wl_grid[fp] = 1000 * np.poly1d(disp_coeffs[fp][::-1])(np.arange(num_pix))
+        wl_grid[fp] = 1000 * np.poly1d(disp_coeffs[fp][::-1])(np.arange(num_pix) + 1)
 
     # Find the pixels which correspond to the chosen microwindow, and store
     # them in a dict for every footprint index (number-1)

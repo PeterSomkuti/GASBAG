@@ -44,6 +44,7 @@ contains
             ! Which SIF algorithm(s) to use?
             valid_options(2,1) = "sif_algorithm"
             valid_options(2,2) = "n_basisfunctions"
+            valid_options(2,3) = "solar_dopper_shift"
 
         ! Related to the instrument in question
         valid_sections(3) = "instrument"
@@ -58,6 +59,7 @@ contains
         ! Output file options
         valid_sections(5) = "output"
             valid_options(5,1) = "output_file"
+            valid_options(5,2) = "save_radiances"
 
         ! Solar model type and file path
         valid_sections(6) = "solar"

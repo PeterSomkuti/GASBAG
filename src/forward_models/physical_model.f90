@@ -23,13 +23,14 @@ module physical_model
     double precision, dimension(:,:,:), allocatable :: dispersion
     ! Sounding_ids
     integer(8), dimension(:,:), allocatable :: sounding_ids
-    ! Soundingn time strings
+    ! Sounding time strings
     character(len=25), dimension(:,:), allocatable :: sounding_time_strings
-
-    ! Radiances
-    double precision, dimension(:,:,:), allocatable :: final_radiance, &
-                                                       measured_radiance, &
-                                                       noise_radiance
+    ! Sounding scene geometry (solar and viewing zenith and azimuth)
+    double precision, dimension(:,:), allocatable :: SZA, SAA, VZA, VAA
+    ! Sounding scene location (lon, lat, altitude)
+    double precision, dimension(:,:), allocatable :: lon, lat, altitude, &
+                                                     relative_velocity, &
+                                                     relative_solar_velocity
 
     ! We grab the full MET profiles from the MET data file, for quick access
     double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
@@ -40,6 +41,12 @@ module physical_model
 
     ! The solar spectrum (wavelength, transmission)
     double precision, allocatable, dimension(:,:) :: solar_spectrum
+
+    ! Radiances
+    double precision, dimension(:,:,:), allocatable :: final_radiance, &
+                                                       measured_radiance, &
+                                                       noise_radiance
+
 
 contains
 
@@ -109,6 +116,12 @@ contains
                 call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
                 ! Read the time strings
                 call my_instrument%read_time_strings(l1b_file_id, sounding_time_strings)
+                ! Read in the measurement geometries
+                call my_instrument%read_sounding_geometry(l1b_file_id, 1, SZA, SAA, VZA, VAA)
+                ! Read in the measurement location
+                call my_instrument%read_sounding_location(l1b_file_id, 1, lon, lat, &
+                                                          altitude, relative_velocity, &
+                                                          relative_solar_velocity)
 
         end select
 
@@ -119,32 +132,51 @@ contains
 
         ! Read in the solar model
         if (MCS%algorithm%solar_type == "toon") then
-            !call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
-            !                        solar_spectrum)
+            call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+                                    solar_spectrum)
         else
             call logger%fatal(fname, "Sorry, solar model type " &
                                      // MCS%algorithm%solar_type%chars() &
                                      // " is not known.")
         end if
-
-        call physical_FM(my_instrument, 5, 50)
+        ! footprint, frame, microwindow #, band
+        call physical_FM(my_instrument, 5, 50, 1, 1)
 
 
     end subroutine
 
 
-    subroutine physical_FM(my_instrument, i_fp, i_fr)
+    subroutine physical_FM(my_instrument, i_fp, i_fr, i_win, band)
 
         implicit none
 
         class(generic_instrument), intent(in) :: my_instrument
-        integer, intent(in) :: i_fr, i_fp
+        integer, intent(in) :: i_fr, i_fp, i_win, band
 
-        double precision :: solar_dist, solar_rv
-        integer :: i
+        double precision, parameter :: SPEED_OF_LIGHT = 299792458d0
+
+        !!
+        integer(hid_t) :: l1b_file_id
+
+        !!
+        double precision, dimension(:), allocatable :: radiance_l1b
+        integer :: l1b_wl_idx_min, l1b_wl_idx_max, solar_idx_min, solar_idx_max
+        integer :: funit
+
+        !! Sounding location /time stuff
         type(datetime) :: date ! Datetime object for sounding date/time
-        integer :: doy_int ! Day of year as integer
         double precision :: doy_dp ! Day of year as double precision
+
+        !! Instrument stuff
+        double precision :: instrument_doppler
+
+        !! Solar stuff
+        double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
+
+
+        integer :: i
+
+        l1b_file_id = MCS%input%l1b_file_id
 
         ! Create a datetime object for the current measurement
         select type(my_instrument)
@@ -157,9 +189,75 @@ contains
 
         write(*,*) "Isoformat: ", date%isoformat()
         write(*,*) "Day of the year: ", doy_dp
-        call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
-        write(*,*) solar_dist, solar_rv
 
+        ! If solar doppler-shift is needed, calculate the distance and relative
+        ! velocity between point of measurement and the (fixed) sun
+        call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
+        call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
+        !solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
+        solar_doppler = relative_solar_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+        ! Re-adjust the solar spectrum wavelength grid
+        solar_spectrum(:,1) = solar_spectrum(:,1) / (1.0d0 + solar_doppler)
+
+        write(*,*) solar_rv * 1000.0d0 + earth_rv, solar_doppler
+        write(*,*) "SZA: ", SZA(i_fp, i_fr)
+        write(*,*) "SAA: ", SAA(i_fp, i_fr)
+        write(*,*) "VZA: ", VZA(i_fp, i_fr)
+        write(*,*) "VAA: ", VAA(i_fp, i_fr)
+        write(*,*) "Lon: ", lon(i_fp, i_fr), " Lat: ", lat(i_fp, i_fr), "Altitude: ", altitude(i_fp, i_fr)
+
+
+        select type(my_instrument)
+            type is (oco2_instrument)
+                call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
+        end select
+
+        l1b_wl_idx_min = 0
+        l1b_wl_idx_max = 0
+        solar_idx_min = 0
+        solar_idx_max = 0
+
+        do i=1, size(dispersion, 1)
+            if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_min) then
+                l1b_wl_idx_min = i
+            end if
+            if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_max) then
+                l1b_wl_idx_max = i
+            end if
+        end do
+
+        if (l1b_wl_idx_max < size(dispersion, 1)) then
+            l1b_wl_idx_max = l1b_wl_idx_max + 1
+        end if
+
+        if (l1b_wl_idx_max > size(dispersion, 1)) then
+            l1b_wl_idx_max = size(dispersion, 1)
+        end if
+
+        do i=1, size(solar_spectrum, 1)
+            if (solar_spectrum(i,1) < MCS%window(i_win)%wl_min) then
+                solar_idx_min = i
+            end if
+            if (solar_spectrum(i,1) < MCS%window(i_win)%wl_max) then
+                solar_idx_max = i
+            end if
+        end do
+
+        instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+        write(*,*) "instrument doppler: ", instrument_doppler
+        dispersion(:, i_fp, band) = dispersion(:, i_fp, band) / (1.0d0 + instrument_doppler)
+
+        open(file="l1b_spec.dat", newunit=funit)
+        do i=l1b_wl_idx_min, l1b_wl_idx_max
+            write(funit,*) dispersion(i, i_fp, band), radiance_l1b(i)
+        end do
+        close(funit)
+
+        open(file="solar_spec.dat", newunit=funit)
+        do i=solar_idx_min, solar_idx_max
+            write(funit,*) solar_spectrum(i,1), solar_spectrum(i,2)
+        end do
+        close(funit)
 
 
     end subroutine physical_FM

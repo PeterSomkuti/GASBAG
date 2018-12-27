@@ -1,6 +1,7 @@
 module solar_model
 
     use logger_mod, only: logger => master_logger
+    use math_utils
 
     public read_toon_spectrum, calculate_solar_distance_and_rv
 
@@ -111,5 +112,24 @@ contains
         distance = distance * 149597870.700d0
 
     end subroutine
+
+
+    subroutine calculate_rel_velocity_earth_sun(lat, sza, saa, altitude, rv)
+        implicit none
+        double precision, intent(in) :: lat, sza, saa, altitude
+        double precision, intent(out) :: rv
+
+        double precision, parameter :: EARTH_ROT_SPD = 7.2921150D-5
+        double precision, parameter :: CON = 6.73951496D-3
+        double precision, parameter :: EARTH_RADIUS = 6378.137
+
+        double precision :: gclat, gcrad
+
+         gclat = ATAN(TAN(DEG2RAD*lat)/(1.d0+CON))
+         gcrad = 1000.d0 * ((altitude / 1000.d0) + EARTH_RADIUS/SQRT(1.d0+CON*SIN(gclat)**2))
+
+         rv = -EARTH_ROT_SPD * gcrad * SIN(DEG2RAD*sza) * COS(DEG2RAD*(saa-90.d0)) * COS(gclat)
+
+     end subroutine
 
 end module

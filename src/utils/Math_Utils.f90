@@ -2,7 +2,15 @@ module math_utils
 
     use logger_mod, only: logger => master_logger
 
-    public :: combsort, percentile
+    implicit none
+
+    double precision, parameter :: PI = 3.141592653589793
+    double precision, parameter :: DEG2RAD = 0.017453292519943295
+    double precision, parameter :: RAD2DEG = 57.29577951308232
+
+    public :: PI, DEG2RAD, RAD2DEG, combsort, percentile
+
+
 
 contains
 
@@ -25,7 +33,8 @@ contains
         call DGETRF(n, n, mat_out, n, ipiv, info)
 
         if (info /= 0) then
-           stop 'Matrix is numerically singular!'
+            call logger%fatal("invert_matrix", "Matrix is numerically singular!")
+            stop 1
         end if
 
         ! DGETRI computes the inverse of a matrix using the LU factorization
@@ -33,7 +42,8 @@ contains
         call DGETRI(n, mat_out, n, ipiv, work, n, info)
 
         if (info /= 0) then
-           stop 'Matrix inversion failed!'
+            call logger%fatal("invert_matrix", "Matrix inversion failed!")
+            stop 1
         end if
 
     end subroutine

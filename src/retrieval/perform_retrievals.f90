@@ -28,6 +28,20 @@ call check_hdf_error(hdferr, fname, "Error opening L1B HDF file: " // trim(MCS%i
 ! .. and store the file ID in the MCS
 MCS%input%l1b_file_id = l1b_file_id
 
+! We copy the SoundingGeometry group over to the results section, for
+! easy analysis of the results later on.
+
+! TODO: this seems to case the HDF5 library to throw an "infinte loop"
+! error on exiting the program. Doesn't seem to cause real problems, but
+! looks 'ugly'. The alternative is to write a seperate function that does
+! the copying 'bit by bit'. Checking this problem with valgrind makes me
+! believe it's a problem in the HDF5 library version 1.10.4; looks like
+! there's some memory allocation problems..
+
+call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
+               MCS%output%output_file_id, "/SoundingGeometry", hdferr)
+call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
+
 
 if (MCS%algorithm%using_GK_SIF) then
     ! Launch Guanter Retrievals!!!

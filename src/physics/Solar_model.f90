@@ -46,7 +46,7 @@ contains
         close(funit)
         call logger%debug(fname, "Finished reading in Toon spectrum.")
 
-        ! Now turn them into wavelengths and re-order the array
+        ! Now turn them into wavelengths (microns) and re-order the array
         solar_spectrum(:,:) = solar_spectrum(line_count:1:-1,:)
         solar_spectrum(:,1) = 1e4 / solar_spectrum(:,1)
 

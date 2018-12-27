@@ -71,20 +71,6 @@ contains
         l1b_file_id = MCS%input%l1b_file_id
         output_file_id = MCS%output%output_file_id
 
-        ! We copy the SoundingGeometry group over to the results section, for
-        ! easy analysis of the results later on.
-
-        ! TODO: this seems to case the HDF5 library to throw an "infinte loop"
-        ! error on exiting the program. Doesn't seem to cause real problems, but
-        ! looks 'ugly'. The alternative is to write a seperate function that does
-        ! the copying 'bit by bit'. Checking this problem with valgrind makes me
-        ! believe it's a problem in the HDF5 library version 1.10.4; looks like
-        ! there's some memory allocation problems..
-
-        call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
-                       output_file_id, "/SoundingGeometry", hdferr)
-        call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
-
         ! And also create the result group in the output file
         call h5gcreate_f(output_file_id, "linear_fluorescence_results", &
                          sif_result_gid, hdferr)

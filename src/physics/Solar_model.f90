@@ -56,14 +56,16 @@ contains
 
     subroutine calculate_solar_distance_and_rv(dayofyear, distance, rv)
 
-        ! This function returns the distance in AU and relative velocity in km/s
+        ! This function returns the distance in km and relative velocity in km/s
         ! between Earth and the fixed Sun. It's a simple polynomial fit to some
         ! ephemeris data that was constructed using sun_calculate.py. We hope this
         ! is exact enough for the purpose of correcting for Solar doppler shift,
         ! as this is somewhat faster than using a full ephemeris module.
 
+        ! The concept is shamelessly taken from Hartmut Bösch's solar module.
+
         implicit none
-        integer, intent(in) :: dayofyear
+        double precision, intent(in) :: dayofyear
         double precision, intent(out) :: distance, rv
 
         ! Coefficients for the distance [AU] polynomial, derived using "sun_calculate.py"
@@ -105,6 +107,8 @@ contains
             rv = rv + (dayofyear ** (i-1)) * poly_rv(i)
         end do
 
+        ! Convert AU to km
+        distance = distance * 149597870.700d0
 
     end subroutine
 

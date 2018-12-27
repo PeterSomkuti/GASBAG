@@ -10,6 +10,8 @@ module physical_model
 
     use solar_model
     use math_utils
+    use scene
+    use mod_datetime
 
     implicit none
 
@@ -21,6 +23,9 @@ module physical_model
     double precision, dimension(:,:,:), allocatable :: dispersion
     ! Sounding_ids
     integer(8), dimension(:,:), allocatable :: sounding_ids
+    ! Soundingn time strings
+    character(len=25), dimension(:,:), allocatable :: sounding_time_strings
+
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
                                                        measured_radiance, &
@@ -30,9 +35,10 @@ module physical_model
     double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
                                                        met_P_levels, &
                                                        met_SH_profiles
+    ! MET surface pressure
     double precision, allocatable, dimension(:,:) :: met_psurf
 
-    ! The solar spectrum
+    ! The solar spectrum (wavelength, transmission)
     double precision, allocatable, dimension(:,:) :: solar_spectrum
 
 contains
@@ -101,6 +107,8 @@ contains
                 call my_instrument%read_num_frames(l1b_file_id, num_frames)
                 ! Read in the sounding id's
                 call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
+                ! Read the time strings
+                call my_instrument%read_time_strings(l1b_file_id, sounding_time_strings)
 
         end select
 
@@ -111,15 +119,15 @@ contains
 
         ! Read in the solar model
         if (MCS%algorithm%solar_type == "toon") then
-            call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
-                                    solar_spectrum)
+            !call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+            !                        solar_spectrum)
         else
             call logger%fatal(fname, "Sorry, solar model type " &
                                      // MCS%algorithm%solar_type%chars() &
                                      // " is not known.")
         end if
 
-        call physical_FM(my_instrument, 1, 1)
+        call physical_FM(my_instrument, 5, 50)
 
 
     end subroutine
@@ -133,9 +141,26 @@ contains
         integer, intent(in) :: i_fr, i_fp
 
         double precision :: solar_dist, solar_rv
+        integer :: i
+        type(datetime) :: date ! Datetime object for sounding date/time
+        integer :: doy_int ! Day of year as integer
+        double precision :: doy_dp ! Day of year as double precision
 
-        call calculate_solar_distance_and_rv(55, solar_dist, solar_rv)
+        ! Create a datetime object for the current measurement
+        select type(my_instrument)
+            type is (oco2_instrument)
+                call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
+        end select
+
+        doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0
+
+
+        write(*,*) "Isoformat: ", date%isoformat()
+        write(*,*) "Day of the year: ", doy_dp
+        call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
         write(*,*) solar_dist, solar_rv
+
+
 
     end subroutine physical_FM
 

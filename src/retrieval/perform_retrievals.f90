@@ -44,7 +44,7 @@ call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output
 
 
 if (MCS%algorithm%using_GK_SIF) then
-    ! Launch Guanter Retrievals!!!
+    ! Launch Guanter Retrievals
     call guanter_retrieval(my_instrument)
 end if
 

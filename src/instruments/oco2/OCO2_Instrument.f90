@@ -5,6 +5,7 @@ module oco2
     use control, only: MCS
     use logger_mod, only: logger => master_logger
     use file_utils, only: get_HDF5_dset_dims, check_hdf_error
+    use mod_datetime
 
     use HDF5
 
@@ -26,6 +27,8 @@ module oco2
         procedure, nopass :: calculate_noise
         procedure, nopass :: check_radiance_valid
         procedure, nopass :: read_sounding_ids
+        procedure, nopass :: read_time_strings
+        procedure, nopass :: convert_time_string_to_date
     end type
 
 
@@ -286,11 +289,12 @@ contains
 
     subroutine read_sounding_ids(l1b_file_id, sounding_ids)
 
+        implicit none
         integer(hid_t), intent(in) :: l1b_file_id
         integer(8), dimension(:,:), allocatable, intent(out) :: sounding_ids
 
         character(len=*), parameter :: fname = "read_sounding_ids"
-        integer(hid_t) :: dset_id
+        integer(hid_t) :: dset_id, filetype
         integer(hid_t), dimension(:), allocatable :: dset_dims
         integer :: hdferr
 
@@ -300,10 +304,67 @@ contains
         call get_HDF5_dset_dims(l1b_file_id, "/SoundingGeometry/sounding_id", dset_dims)
 
         allocate(sounding_ids(dset_dims(1), dset_dims(2)))
-        ! sounding id's are 64bit little endian
-        call h5dread_f(dset_id, H5T_STD_I64LE, sounding_ids, dset_dims, hdferr)
+        ! sounding id's are 64bit little endian, but let's figure it out via this
+        ! function anyway
+        call h5dget_type_f(dset_id, filetype, hdferr)
+
+        call h5dread_f(dset_id, filetype, sounding_ids, dset_dims, hdferr)
         call check_hdf_error(hdferr, fname, "Error reading in: /SoundingGeometry/sounding_id")
 
     end subroutine
+
+
+    subroutine read_time_strings(l1b_file_id, time_strings)
+
+        implicit none
+        integer(hid_t), intent(in) :: l1b_file_id
+        character(len=25), dimension(:,:), allocatable, intent(out) :: time_strings
+        ! OCO-2 time strings have 24 characters!
+        character(len=*), parameter :: fname = "read_time_strings"
+        integer :: hdferr
+        integer(hid_t) :: dset_id, filetype
+        integer(hid_t), dimension(:), allocatable :: dset_dims
+
+        call h5dopen_f(l1b_file_id, "/SoundingGeometry/sounding_time_string", dset_id, hdferr)
+        call check_hdf_error(hdferr, fname, "Error opening: /SoundingGeometry/sounding_time_string")
+
+        call get_HDF5_dset_dims(l1b_file_id, "/SoundingGeometry/sounding_time_string", dset_dims)
+
+        ! Difficult to figure out which kind of character-type we have in the HDF
+        ! file, so let's just grab it.
+        call h5dget_type_f(dset_id, filetype, hdferr)
+
+        allocate(time_strings(dset_dims(1), dset_dims(2)))
+        call h5dread_f(dset_id, filetype, time_strings, dset_dims, hdferr)
+        call check_hdf_error(hdferr, fname, "Error reading in: /SoundingGeometry/sounding_time_string")
+
+    end subroutine
+
+
+    subroutine convert_time_string_to_date(time_string, date)
+
+        ! Turn a OCO-2 time string into a datetype object
+
+        implicit none
+        character(len=25), intent(in) :: time_string
+        type(datetime), intent(out) :: date
+
+        type(string) :: tmp_str
+        integer :: year, month, day, hour, minute, second, millisecond
+
+        read(time_string(1:4), *) year
+        read(time_string(6:7), *) month
+        read(time_string(9:10), *) day
+        read(time_string(12:13), *) hour
+        read(time_string(15:16), *) minute
+        read(time_string(18:19), *) second
+        read(time_string(21:23), *) millisecond
+
+
+        date = datetime(year, month, day, hour, minute, &
+                        second, millisecond)
+
+    end subroutine
+
 
 end module

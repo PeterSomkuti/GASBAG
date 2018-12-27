@@ -132,4 +132,31 @@ contains
 
      end subroutine
 
+     subroutine calculate_solar_planck_function(temp, wavelength, irradiance)
+         implicit none
+         double precision, intent(in) :: temp
+         double precision, dimension(:), intent(in) :: wavelength
+
+         double precision, dimension(:), allocatable, intent(out) :: irradiance
+         double precision, parameter :: SPEED_OF_LIGHT = 299792458d+0
+         double precision, parameter :: PLANCK_CONST = 6.62607015d-34
+         double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
+
+         double precision, dimension(:), allocatable :: denom
+
+         allocate(irradiance(size(wavelength)))
+         allocate(denom(size(wavelength)))
+
+         ! Wavelength comes in as microns, so convert them to meters
+         irradiance(:) = 2 * PLANCK_CONST * (SPEED_OF_LIGHT**2) / ((wavelength * 1d-6) ** 5)
+
+         denom(:) = exp(PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6 * BOLTZMANN_CONST * temp)) - 1
+
+         irradiance(:) = irradiance(:) / denom(:)
+
+         ! And now convert to ph/s/m2/sr/um
+         irradiance(:) = 1d-9 * irradiance(:) / (PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6)) * 1e-3
+     end subroutine
+
+
 end module

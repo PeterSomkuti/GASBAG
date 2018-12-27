@@ -169,9 +169,11 @@ contains
 
         !! Instrument stuff
         double precision :: instrument_doppler
+        double precision, dimension(:), allocatable :: this_dispersion
 
         !! Solar stuff
         double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
+        double precision, dimension(:), allocatable :: solar_irrad
 
 
         integer :: i
@@ -192,9 +194,10 @@ contains
 
         ! If solar doppler-shift is needed, calculate the distance and relative
         ! velocity between point of measurement and the (fixed) sun
-        call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
-        call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
+        !call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
+        !call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
         !solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
+
         solar_doppler = relative_solar_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
         ! Re-adjust the solar spectrum wavelength grid
         solar_spectrum(:,1) = solar_spectrum(:,1) / (1.0d0 + solar_doppler)
@@ -206,12 +209,16 @@ contains
         write(*,*) "VAA: ", VAA(i_fp, i_fr)
         write(*,*) "Lon: ", lon(i_fp, i_fr), " Lat: ", lat(i_fp, i_fr), "Altitude: ", altitude(i_fp, i_fr)
 
-
+        ! Grab the radiance for this particular sounding
         select type(my_instrument)
             type is (oco2_instrument)
                 call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
         end select
 
+
+
+        ! Here we grab the index limits for the radiance and solar spectra for the
+        ! choice of our microwindow
         l1b_wl_idx_min = 0
         l1b_wl_idx_max = 0
         solar_idx_min = 0
@@ -243,9 +250,23 @@ contains
             end if
         end do
 
+        allocate(solar_irrad(size(solar_spectrum, 1)))
+        call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
+
+        ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
-        write(*,*) "instrument doppler: ", instrument_doppler
-        dispersion(:, i_fp, band) = dispersion(:, i_fp, band) / (1.0d0 + instrument_doppler)
+        allocate(this_dispersion(size(dispersion, 1)))
+        this_dispersion = dispersion(:, i_fp, band) / (1.0d0 + instrument_doppler)
+
+
+
+
+
+
+
+
+
+
 
         open(file="l1b_spec.dat", newunit=funit)
         do i=l1b_wl_idx_min, l1b_wl_idx_max
@@ -255,7 +276,7 @@ contains
 
         open(file="solar_spec.dat", newunit=funit)
         do i=solar_idx_min, solar_idx_max
-            write(funit,*) solar_spectrum(i,1), solar_spectrum(i,2)
+            write(funit,*) solar_spectrum(i,1), solar_spectrum(i,2), solar_irrad(i)
         end do
         close(funit)
 

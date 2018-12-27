@@ -593,7 +593,7 @@ if __name__ == '__main__':
     u_vectors = dict.fromkeys(all_radiances)
 
     for key in v_vectors.keys():
-        logger.info("Matrix going into SVD: {}".format(all_radiances[key].shape)))
+        logger.info("Matrix going into SVD: {}".format(all_radiances[key].shape))
         u, s, v = sp.linalg.svd(all_radiances[key], full_matrices=False)
 
         # Sign ambiguity! If v is a signular vector, so is -v. We use the

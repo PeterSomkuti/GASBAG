@@ -3,7 +3,7 @@ import numpy as np
 
 
 # Read in ephimeris data
-df = pd.read_fwf('ephem_test.txt')
+df = pd.read_fwf('sun_ephem.txt')
 
 # Make new column for day of year, but first, we have
 # to convert the "MMM DD" strings into date time objects
@@ -18,5 +18,14 @@ df['DayOfYear'] = df.index.dayofyear
 # Now we can perform a nice polynomial fit for both distance and
 # velocity.
 
-dist_fit = np.polyfit(df['Day'], df['Dist'], 8)
-rv_fit = np.polyfit(df['Day'], df['RV'], 8)
+dist_fit = np.polyfit(df['DayOfYear'], df['Dist'], 8)
+print("Distance polynomial coefficients [AU]: ")
+for x in dist_fit[::-1]:
+    print(x)
+
+print("\n\n\n")
+
+rv_fit = np.polyfit(df['DayOfYear'], df['RV'], 8)
+print("Relative velocity polynomial coefficients [km/s]: ")
+for x in rv_fit[::-1]:
+    print(x)

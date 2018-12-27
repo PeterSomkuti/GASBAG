@@ -119,9 +119,25 @@ contains
                                      // " is not known.")
         end if
 
+        call physical_FM(my_instrument, 1, 1)
 
 
     end subroutine
+
+
+    subroutine physical_FM(my_instrument, i_fp, i_fr)
+
+        implicit none
+
+        class(generic_instrument), intent(in) :: my_instrument
+        integer, intent(in) :: i_fr, i_fp
+
+        double precision :: solar_dist, solar_rv
+
+        call calculate_solar_distance_and_rv(55, solar_dist, solar_rv)
+        write(*,*) solar_dist, solar_rv
+
+    end subroutine physical_FM
 
 
 end module

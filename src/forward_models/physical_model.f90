@@ -40,7 +40,8 @@ module physical_model
     double precision, allocatable, dimension(:,:) :: met_psurf
 
     ! The solar spectrum (wavelength, transmission)
-    double precision, allocatable, dimension(:,:) :: solar_spectrum
+    double precision, dimension(:,:), allocatable :: solar_spectrum
+    double precision, dimension(:), allocatable :: solar_irrad
 
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
@@ -134,6 +135,10 @@ contains
         if (MCS%algorithm%solar_type == "toon") then
             call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
                                     solar_spectrum)
+
+            allocate(solar_irrad(size(solar_spectrum, 1)))
+            call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
+
         else
             call logger%fatal(fname, "Sorry, solar model type " &
                                      // MCS%algorithm%solar_type%chars() &
@@ -173,9 +178,8 @@ contains
 
         !! Solar stuff
         double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
-        double precision, dimension(:), allocatable :: solar_irrad
 
-
+        !! Misc
         integer :: i
 
         l1b_file_id = MCS%input%l1b_file_id
@@ -250,8 +254,7 @@ contains
             end if
         end do
 
-        allocate(solar_irrad(size(solar_spectrum, 1)))
-        call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
+
 
         ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT

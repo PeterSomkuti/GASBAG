@@ -1,15 +1,15 @@
-!! Main control structure (MCS) of the program, for easy access of important
+!! Main control_mod structure (MCS) of the program, for easy access of important
 !! quantities throughout the program, such as instrument name and retrieval
 !! settings, algorithm modes, .. the whole shebang.
 !! This is designed to be instrument-independent, so apart from the name of the
 !! instrument, no instrument-specifics should be stored here.
 
-module control
+module control_mod
 
     use stringifor
     use finer, only: file_ini
     use logger_mod, only: logger => master_logger
-    use file_utils, only: check_config_files_exist
+    use file_utils_mod, only: check_config_files_exist
     use HDF5
 
     implicit none
@@ -59,7 +59,7 @@ module control
         integer(hid_t) :: output_file_id
     end type
 
-    ! Main control structure type
+    ! Main control_mod structure type
     type, private :: CS
         type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
         type(CS_window), dimension(MAX_WINDOWS) :: window

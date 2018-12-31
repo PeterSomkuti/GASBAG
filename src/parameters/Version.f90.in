@@ -3,7 +3,7 @@
 !! literals for the various variables, that can then be accessed from the
 !! rest of the code.
 
-module version
+module version_mod
     implicit none
 
     character(len=*), parameter :: git_branch = "@GIT_BRANCH@"

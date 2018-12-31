@@ -3,13 +3,13 @@ subroutine perform_retrievals(my_instrument)
 !! including setting them up. All necessary information about the settings etc.,
 !! is avaliable through the MCS module.
 
-use control, only: MCS
+use control_mod, only: MCS
 use instruments, only: generic_instrument
 use logger_mod, only: logger => master_logger
-use file_utils, only: get_HDF5_dset_dims, check_hdf_error
+use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error
 
-use guanter_model
-use physical_model
+use guanter_model_mod
+use physical_model_mod
 use HDF5
 
 implicit none

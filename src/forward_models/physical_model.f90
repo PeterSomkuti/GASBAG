@@ -1,16 +1,15 @@
-module physical_model
+module physical_model_mod
 
-    use control, only: MCS, MAX_WINDOWS
+    use control_mod, only: MCS, MAX_WINDOWS
     use instruments, only: generic_instrument
-    use oco2
+    use oco2_mod
     use logger_mod, only: logger => master_logger
-    use file_utils, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
+    use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
                           read_DP_hdf_dataset
     use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
-    use solar_model
-    use math_utils
-    use scene
+    use solar_model_mod
+    use math_utils_mod
     use mod_datetime
 
     implicit none
@@ -41,7 +40,8 @@ module physical_model
 
     ! The solar spectrum (wavelength, transmission)
     double precision, allocatable, dimension(:,:) :: solar_spectrum
-
+    ! And the broadband spectrum
+    double precision, dimension(:), allocatable :: solar_irrad
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
                                                        measured_radiance, &
@@ -58,14 +58,17 @@ contains
         integer(hid_t) :: l1b_file_id, met_file_id, output_file_id, dset_id
         integer(hsize_t), dimension(:), allocatable :: dset_dims
         integer :: hdferr
-        character(len=999) :: dset_name
+        character(len=999) :: dset_name, tmp_str
         character(len=*), parameter :: fname = "physical_retrieval"
 
         double precision, allocatable :: dispersion_coefs(:,:,:)
         double precision, allocatable :: snr_coefs(:,:,:,:)
         integer :: num_frames
 
-        integer :: i
+        integer :: i_fp, i_fr, band, fp
+        integer :: i, retr_count
+
+        double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
         !! Open up the MET file
         call h5fopen_f(MCS%input%met_filename%chars(), &
@@ -106,7 +109,13 @@ contains
             type is (oco2_instrument)
                 ! Read dispersion coefficients and create dispersion array
                 call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-                call my_instrument%calculate_dispersion(dispersion_coefs, dispersion)
+                allocate(dispersion(1016,8,3))
+
+                do band=1,3
+                    do fp=1,8
+                        call my_instrument%calculate_dispersion(dispersion_coefs, dispersion(:,fp,band), band, fp)
+                    end do
+                end do
 
                 ! Grab the SNR coefficients for noise calculations
                 call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
@@ -134,13 +143,52 @@ contains
         if (MCS%algorithm%solar_type == "toon") then
             call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
                                     solar_spectrum)
+            allocate(solar_irrad(size(solar_spectrum, 1)))
+            call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
         else
             call logger%fatal(fname, "Sorry, solar model type " &
                                      // MCS%algorithm%solar_type%chars() &
                                      // " is not known.")
         end if
+
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        !!!!!! Set up state vector structure here
+
+        ! We can do this once, and simply clear the contents of the state vectors
+        ! inside the loop later on. Might not save an awful lot, but every little
+        ! helps, I guess..
+
+        ! At the moment, we can do following state vectors:
+        !
+        ! Lambertian surface albedo, arbitrary (?) polynomial order
+        ! Zero-level offset / SIF (constant)
+        ! Instrument disperison
+
+
+
+
+        ! Main loop over all soundings to perform actual retrieval
         ! footprint, frame, microwindow #, band
-        call physical_FM(my_instrument, 5, 50, 1, 1)
+
+        retr_count = 0
+        mean_duration = 0.0d0
+        do i_fp=1, my_instrument%num_fp
+            do i_fr=1, num_frames
+
+                call cpu_time(cpu_time_start)
+                call physical_FM(my_instrument, i_fp, i_fr, 1, 1)
+                call cpu_time(cpu_time_stop)
+
+                retr_count = retr_count + 1
+                mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count + 1)
+
+                if (mod(retr_count, 100) == 0) then
+                    write(tmp_str, '(A, F7.3)') "Duration: ", mean_duration
+                    call logger%debug(fname, trim(tmp_str))
+                    !read(*,*)
+                end if
+            end do
+        end do
 
 
     end subroutine
@@ -159,7 +207,7 @@ contains
         integer(hid_t) :: l1b_file_id
 
         !!
-        double precision, dimension(:), allocatable :: radiance_l1b
+        double precision, dimension(:), allocatable :: radiance_l1b, radiance_work
         integer :: l1b_wl_idx_min, l1b_wl_idx_max, solar_idx_min, solar_idx_max
         integer :: funit
 
@@ -173,41 +221,35 @@ contains
 
         !! Solar stuff
         double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
-        double precision, dimension(:), allocatable :: solar_irrad
+        double precision, dimension(:,:), allocatable :: this_solar
+
+        !! Albedo
+        double precision :: albedo_apriori
+
 
 
         integer :: i
 
         l1b_file_id = MCS%input%l1b_file_id
 
+
         ! Create a datetime object for the current measurement
         select type(my_instrument)
             type is (oco2_instrument)
                 call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
         end select
-
         doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0
 
 
-        write(*,*) "Isoformat: ", date%isoformat()
-        write(*,*) "Day of the year: ", doy_dp
+        !write(*,*) "Isoformat: ", date%isoformat()
+        !write(*,*) "Day of the year: ", doy_dp
 
-        ! If solar doppler-shift is needed, calculate the distance and relative
-        ! velocity between point of measurement and the (fixed) sun
-        !call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
-        !call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
-        !solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
-
-        solar_doppler = relative_solar_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
-        ! Re-adjust the solar spectrum wavelength grid
-        solar_spectrum(:,1) = solar_spectrum(:,1) / (1.0d0 + solar_doppler)
-
-        write(*,*) solar_rv * 1000.0d0 + earth_rv, solar_doppler
-        write(*,*) "SZA: ", SZA(i_fp, i_fr)
-        write(*,*) "SAA: ", SAA(i_fp, i_fr)
-        write(*,*) "VZA: ", VZA(i_fp, i_fr)
-        write(*,*) "VAA: ", VAA(i_fp, i_fr)
-        write(*,*) "Lon: ", lon(i_fp, i_fr), " Lat: ", lat(i_fp, i_fr), "Altitude: ", altitude(i_fp, i_fr)
+        !write(*,*) solar_rv * 1000.0d0 + earth_rv, solar_doppler
+        !write(*,*) "SZA: ", SZA(i_fp, i_fr)
+        !write(*,*) "SAA: ", SAA(i_fp, i_fr)
+        !write(*,*) "VZA: ", VZA(i_fp, i_fr)
+        !write(*,*) "VAA: ", VAA(i_fp, i_fr)
+        !write(*,*) "Lon: ", lon(i_fp, i_fr), " Lat: ", lat(i_fp, i_fr), "Altitude: ", altitude(i_fp, i_fr)
 
         ! Grab the radiance for this particular sounding
         select type(my_instrument)
@@ -215,10 +257,8 @@ contains
                 call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
         end select
 
-
-
-        ! Here we grab the index limits for the radiance and solar spectra for the
-        ! choice of our microwindow
+        ! Here we grab the index limits for the radiance and solar spectra for
+        ! the choice of our microwindow.
         l1b_wl_idx_min = 0
         l1b_wl_idx_max = 0
         solar_idx_min = 0
@@ -230,6 +270,9 @@ contains
             end if
             if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_max) then
                 l1b_wl_idx_max = i
+            end if
+            if (dispersion(i, i_fp, band) > MCS%window(i_win)%wl_max) then
+                exit
             end if
         end do
 
@@ -248,13 +291,33 @@ contains
             if (solar_spectrum(i,1) < MCS%window(i_win)%wl_max) then
                 solar_idx_max = i
             end if
+            if (solar_spectrum(i,1) > MCS%window(i_win)%wl_max) then
+                exit
+            end if
         end do
 
-        allocate(solar_irrad(size(solar_spectrum, 1)))
-        call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
+        allocate(this_solar(solar_idx_max - solar_idx_min + 1, 2))
+        allocate(radiance_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+
+        ! Grab a copy of the L1b radiances
+        radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+
+        ! If solar doppler-shift is needed, calculate the distance and relative
+        ! velocity between point of measurement and the (fixed) sun
+
+        !call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
+        !call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
+        !solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
+
+        solar_doppler = relative_solar_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+        ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
+        this_solar(:,1) = solar_spectrum(solar_idx_min:solar_idx_max, 1) / (1.0d0 + solar_doppler)
+        this_solar(:,2) = solar_spectrum(solar_idx_min:solar_idx_max, 2) * solar_irrad(solar_idx_min:solar_idx_max)
 
         ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+        ! Grab a copy of the dispersion relation that's shifted according to
+        ! spacecraft velocity.
         allocate(this_dispersion(size(dispersion, 1)))
         this_dispersion = dispersion(:, i_fp, band) / (1.0d0 + instrument_doppler)
 
@@ -263,22 +326,34 @@ contains
 
 
 
+        !write(*,*) maxval(radiance_work(:)), maxval(this_solar(:,2)) * 0.5
+        select type(my_instrument)
+            type is (oco2_instrument)
+        !        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
+        !        ! take that into account for the incoming solar irradiance
+                albedo_apriori = PI * maxval(radiance_work(:)) / (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+        end select
+
+        write(*,*) i_fp, i_fr, "Albedo: ", albedo_apriori, "Altitude: ", altitude(i_fp, i_fr), "Latitude: ", lat(i_fp, i_fr)
+        if (albedo_apriori > 1) then
+            write(*,*) "albedo too large"
+        !    read(*,*)
+        end if
 
 
 
 
+        !open(file="l1b_spec.dat", newunit=funit)
+        !do i=l1b_wl_idx_min, l1b_wl_idx_max
+        !    write(funit,*) dispersion(i, i_fp, band), radiance_l1b(i)
+        !end do
+        !close(funit)
 
-        open(file="l1b_spec.dat", newunit=funit)
-        do i=l1b_wl_idx_min, l1b_wl_idx_max
-            write(funit,*) dispersion(i, i_fp, band), radiance_l1b(i)
-        end do
-        close(funit)
-
-        open(file="solar_spec.dat", newunit=funit)
-        do i=solar_idx_min, solar_idx_max
-            write(funit,*) solar_spectrum(i,1), solar_spectrum(i,2), solar_irrad(i)
-        end do
-        close(funit)
+        !open(file="solar_spec.dat", newunit=funit)
+        !do i=1, size(this_solar, 1)
+        !    write(funit,*) this_solar(i,1), this_solar(i,2)
+        !end do
+        !close(funit)
 
 
     end subroutine physical_FM

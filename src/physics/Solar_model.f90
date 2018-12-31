@@ -1,7 +1,7 @@
-module solar_model
+module solar_model_mod
 
     use logger_mod, only: logger => master_logger
-    use math_utils
+    use math_utils_mod
 
     public read_toon_spectrum, calculate_solar_distance_and_rv
 
@@ -135,12 +135,13 @@ contains
      subroutine calculate_solar_planck_function(temp, wavelength, irradiance)
          implicit none
          double precision, intent(in) :: temp
-         double precision, dimension(:), intent(in) :: wavelength
+         double precision, dimension(:), intent(in) :: wavelength ! in microns
 
          double precision, dimension(:), allocatable, intent(out) :: irradiance
          double precision, parameter :: SPEED_OF_LIGHT = 299792458d+0
          double precision, parameter :: PLANCK_CONST = 6.62607015d-34
          double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
+         double precision, parameter :: SUN_APP_SIZE = 6.807d-5
 
          double precision, dimension(:), allocatable :: denom
 
@@ -148,14 +149,18 @@ contains
          allocate(denom(size(wavelength)))
 
          ! Wavelength comes in as microns, so convert them to meters
-         irradiance(:) = 2 * PLANCK_CONST * (SPEED_OF_LIGHT**2) / ((wavelength * 1d-6) ** 5)
 
-         denom(:) = exp(PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6 * BOLTZMANN_CONST * temp)) - 1
+         irradiance(:) = 2d18 * SPEED_OF_LIGHT / ((wavelength(:))**4)
+         denom(:) = exp(1d6 * PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * BOLTZMANN_CONST * temp)) - 1.0d0
+         ! The factor 6.805d-5 is the apparent size of the sun as seen from the Earth
+         ! (on average)
+         irradiance(:) = SUN_APP_SIZE * irradiance(:) / denom(:)
 
-         irradiance(:) = irradiance(:) / denom(:)
-
-         ! And now convert to ph/s/m2/sr/um
-         irradiance(:) = 1d-9 * irradiance(:) / (PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6)) * 1e-3
+         !irradiance(:) = 2 * PLANCK_CONST * (SPEED_OF_LIGHT**2) / ((wavelength(:) * 1d-6) ** 5)
+         !denom(:) = exp(PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6 * BOLTZMANN_CONST * temp)) - 1.0d0
+         !irradiance(:) = irradiance(:) / denom(:)
+         ! And convert to ph/s/m2/sr/um
+         !irradiance(:) = SUN_APP_SIZE * 1d-6 * irradiance(:) / (PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6))
      end subroutine
 
 

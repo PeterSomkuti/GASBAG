@@ -1,10 +1,10 @@
-module oco2
+module oco2_mod
 
     use stringifor
     use instruments, only: generic_instrument
-    use control, only: MCS
+    use control_mod, only: MCS
     use logger_mod, only: logger => master_logger
-    use file_utils, only: get_HDF5_dset_dims, check_hdf_error, &
+    use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, &
                           read_2D_DP_hdf_dataset, read_3D_DP_hdf_dataset
     use mod_datetime
 
@@ -142,24 +142,24 @@ contains
 
     end subroutine
 
-    subroutine calculate_dispersion(disp_coef, dispersion)
+    subroutine calculate_dispersion(disp_coef, dispersion, band, fp)
 
         double precision, intent(in) :: disp_coef(:,:,:)
-        double precision, intent(out), allocatable :: dispersion(:,:,:)
+        double precision, intent(out) :: dispersion(:)
+        integer, intent(in) :: band, fp
 
-        integer(8) :: pix, fp, order, band
+        integer :: pix, order
 
-        allocate(dispersion(1016, 8, 3))
-        dispersion(:,:,:) = 0.0d0
+        dispersion(:) = 0.0d0
 
         do pix=1, 1016
-            do band=1, 3
-                do fp=1, 8
+            !do band=1, 3
+                !do fp=1, 8
                     do order=1, 6
-                        dispersion(pix,fp,band) = dispersion(pix,fp,band) + (pix) ** (order-1) * disp_coef(order,fp,band)
+                        dispersion(pix) = dispersion(pix) + (pix) ** (order-1) * disp_coef(order,fp,band)
                     end do
-                end do
-            end do
+                !end do
+            !end do
         end do
 
     end subroutine

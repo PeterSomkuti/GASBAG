@@ -1,4 +1,4 @@
-module math_utils
+module math_utils_mod
 
     use logger_mod, only: logger => master_logger
 

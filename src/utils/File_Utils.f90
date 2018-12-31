@@ -1,7 +1,7 @@
 !! Contains various helpers to deal with file-related matters, such as
 !! checking whether files exist
 
-module file_utils
+module file_utils_mod
 
     use HDF5
     use logger_mod, only: logger => master_logger

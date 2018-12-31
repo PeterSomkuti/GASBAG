@@ -1,13 +1,13 @@
-module guanter_model
+module guanter_model_mod
 
-    use control, only: MCS, MAX_WINDOWS
+    use control_mod, only: MCS, MAX_WINDOWS
     use instruments, only: generic_instrument
-    use oco2
+    use oco2_mod
     use logger_mod, only: logger => master_logger
-    use file_utils, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset
+    use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset
     use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
-    use math_utils
+    use math_utils_mod
 
     implicit none
 
@@ -59,7 +59,7 @@ contains
         double precision, allocatable :: snr_coefs(:,:,:,:)
 
         integer :: i_fr, i_fp, i_win ! Indices for frames, footprints, microwindows
-        integer :: num_frames, num_total_soundings, cnt
+        integer :: num_frames, num_total_soundings, cnt, band, fp
 
         character(len=999) :: dset_name
         integer(hid_t) :: dset_id, sif_result_gid
@@ -137,7 +137,14 @@ contains
             type is (oco2_instrument)
                 ! Read dispersion coefficients and create dispersion array
                 call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-                call my_instrument%calculate_dispersion(dispersion_coefs, dispersion)
+
+                allocate(dispersion(1016,8,3))
+
+                do band=1,3
+                    do fp=1,8
+                        call my_instrument%calculate_dispersion(dispersion_coefs, dispersion(:,fp,band), band, fp)
+                    end do
+                end do
 
                 ! Grab the SNR coefficients for noise calculations
                 call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)

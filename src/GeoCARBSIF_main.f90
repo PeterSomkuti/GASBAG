@@ -6,13 +6,13 @@
 program GeoCARBSIF
 
     use logger_mod, only: logger => master_logger
-    use startup, only: initialize_config
-    use version, only: git_branch, git_commit_hash, git_rev_no
-    use control, only: MCS, populate_MCS
+    use startup_mod, only: initialize_config
+    use version_mod, only: git_branch, git_commit_hash, git_rev_no
+    use control_mod, only: MCS, populate_MCS
     use finer, only: file_ini
-    use file_utils, only: check_hdf_error
+    use file_utils_mod, only: check_hdf_error
     use instruments
-    use oco2
+    use oco2_mod
 
 
     use iso_fortran_env
@@ -47,7 +47,7 @@ program GeoCARBSIF
     ! Initialize the whole thing by reading the configuration file
     call initialize_config(fini)
 
-    ! Initialize the program control structure with the settings from the
+    ! Initialize the program control_mod structure with the settings from the
     ! config file.
     call populate_MCS(fini)
 

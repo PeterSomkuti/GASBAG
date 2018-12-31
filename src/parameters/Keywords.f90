@@ -3,10 +3,10 @@
 !! list. This is a bit on the annoying side, but we want to make sure that
 !! no superfluous item is present in the config file.
 
-module keywords
+module keywords_mod
 
     use stringifor, only: string
-    use control, only: MAX_WINDOWS
+    use control_mod, only: MAX_WINDOWS
 
     implicit none
 
@@ -78,6 +78,8 @@ contains
                 valid_options(this_idx,3) = "wl_max"
                 valid_options(this_idx,4) = "basisfunctions"
                 valid_options(this_idx,5) = "gases"
+                valid_options(this_idx,6) = "albedo_apriori"
+                valid_options(this_idx,7) = "albedo_order"
         end do
 
 

@@ -1,7 +1,7 @@
 !! Startup module. Routines in here are called during the startup-phase of the
 !! program, where we just check if the config/inputs are sane.
 
-module startup
+module startup_mod
 
     implicit none
 
@@ -24,7 +24,7 @@ contains
         use flap, only: command_line_interface
         use stringifor, only: string
 
-        use version
+        use version_mod
 
         implicit none
 
@@ -171,7 +171,7 @@ contains
 
         use finer, only: file_ini ! CLI argument parser module
         use stringifor, only: string, trim ! For maniupulating strings
-        use keywords, only: initialize_valid_sections, valid_sections, valid_options
+        use keywords_mod, only: initialize_valid_sections, valid_sections, valid_options
 
         implicit none
         ! DUMMY ARGUMENTS

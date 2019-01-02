@@ -39,6 +39,9 @@ module physical_model_mod
     double precision, dimension(:,:,:,:), allocatable :: ils_delta_lambda, &
                                                          ils_relative_response
 
+    double precision, allocatable :: dispersion_coefs(:,:,:)
+    double precision, allocatable :: snr_coefs(:,:,:,:)
+
     ! We grab the full MET profiles from the MET data file, for quick access
     double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
                                                        met_P_levels, &
@@ -71,8 +74,6 @@ contains
         character(len=999) :: dset_name, tmp_str
         character(len=*), parameter :: fname = "physical_retrieval"
 
-        double precision, allocatable :: dispersion_coefs(:,:,:)
-        double precision, allocatable :: snr_coefs(:,:,:,:)
         integer :: num_frames
 
         integer :: i_fp, i_fr, band, fp
@@ -188,8 +189,8 @@ contains
 
         retr_count = 0
         mean_duration = 0.0d0
-        do i_fp=1, 1 !my_instrument%num_fp
-            do i_fr=1, num_frames
+        do i_fp=1, my_instrument%num_fp
+            do i_fr=1234, 1234 !1, num_frames
 
                 call cpu_time(cpu_time_start)
                 call physical_FM(my_instrument, i_fp, i_fr, 1, 1)
@@ -224,7 +225,8 @@ contains
         double precision, dimension(:), allocatable :: radiance_l1b, &
                                                        radiance_meas_work, &
                                                        radiance_calc_work, &
-                                                       radiance_calc_work_hi
+                                                       radiance_calc_work_hi, &
+                                                       noise_work
 
         !! Dispersion indices
         double precision :: high_res_wl_min, high_res_wl_max
@@ -244,9 +246,15 @@ contains
 
         !! Albedo
         double precision :: albedo_apriori
+        double precision, allocatable :: albedo(:)
 
         !! Retrieval quantities
         double precision, allocatable :: K_hi(:,:), K(:,:) ! Jacobian matrices
+        double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
+        double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:), tmp_m3(:,:)
+        double precision, allocatable :: tmp_v1(:), tmp_v2(:)
+        double precision :: lm_gamma
+
 
         !! Misc
         character(len=999) :: tmp_str
@@ -338,7 +346,16 @@ contains
         allocate(this_solar(solar_idx_max - solar_idx_min + 1, 2))
         allocate(radiance_meas_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
         allocate(radiance_calc_work(size(radiance_meas_work)))
-        ! .. as well as the (convolved Jacobian matrix)
+        allocate(noise_work(size(radiance_meas_work)))
+
+        ! Now calculate the noise-equivalent radiances
+        select type(my_instrument)
+            type is (oco2_instrument)
+                call my_instrument%calculate_noise(snr_coefs, radiance_meas_work, &
+                                                   noise_work, i_fp, band, &
+                                                   l1b_wl_idx_min, l1b_wl_idx_max)
+        end select
+
 
 
 
@@ -379,9 +396,25 @@ contains
         ! Set up retrieval quantities:
         N_sv = size(SV%svap)
         N_spec = size(this_dispersion)
+        lm_gamma = 0.0001
 
         allocate(K(N_spec, N_sv))
         allocate(K_hi(size(this_solar, 1), N_sv))
+        allocate(Se_inv(N_spec, N_spec))
+        allocate(Sa_inv(N_sv, N_sv))
+        allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
+        allocate(tmp_v1(N_sv), tmp_v2(N_sv))
+
+        ! Inverse noice covariance
+        Se_inv(:,:) = 0.0d0
+        do i=1, size(Se_inv, 1)
+            Se_inv(i,i) = 1 / (noise_work(i) ** 2)
+        end do
+
+        ! Inverse prior covariance
+        Sa_inv(SV%idx_albedo(1), SV%idx_albedo(1)) = 1.0d0
+        Sa_inv(SV%idx_albedo(2), SV%idx_albedo(2)) = 1.0d0 / (0.25d0 ** 2)
+        Sa_inv(SV%idx_sif(1), SV%idx_sif(1)) = 1.0d0 / (1d18 ** 2)
 
         ! Populate state vector priors (this should also be read from config)
 
@@ -394,7 +427,6 @@ contains
 
         ! Start SIF with zero
         SV%svap(SV%idx_sif(1)) = 0.0d0
-
 
 
         !write(*,*) i_fp, i_fr, "Albedo: ", albedo_apriori, "Altitude: ", altitude(i_fp, i_fr), "Latitude: ", lat(i_fp, i_fr)
@@ -410,13 +442,15 @@ contains
         ! Calculate the high-resolution modelled spectrum
         ! High-res spectral resolution determined by solar model
         allocate(radiance_calc_work_hi(size(this_solar, 1)))
+        allocate(albedo(size(radiance_calc_work_hi)))
 
+        albedo(:) = albedo_apriori
         call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
-                                VZA(i_fp, i_fr), albedo_apriori, &
+                                VZA(i_fp, i_fr), albedo, &
                                 radiance_calc_work_hi)
 
         ! And multiply with the solar spectrum
-        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:) * 0.5
+        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
 
         ! Plug in the Jacobians (SIF is easy)
         K_hi(:, SV%idx_sif(1)) = 1.0d0
@@ -425,6 +459,8 @@ contains
             K_hi(:, SV%idx_albedo(i)) =  this_solar(:,2) / PI * cos(DEG2RAD * SZA(i_fp, i_fr)) * &
                                          ((this_solar(:,1) - this_solar(1,1)) ** (i-1))
         end do
+
+        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * 0.5
 
 
         ! Convolution with the instrument line shape function(s)
@@ -446,12 +482,43 @@ contains
                 end do
         end select
 
-        !
+
+        SV%svsv = SV%svap
+
+        tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv
+        tmp_m1 = tmp_m1 + matmul(matmul(transpose(K), Se_inv), K)
+        call invert_matrix(tmp_m1, tmp_m2)
+
+        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
+        tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+
+        SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+
+        do i=1, N_sv
+            write(*,*) i, SV%svap(i), SV%svsv(i)
+        end do
+
+
+        albedo = 0.0d0
+        do i=1, SV%num_albedo
+            albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (i-1))
+        end do
+
+        call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
+                                VZA(i_fp, i_fr), albedo, &
+                                radiance_calc_work_hi)
+
+        radiance_calc_work_hi(:) = (this_solar(:,2) * radiance_calc_work_hi(:) + SV%svsv(SV%idx_sif(1))) * 0.5
+
+        call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
+                                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                  this_dispersion, radiance_calc_work)
 
 
         open(file="l1b_spec.dat", newunit=funit)
         do i=1, size(this_dispersion)
-            write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i)
+            write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i), K(i,1), K(i,2), K(i,3)
         end do
         close(funit)
 
@@ -460,6 +527,8 @@ contains
         !    write(funit,*) this_solar(i,1), radiance_calc_work_hi(i)
         !end do
         !close(funit)
+
+        read(*,*)
 
 
     end subroutine physical_FM

@@ -18,6 +18,9 @@ module guanter_model_mod
     ! In the Guanter-scheme, dispersion is not really touched, hence we can just
     ! keep it as a module-wide fixed set of numbers (pixel, footprint)
     double precision, dimension(:,:,:), allocatable :: dispersion
+    double precision, allocatable :: dispersion_coefs(:,:,:)
+    double precision, allocatable :: snr_coefs(:,:,:,:)
+
     ! Basisfunctions are stored as (file, spectral pixel, footprint, #SV)
     double precision, dimension(:,:,:,:), allocatable :: basisfunctions
     ! Sounding_ids
@@ -55,8 +58,6 @@ contains
         integer(hsize_t), dimension(3) :: out_dims3d
         integer(hsize_t), dimension(:), allocatable :: num_pixels
 
-        double precision, allocatable :: dispersion_coefs(:,:,:)
-        double precision, allocatable :: snr_coefs(:,:,:,:)
 
         integer :: i_fr, i_fp, i_win ! Indices for frames, footprints, microwindows
         integer :: num_frames, num_total_soundings, cnt, band, fp
@@ -201,7 +202,7 @@ contains
                     call logger%trivia(fname, trim(tmp_str))
 
                     ! Retrieval time!
-                    call guanter_FM(my_instrument, i_fr, i_fp, i_win, snr_coefs)
+                    call guanter_FM(my_instrument, i_fr, i_fp, i_win)
 
                     ! Print out progress..
                     if (MODULO(cnt, floor(0.05 * num_total_soundings)) == 0) then
@@ -271,14 +272,12 @@ contains
     end subroutine
 
 
-    subroutine guanter_FM(my_instrument, i_fr, i_fp, i_win, &
-                          snr_coefs)
+    subroutine guanter_FM(my_instrument, i_fr, i_fp, i_win)
 
         implicit none
 
         class(generic_instrument), intent(in) :: my_instrument
         integer, intent(in) :: i_fr, i_fp, i_win
-        double precision, dimension(:,:,:,:), intent(in) :: snr_coefs
 
         integer :: l1b_wl_idx_min, l1b_wl_idx_max
         integer :: i, j, i_all
@@ -378,7 +377,7 @@ contains
         end if
 
 
-        ! New calculate the noise-equivalent radiances
+        ! Now calculate the noise-equivalent radiances
         select type(my_instrument)
             type is (oco2_instrument)
                 call my_instrument%calculate_noise(snr_coefs, radiance_work, &

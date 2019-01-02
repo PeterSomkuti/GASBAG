@@ -11,10 +11,10 @@ contains
 
         implicit none
         double precision, dimension(:), intent(in) :: wavelengths
-        double precision, intent(in) :: SZA, VZA, albedo
+        double precision, intent(in) :: SZA, VZA, albedo(:)
         double precision, dimension(:), intent(inout) :: radiance
 
-        radiance(:) = albedo / PI * cos(DEG2RAD * SZA)
+        radiance(:) = albedo(:) / PI * cos(DEG2RAD * SZA)
 
     end subroutine
 

@@ -40,11 +40,6 @@ module physical_model_mod
     double precision, allocatable, dimension(:,:) :: met_psurf
 
     ! The solar spectrum (wavelength, transmission)
-<<<<<<< HEAD
-    double precision, allocatable, dimension(:,:) :: solar_spectrum
-    ! And the broadband spectrum
-    double precision, dimension(:), allocatable :: solar_irrad
-=======
     double precision, dimension(:,:), allocatable :: solar_spectrum
     double precision, dimension(:), allocatable :: solar_irrad
 
@@ -152,15 +147,10 @@ contains
         if (MCS%algorithm%solar_type == "toon") then
             call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
                                     solar_spectrum)
-<<<<<<< HEAD
-            allocate(solar_irrad(size(solar_spectrum, 1)))
-            call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
-=======
 
             allocate(solar_irrad(size(solar_spectrum, 1)))
             call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
 
->>>>>>> ba4753e55eb1ec7c4c974954f0612d7cb6c7cbd6
         else
             call logger%fatal(fname, "Sorry, solar model type " &
                                      // MCS%algorithm%solar_type%chars() &
@@ -238,15 +228,11 @@ contains
 
         !! Solar stuff
         double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
-<<<<<<< HEAD
         double precision, dimension(:,:), allocatable :: this_solar
 
         !! Albedo
         double precision :: albedo_apriori
 
-
-=======
->>>>>>> ba4753e55eb1ec7c4c974954f0612d7cb6c7cbd6
 
         !! Misc
         integer :: i
@@ -317,7 +303,6 @@ contains
             end if
         end do
 
-<<<<<<< HEAD
         allocate(this_solar(solar_idx_max - solar_idx_min + 1, 2))
         allocate(radiance_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
 
@@ -335,9 +320,6 @@ contains
         ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
         this_solar(:,1) = solar_spectrum(solar_idx_min:solar_idx_max, 1) / (1.0d0 + solar_doppler)
         this_solar(:,2) = solar_spectrum(solar_idx_min:solar_idx_max, 2) * solar_irrad(solar_idx_min:solar_idx_max)
-=======
-
->>>>>>> ba4753e55eb1ec7c4c974954f0612d7cb6c7cbd6
 
         ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT

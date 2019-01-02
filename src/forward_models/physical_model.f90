@@ -412,6 +412,7 @@ contains
         end do
 
         ! Inverse prior covariance
+        Sa_inv(:,:) = 0.0d0
         Sa_inv(SV%idx_albedo(1), SV%idx_albedo(1)) = 1.0d0
         Sa_inv(SV%idx_albedo(2), SV%idx_albedo(2)) = 1.0d0 / (0.25d0 ** 2)
         Sa_inv(SV%idx_sif(1), SV%idx_sif(1)) = 1.0d0 / (1d18 ** 2)
@@ -483,6 +484,8 @@ contains
         end select
 
 
+        write(*,*) "Residual: ", sqrt(sum((radiance_meas_work - radiance_calc_work)**2))
+
         SV%svsv = SV%svap
 
         tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv
@@ -515,7 +518,8 @@ contains
                                   ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                                   this_dispersion, radiance_calc_work)
 
-
+        write(*,*) "Residual: ", sqrt(sum((radiance_meas_work - radiance_calc_work)**2))
+        
         open(file="l1b_spec.dat", newunit=funit)
         do i=1, size(this_dispersion)
             write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i), K(i,1), K(i,2), K(i,3)

@@ -5,7 +5,7 @@ module oco2_mod
     use control_mod, only: MCS
     use logger_mod, only: logger => master_logger
     use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, &
-                          read_2D_DP_hdf_dataset, read_3D_DP_hdf_dataset
+                              read_DP_hdf_dataset
     use mod_datetime
 
     use HDF5
@@ -30,6 +30,7 @@ module oco2_mod
         procedure, nopass :: read_sounding_ids
         procedure, nopass :: read_time_strings
         procedure, nopass :: convert_time_string_to_date
+        procedure, nopass :: read_ils_data
         procedure, nopass :: read_sounding_geometry
         procedure, nopass :: read_sounding_location
     end type
@@ -378,35 +379,56 @@ contains
 
         character(len=*), parameter :: fname = "read_sounding_geometry"
         integer :: hdferr
-        integer(hid_t) :: dset_id, filetype
-        integer(hid_t), dimension(:), allocatable :: dset_dims
+        integer(hid_t) :: dset_id
+        integer(hsize_t), dimension(:), allocatable :: dset_dims
         double precision, dimension(:,:,:), allocatable :: tmp_array
 
 
         ! FootprintGeometry fields are (Band, FP, Frame)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_zenith", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_zenith", tmp_array, dset_dims)
         allocate(SZA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         SZA(:,:) = tmp_array(band,:,:)
 
         deallocate(tmp_array)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_azimuth", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_azimuth", tmp_array, dset_dims)
         allocate(SAA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         SAA(:,:) = tmp_array(band,:,:)
 
         deallocate(tmp_array)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_zenith", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_zenith", tmp_array, dset_dims)
         allocate(VZA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         VZA(:,:) = tmp_array(band,:,:)
 
         deallocate(tmp_array)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_azimuth", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_azimuth", tmp_array, dset_dims)
         allocate(VAA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         VAA(:,:) = tmp_array(band,:,:)
 
 
     end subroutine
 
+    subroutine read_ils_data(l1b_file_id, ils_delta_lambda, ils_relative_response)
+
+        implicit none
+        integer(hid_t), intent(in) :: l1b_file_id
+        double precision, allocatable, intent(inout) :: ils_delta_lambda(:,:,:,:), &
+                                                        ils_relative_response(:,:,:,:)
+
+
+        character(len=*), parameter :: fname = "read_sounding_location"
+        integer(hsize_t), dimension(:), allocatable :: dset_dims
+
+        call read_DP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_delta_lambda", &
+                                 ils_delta_lambda, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_relative_response", &
+                                 ils_relative_response, dset_dims)
+
+    end subroutine
+
+
     subroutine read_sounding_location(l1b_file_id, band, lon, lat, altitude, rel_vel, rel_solar_vel)
+
+        implicit none
         integer(hid_t), intent(in) :: l1b_file_id
         integer, intent(in) :: band
         double precision, dimension(:,:), allocatable, intent(out) :: lon, lat, &
@@ -415,27 +437,27 @@ contains
         character(len=*), parameter :: fname = "read_sounding_location"
         integer :: hdferr
         integer(hid_t) :: dset_id, filetype
-        integer(hid_t), dimension(:), allocatable :: dset_dims
+        integer(hsize_t), dimension(:), allocatable :: dset_dims
         double precision, dimension(:,:,:), allocatable :: tmp_array
 
 
         ! FootprintGeometry fields are (Band, FP, Frame)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_longitude", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_longitude", tmp_array, dset_dims)
         allocate(lon(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         lon(:,:) = tmp_array(band,:,:)
 
         deallocate(tmp_array)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_latitude", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_latitude", tmp_array, dset_dims)
         allocate(lat(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         lat(:,:) = tmp_array(band,:,:)
 
         deallocate(tmp_array)
-        call read_3D_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_altitude", tmp_array, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_altitude", tmp_array, dset_dims)
         allocate(altitude(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
         altitude(:,:) = tmp_array(band,:,:)
 
-        call read_2D_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_relative_velocity", rel_vel, dset_dims)
-        call read_2D_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_solar_relative_velocity", rel_solar_vel, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_relative_velocity", rel_vel, dset_dims)
+        call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_solar_relative_velocity", rel_solar_vel, dset_dims)
 
     end subroutine
 

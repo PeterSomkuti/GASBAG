@@ -11,6 +11,8 @@ module physical_model_mod
     use solar_model_mod
     use math_utils_mod
     use statevector_mod
+    use radiance_mod
+
     use mod_datetime
 
     implicit none
@@ -20,30 +22,34 @@ module physical_model_mod
     private
 
     ! Dispersion/wavelength array
-    double precision, dimension(:,:,:), allocatable :: dispersion
+    double precision, allocatable :: dispersion(:,:,:)
     ! Sounding_ids
-    integer(8), dimension(:,:), allocatable :: sounding_ids
+    integer(8), allocatable :: sounding_ids(:,:)
     ! Sounding time strings
-    character(len=25), dimension(:,:), allocatable :: sounding_time_strings
+    character(len=25), allocatable :: sounding_time_strings(:,:)
     ! Sounding scene geometry (solar and viewing zenith and azimuth)
     double precision, dimension(:,:), allocatable :: SZA, SAA, VZA, VAA
-    ! Sounding scene location (lon, lat, altitude)
+    ! Sounding scene location (lon, lat, altitude, rel-vel instrument-earth,
+    !                          rel-vel instrument-sun)
     double precision, dimension(:,:), allocatable :: lon, lat, altitude, &
                                                      relative_velocity, &
                                                      relative_solar_velocity
+
+    ! ILS data: shape: (wl, pixel, fp, band)
+    double precision, dimension(:,:,:,:), allocatable :: ils_delta_lambda, &
+                                                         ils_relative_response
 
     ! We grab the full MET profiles from the MET data file, for quick access
     double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
                                                        met_P_levels, &
                                                        met_SH_profiles
     ! MET surface pressure
-    double precision, allocatable, dimension(:,:) :: met_psurf
+    double precision, allocatable :: met_psurf(:,:)
 
     ! The solar spectrum (wavelength, transmission)
-    double precision, dimension(:,:), allocatable :: solar_spectrum
-    double precision, dimension(:), allocatable :: solar_irrad
+    double precision, allocatable :: solar_spectrum(:,:)
+    double precision, allocatable :: solar_irrad(:)
 
->>>>>>> ba4753e55eb1ec7c4c974954f0612d7cb6c7cbd6
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
                                                        measured_radiance, &
@@ -135,6 +141,9 @@ contains
                 call my_instrument%read_sounding_location(l1b_file_id, 1, lon, lat, &
                                                           altitude, relative_velocity, &
                                                           relative_solar_velocity)
+                ! Read in the instrument ILS data
+                call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
+                                                 ils_relative_response)
 
         end select
 
@@ -179,7 +188,7 @@ contains
 
         retr_count = 0
         mean_duration = 0.0d0
-        do i_fp=1, my_instrument%num_fp
+        do i_fp=1, 1 !my_instrument%num_fp
             do i_fr=1, num_frames
 
                 call cpu_time(cpu_time_start)
@@ -189,8 +198,8 @@ contains
                 retr_count = retr_count + 1
                 mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count + 1)
 
-                if (mod(retr_count, 100) == 0) then
-                    write(tmp_str, '(A, F7.3)') "Duration: ", mean_duration
+                if (mod(retr_count, 10) == 0) then
+                    write(tmp_str, '(A, F7.3, A, G0.1)') "Duration: ", mean_duration, ", retrieval No. ", retr_count
                     call logger%debug(fname, trim(tmp_str))
                     !read(*,*)
                 end if
@@ -208,15 +217,18 @@ contains
         class(generic_instrument), intent(in) :: my_instrument
         integer, intent(in) :: i_fr, i_fp, i_win, band
 
-        double precision, parameter :: SPEED_OF_LIGHT = 299792458d0
-
         !!
         integer(hid_t) :: l1b_file_id
 
-        !!
-        double precision, dimension(:), allocatable :: radiance_l1b, radiance_work
+        !! Radiances
+        double precision, dimension(:), allocatable :: radiance_l1b, &
+                                                       radiance_meas_work, &
+                                                       radiance_calc_work, &
+                                                       radiance_calc_work_hi
+
+        !! Dispersion indices
+        double precision :: high_res_wl_min, high_res_wl_max
         integer :: l1b_wl_idx_min, l1b_wl_idx_max, solar_idx_min, solar_idx_max
-        integer :: funit
 
         !! Sounding location /time stuff
         type(datetime) :: date ! Datetime object for sounding date/time
@@ -233,9 +245,15 @@ contains
         !! Albedo
         double precision :: albedo_apriori
 
+        !! Retrieval quantities
+        double precision, allocatable :: K_hi(:,:), K(:,:) ! Jacobian matrices
 
         !! Misc
+        character(len=999) :: tmp_str
+        character(len=*), parameter :: fname = "physical_FM"
+        integer :: N_spec, N_sv
         integer :: i
+        integer :: funit
 
         l1b_file_id = MCS%input%l1b_file_id
 
@@ -271,6 +289,7 @@ contains
         solar_idx_min = 0
         solar_idx_max = 0
 
+        ! This here grabs the boundaries of the L1b data
         do i=1, size(dispersion, 1)
             if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_min) then
                 l1b_wl_idx_min = i
@@ -291,23 +310,40 @@ contains
             l1b_wl_idx_max = size(dispersion, 1)
         end if
 
+        ! This here grabs the boundaries of the high-resolution solar spectrum.
+        ! Depending on the instrument, we have to add some to
+        ! the user-defined microwindow, such that we can peform the convolution
+        ! to the pixels at the edge of microwindow.
+
+        select type(my_instrument)
+            type is (oco2_instrument)
+                ! For OCO-2 roughly 1nm (0.001um)
+                high_res_wl_min = MCS%window(i_win)%wl_min - 0.001
+                high_res_wl_max = MCS%window(i_win)%wl_max + 0.001
+        end select
+
         do i=1, size(solar_spectrum, 1)
-            if (solar_spectrum(i,1) < MCS%window(i_win)%wl_min) then
+            if (solar_spectrum(i,1) < high_res_wl_min) then
                 solar_idx_min = i
             end if
-            if (solar_spectrum(i,1) < MCS%window(i_win)%wl_max) then
+            if (solar_spectrum(i,1) < high_res_wl_max) then
                 solar_idx_max = i
             end if
-            if (solar_spectrum(i,1) > MCS%window(i_win)%wl_max) then
+            if (solar_spectrum(i,1) > high_res_wl_max) then
                 exit
             end if
         end do
 
+        ! Allocate the micro-window bounded solar and radiance arrays
         allocate(this_solar(solar_idx_max - solar_idx_min + 1, 2))
-        allocate(radiance_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+        allocate(radiance_meas_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+        allocate(radiance_calc_work(size(radiance_meas_work)))
+        ! .. as well as the (convolved Jacobian matrix)
+
+
 
         ! Grab a copy of the L1b radiances
-        radiance_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
 
         ! If solar doppler-shift is needed, calculate the distance and relative
         ! velocity between point of measurement and the (fixed) sun
@@ -325,50 +361,109 @@ contains
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
         ! Grab a copy of the dispersion relation that's shifted according to
         ! spacecraft velocity.
-        allocate(this_dispersion(size(dispersion, 1)))
-        this_dispersion = dispersion(:, i_fp, band) / (1.0d0 + instrument_doppler)
+        allocate(this_dispersion(size(radiance_meas_work)))
+        this_dispersion = dispersion(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band) / (1.0d0 + instrument_doppler)
 
 
         select type(my_instrument)
             type is (oco2_instrument)
         !        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
         !        ! take that into account for the incoming solar irradiance
-                albedo_apriori = PI * maxval(radiance_work(:)) / &
+                albedo_apriori = PI * maxval(radiance_meas_work(:)) / &
                 (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
         end select
 
         ! TODO: What do we do in case of invalid albedo (<0, >1)?
 
-        ! Populate state vector priors (this should also be )
+
+        ! Set up retrieval quantities:
+        N_sv = size(SV%svap)
+        N_spec = size(this_dispersion)
+
+        allocate(K(N_spec, N_sv))
+        allocate(K_hi(size(this_solar, 1), N_sv))
+
+        ! Populate state vector priors (this should also be read from config)
+
+        ! Albedo
         SV%svap(SV%idx_albedo(1)) = albedo_apriori
+        ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
         do i=2, SV%num_albedo
             SV%svap(SV%idx_albedo(i)) = 0.0d0
         end do
+
+        ! Start SIF with zero
         SV%svap(SV%idx_sif(1)) = 0.0d0
+
+
 
         !write(*,*) i_fp, i_fr, "Albedo: ", albedo_apriori, "Altitude: ", altitude(i_fp, i_fr), "Latitude: ", lat(i_fp, i_fr)
         if (albedo_apriori > 1) then
-            write(*,*) "albedo too large"
-        !    read(*,*)
+            write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
+            call logger%error(fname, trim(tmp_str))
+            return
         end if
 
 
+        ! Retrival iteration loop
+
+        ! Calculate the high-resolution modelled spectrum
+        ! High-res spectral resolution determined by solar model
+        allocate(radiance_calc_work_hi(size(this_solar, 1)))
+
+        call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
+                                VZA(i_fp, i_fr), albedo_apriori, &
+                                radiance_calc_work_hi)
+
+        ! And multiply with the solar spectrum
+        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:) * 0.5
+
+        ! Plug in the Jacobians (SIF is easy)
+        K_hi(:, SV%idx_sif(1)) = 1.0d0
+        ! this probably should go into the radiance module
+        do i=1, SV%num_albedo
+            K_hi(:, SV%idx_albedo(i)) =  this_solar(:,2) / PI * cos(DEG2RAD * SZA(i_fp, i_fr)) * &
+                                         ((this_solar(:,1) - this_solar(1,1)) ** (i-1))
+        end do
 
 
-        !open(file="l1b_spec.dat", newunit=funit)
-        !do i=l1b_wl_idx_min, l1b_wl_idx_max
-        !    write(funit,*) dispersion(i, i_fp, band), radiance_l1b(i)
-        !end do
-        !close(funit)
+        ! Convolution with the instrument line shape function(s)
+        ! Note: we are only passing the ILS arrays that correspond to the
+        ! actual pixel boundaries of the chosen microwindow.
 
-        !open(file="solar_spec.dat", newunit=funit)
+        select type(my_instrument)
+            type is (oco2_instrument)
+                call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
+                                          ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                          ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                          this_dispersion, radiance_calc_work)
+
+                do i=1, N_sv
+                    call oco_type_convolution(this_solar(:,1), K_hi(:,i), &
+                                              ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                              ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                              this_dispersion, K(:,i))
+                end do
+        end select
+
+        !
+
+
+        open(file="l1b_spec.dat", newunit=funit)
+        do i=1, size(this_dispersion)
+            write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i)
+        end do
+        close(funit)
+
+        !open(file="hires_spec.dat", newunit=funit)
         !do i=1, size(this_solar, 1)
-        !    write(funit,*) this_solar(i,1), this_solar(i,2)
+        !    write(funit,*) this_solar(i,1), radiance_calc_work_hi(i)
         !end do
         !close(funit)
 
 
     end subroutine physical_FM
+
 
 
 end module

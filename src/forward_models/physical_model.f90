@@ -10,6 +10,7 @@ module physical_model_mod
 
     use solar_model_mod
     use math_utils_mod
+    use statevector_mod
     use mod_datetime
 
     implicit none
@@ -46,6 +47,8 @@ module physical_model_mod
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
                                                        measured_radiance, &
                                                        noise_radiance
+
+    type(statevector) :: SV
 
 
 contains
@@ -98,10 +101,10 @@ contains
         call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
         call logger%trivia(fname, "Finished reading in surface pressure.")
 
-        do i=1, size(met_P_levels, 1)
-            write(*,*) i, met_P_levels(i,1,1), met_T_profiles(i,1,1), met_SH_profiles(i,1,1)
-        end do
-        write(*,*) "Psurf: ", met_psurf(1,1)
+        !do i=1, size(met_P_levels, 1)
+        !    write(*,*) i, met_P_levels(i,1,1), met_T_profiles(i,1,1), met_SH_profiles(i,1,1)
+        !end do
+        !write(*,*) "Psurf: ", met_psurf(1,1)
 
 
         ! Read-in of dispersion and noise coefficients (THIS IS INSTRUMENT SPECIFIC!)
@@ -164,7 +167,8 @@ contains
         ! Zero-level offset / SIF (constant)
         ! Instrument disperison
 
-
+        ! TODO: read in state vector stuff from config file
+        call initialize_statevector(SV, 2, 1, 0)
 
 
         ! Main loop over all soundings to perform actual retrieval
@@ -322,19 +326,24 @@ contains
         this_dispersion = dispersion(:, i_fp, band) / (1.0d0 + instrument_doppler)
 
 
-
-
-
-
-        !write(*,*) maxval(radiance_work(:)), maxval(this_solar(:,2)) * 0.5
         select type(my_instrument)
             type is (oco2_instrument)
         !        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
         !        ! take that into account for the incoming solar irradiance
-                albedo_apriori = PI * maxval(radiance_work(:)) / (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+                albedo_apriori = PI * maxval(radiance_work(:)) / &
+                (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
         end select
 
-        write(*,*) i_fp, i_fr, "Albedo: ", albedo_apriori, "Altitude: ", altitude(i_fp, i_fr), "Latitude: ", lat(i_fp, i_fr)
+        ! TODO: What do we do in case of invalid albedo (<0, >1)?
+
+        ! Populate state vector priors (this should also be )
+        SV%svap(SV%idx_albedo(1)) = albedo_apriori
+        do i=2, SV%num_albedo
+            SV%svap(SV%idx_albedo(i)) = 0.0d0
+        end do
+        SV%svap(SV%idx_sif(1)) = 0.0d0
+
+        !write(*,*) i_fp, i_fr, "Albedo: ", albedo_apriori, "Altitude: ", altitude(i_fp, i_fr), "Latitude: ", lat(i_fp, i_fr)
         if (albedo_apriori > 1) then
             write(*,*) "albedo too large"
         !    read(*,*)

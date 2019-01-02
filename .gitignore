@@ -1,4 +1,7 @@
 *.*~
+*.png
+*.h5
+*.pdf
 
 work/
 build/

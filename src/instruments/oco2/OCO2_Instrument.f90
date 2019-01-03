@@ -5,7 +5,7 @@ module oco2_mod
     use control_mod, only: MCS
     use logger_mod, only: logger => master_logger
     use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, &
-                              read_DP_hdf_dataset
+                              read_DP_hdf_dataset, read_INT_hdf_dataset
     use mod_datetime
 
     use HDF5
@@ -33,6 +33,7 @@ module oco2_mod
         procedure, nopass :: read_ils_data
         procedure, nopass :: read_sounding_geometry
         procedure, nopass :: read_sounding_location
+        procedure, nopass :: read_bad_sample_list
     end type
 
 
@@ -148,19 +149,14 @@ contains
         double precision, intent(in) :: disp_coef(:,:,:)
         double precision, intent(out) :: dispersion(:)
         integer, intent(in) :: band, fp
-
         integer :: pix, order
 
         dispersion(:) = 0.0d0
 
         do pix=1, 1016
-            !do band=1, 3
-                !do fp=1, 8
-                    do order=1, 6
-                        dispersion(pix) = dispersion(pix) + (pix) ** (order-1) * disp_coef(order,fp,band)
-                    end do
-                !end do
-            !end do
+            do order=1, 6
+                dispersion(pix) = dispersion(pix) + (dble(pix) ** (order-1) * disp_coef(order,fp,band))
+            end do
         end do
 
     end subroutine
@@ -256,23 +252,25 @@ contains
         double precision, intent(inout) :: noise(:)
         integer, intent(in) :: fp, band, idx_start, idx_end
 
-        double precision, dimension(3) :: MaxMS
-        integer(hsize_t), dimension(1) :: dims
+        double precision, allocatable :: MaxMS(:)
+        integer(hsize_t), allocatable :: dims(:)
         integer(hid_t) :: dset_id
         integer :: i, hdferr
 
-        dims(1) = 3
-        call h5dopen_f(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", dset_id, hdferr)
-        call check_hdf_error(hdferr, "calculate_noise", "Error opening: /InstrumentHeader/measureable_signal_max_observed")
+        !dims(1) = 3
+        !call h5dopen_f(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", dset_id, hdferr)
+        !call check_hdf_error(hdferr, "calculate_noise", "Error opening: /InstrumentHeader/measureable_signal_max_observed")
 
-        call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, MaxMS, dims, hdferr)
+        !call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, MaxMS, dims, hdferr)
+        !call read_DP_hdf_dataset()
+
+
+        call read_DP_hdf_dataset(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
 
         do i=1, size(noise)
             noise(i) = (MaxMS(band) / 100) * sqrt(abs(100 * radiance(i) / MaxMS(band)) * &
                         (snr_coefs(1,idx_start+i-1,fp,band)**2) + (snr_coefs(2,idx_start+i-1,fp,band)**2))
         end do
-
-
 
     end subroutine
 
@@ -460,6 +458,18 @@ contains
         call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_solar_relative_velocity", rel_solar_vel, dset_dims)
 
     end subroutine
+
+    subroutine read_bad_sample_list(l1b_file_id, bad_sample_list)
+        implicit none
+        integer(hid_t), intent(in) :: l1b_file_id
+        integer, allocatable, intent(inout) :: bad_sample_list(:,:,:)
+
+        integer(hsize_t), allocatable :: dset_dims(:)
+
+        call read_INT_hdf_dataset(l1b_file_id, "InstrumentHeader/bad_sample_list", bad_sample_list, dset_dims)
+
+    end subroutine
+
 
 
 end module

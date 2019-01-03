@@ -38,7 +38,7 @@ contains
         double precision :: wl_diff, wl_diff_old
 
         double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
-
+        double precision :: time_start, time_stop
         integer :: i, funit
 
         N_pix = size(wl_output)
@@ -69,40 +69,45 @@ contains
 
             call find_closest_index_DP(wl_input, wl_output(idx_pix), idx_hires_closest)
             call find_closest_index_DP(wl_input, ILS_delta_min, idx_hires_ILS_min)
-            call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
+            idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
+            !call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
 
             ! Now we have to either interpolate the ILS data onto the high-res grid,
             ! or, if the ILS data is higher resolution, do the other way round.
-            if (N_ils_pix > (idx_hires_ILS_max - idx_hires_ILS_min)) then
+            !if (N_ils_pix > (idx_hires_ILS_max - idx_hires_ILS_min + 1)) then
                 ! ILS is higher resolution than hires radiances
-                call logger%fatal(fname, "Oops - not implemented yet! Call Peter.")
-                stop 1
-            else
+            !    write(*,*) N_ils_pix
+            !    write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max - idx_hires_ILS_min
+            !    call logger%fatal(fname, "Oops - not implemented yet! Call Peter.")
+            !    stop 1
+            !else
                 ! ILS is lower resolution than hires radiances
-                allocate(ILS_upsampled(idx_hires_ILS_max - idx_hires_ILS_min + 1))
+                !allocate(ILS_upsampled(idx_hires_ILS_max - idx_hires_ILS_min + 1))
 
-                ! Upsample the ILS
-                call linear_upsample(wl_input(idx_hires_ILS_min:idx_hires_ILS_max), &
-                                     input(idx_hires_ILS_min:idx_hires_ILS_max), &
-                                     wl_output(idx_pix) + wl_kernels(:, idx_pix), &
-                                     kernels(:, idx_pix), &
-                                     ILS_upsampled)
-
+                ! This is a fairly expensive call! 0.3ms - but we do it 1016 times..
+                ! Upsample the ILS to the hires wavelength grid
+                !call linear_upsample(wl_input(idx_hires_ILS_min:idx_hires_ILS_max), &
+                !                     wl_output(idx_pix) + wl_kernels(:, idx_pix), &
+                !                     kernels(:, idx_pix), &
+                !                     ILS_upsampled)
                 ! And do the 'convolution'
-                output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled) / sum(ILS_upsampled)
+                !write(*,*) '--------------'
+                !write(*,*) shape(kernels)
+                !write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max-idx_hires_ILS_min
 
-                deallocate(ILS_upsampled)
-            end if
+                output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
+                                 / sum(kernels(:, idx_pix))
+
+                !deallocate(ILS_upsampled)
+            !end if
         end do
-
-
 
     end subroutine
 
-    subroutine linear_upsample(x_hires, y_hires, x_lowres, y_lowres, output)
+    subroutine linear_upsample(x_hires, x_lowres, y_lowres, output)
 
         implicit none
-        double precision, intent(in) :: x_hires(:), y_hires(:), x_lowres(:), y_lowres(:)
+        double precision, intent(in) :: x_hires(:), x_lowres(:), y_lowres(:)
         double precision, intent(inout) :: output(:)
 
         integer :: idx_closest, idx_left, idx_right
@@ -110,13 +115,16 @@ contains
         double precision :: frac_value
 
         ! Output and hires arrays should be the same size!
-        if ((size(output) /= size(x_hires)) .or. &
-            (size(output) /= size(y_hires))) then
+        if ((size(output) /= size(x_hires))) then
             call logger%fatal("linear_upsample", "Array size mismatch!")
             stop 1
         end if
 
         do i=1, size(x_hires)
+
+            if (mod(i, 10000) == 0) then
+                write(*,*) i, size(x_hires)
+            end if
 
             ! Between which to lowres values is our hires value?
             call find_closest_index_DP(x_lowres, x_hires(i), idx_closest)

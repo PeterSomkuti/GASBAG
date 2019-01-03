@@ -38,9 +38,19 @@ module physical_model_mod
     ! ILS data: shape: (wl, pixel, fp, band)
     double precision, dimension(:,:,:,:), allocatable :: ils_delta_lambda, &
                                                          ils_relative_response
+    double precision, dimension(:,:,:,:), allocatable :: ils_hires_delta_lambda, &
+                                                         ils_hires_relative_response
+    double precision :: ils_hires_min_wl, ils_hires_max_wl, ils_hires_spacing
+    double precision, allocatable :: ils_hires_grid(:)
+    integer :: num_ils_hires
 
     double precision, allocatable :: dispersion_coefs(:,:,:)
     double precision, allocatable :: snr_coefs(:,:,:,:)
+
+
+    ! For OCO-2: bad sample list. Bad samples should not be counted towards
+    ! fitting results (noise inflation)
+    integer, allocatable :: bad_sample_list(:,:,:)
 
     ! We grab the full MET profiles from the MET data file, for quick access
     double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
@@ -50,8 +60,10 @@ module physical_model_mod
     double precision, allocatable :: met_psurf(:,:)
 
     ! The solar spectrum (wavelength, transmission)
-    double precision, allocatable :: solar_spectrum(:,:)
+    double precision, allocatable :: solar_spectrum(:,:), solar_spectrum_regular(:,:)
     double precision, allocatable :: solar_irrad(:)
+    double precision :: solar_grid_spacing
+    integer :: N_solar
 
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
@@ -76,7 +88,7 @@ contains
 
         integer :: num_frames
 
-        integer :: i_fp, i_fr, band, fp
+        integer :: i_fp, i_fr, i_pix, band
         integer :: i, retr_count
 
         double precision :: cpu_time_start, cpu_time_stop, mean_duration
@@ -118,13 +130,15 @@ contains
         ! Read-in of dispersion and noise coefficients (THIS IS INSTRUMENT SPECIFIC!)
         select type(my_instrument)
             type is (oco2_instrument)
+
                 ! Read dispersion coefficients and create dispersion array
                 call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
                 allocate(dispersion(1016,8,3))
 
                 do band=1,3
-                    do fp=1,8
-                        call my_instrument%calculate_dispersion(dispersion_coefs, dispersion(:,fp,band), band, fp)
+                    do i_fp=1,8
+                        call my_instrument%calculate_dispersion(dispersion_coefs, &
+                                                  dispersion(:,i_fp,band), band, i_fp)
                     end do
                 end do
 
@@ -146,26 +160,15 @@ contains
                 call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
                                                  ils_relative_response)
 
+                ! Read in bad sample list
+                call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
+
         end select
 
         allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
         allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
         allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
 
-
-        ! Read in the solar model
-        if (MCS%algorithm%solar_type == "toon") then
-            call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
-                                    solar_spectrum)
-
-            allocate(solar_irrad(size(solar_spectrum, 1)))
-            call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
-
-        else
-            call logger%fatal(fname, "Sorry, solar model type " &
-                                     // MCS%algorithm%solar_type%chars() &
-                                     // " is not known.")
-        end if
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         !!!!!! Set up state vector structure here
@@ -181,16 +184,101 @@ contains
         ! Instrument disperison
 
         ! TODO: read in state vector stuff from config file
-        call initialize_statevector(SV, 2, 1, 0)
+        call initialize_statevector(SV, 5, 1, 0)
 
 
         ! Main loop over all soundings to perform actual retrieval
         ! footprint, frame, microwindow #, band
 
+
+        ! Read in the solar model - we do this for every band, the reason being
+        ! the following. Since the re-gridding procedure is fairly costly, we want
+        ! to keep the solar spectrum data as small as possible. Hence we call all of this
+        if (MCS%algorithm%solar_type == "toon") then
+            call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+                                    solar_spectrum, &
+                                    MCS%window(1)%wl_min - 0.003, &
+                                    MCS%window(1)%wl_max + 0.003)
+
+            N_solar = size(solar_spectrum, 1)
+            allocate(solar_irrad(N_solar))
+            call calculate_solar_planck_function(5800.d0, solar_spectrum(:,1), solar_irrad)
+
+        else
+            call logger%fatal(fname, "Sorry, solar model type " &
+                                     // MCS%algorithm%solar_type%chars() &
+                                     // " is not known.")
+        end if
+        ! To make life easier, we want to keep the solar model on a regular,
+        ! evenly-spaced grid in wavelength space. So we are going to interpolate
+        ! it onto a slightly changed wavelength grid.
+        allocate(solar_spectrum_regular(N_solar, 2))
+        ! Simple choice, just take the start and end-point, and divide by the
+        ! number of elements to get even spacing
+        solar_grid_spacing = (solar_spectrum(N_solar,1) - solar_spectrum(1,1)) &
+                              / dble(N_solar)
+        write(tmp_str, "(A, E8.3, A)") "New solar spectrum grid: ", solar_grid_spacing, " um"
+        call logger%debug(fname, trim(tmp_str))
+
+        do i=1, N_solar
+            solar_spectrum_regular(i,1) = (dble(i)-1.0d0) * solar_grid_spacing + solar_spectrum(1,1)
+        end do
+
+        call logger%debug(fname, "Re-gridding solar spectrum")
+        call linear_upsample(solar_spectrum_regular(:,1), solar_spectrum(:,1), &
+                             solar_spectrum(:,2), solar_spectrum_regular(:,2))
+        call logger%debug(fname, "Finished re-gridding solar spectrum.")
+
+        ! To make the convolution operation faster, we will here interpolate the
+        ! ILS's to higher resolution for all pixels on the very first occassion,
+        ! and then we won't have to do it again for every retrieval and every
+        ! detector pixel. This obviously only works for a regular solar grid, and
+        ! the new hires ILS will be sitting on a regular grid with the same spacing.
+
+        ! Of course every pixel has a different delta_lambda range, so we are going
+        ! to create the new ILS grid in such a way that it fits the one ILS with the
+        ! largest range.
+
+        band = 1
+        ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
+        ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
+        num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / solar_grid_spacing)
+
+        allocate(ils_hires_grid(num_ils_hires))
+        allocate(ils_hires_delta_lambda(num_ils_hires, &
+                                        size(ils_delta_lambda, 2), &
+                                        size(ils_delta_lambda, 3), &
+                                        size(ils_delta_lambda, 4)))
+        allocate(ils_hires_relative_response, mold=ils_hires_delta_lambda)
+
+        ! We need to ensure that the hi-res grid and the hi-res ILS grid line
+        ! up fully, so ils_hires_min_wl needs to be shifted to the closest multiple
+        ! of solar_grid_spacing.
+
+        ils_hires_min_wl = solar_grid_spacing * ceiling(ils_hires_min_wl / solar_grid_spacing)
+
+        do i=1, num_ils_hires
+            ils_hires_grid(i) = ils_hires_min_wl + (i-1) * solar_grid_spacing
+        end do
+
+        call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
+        do i_fp=1, my_instrument%num_fp
+            do i_pix=1, size(dispersion, 1)
+
+                ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
+                call linear_upsample(ils_hires_grid, ils_delta_lambda(:, i_pix, i_fp, band) , &
+                                     ils_relative_response(:, i_pix, i_fp, band), &
+                                     ils_hires_relative_response(:, i_pix, i_fp, band))
+
+            end do
+        end do
+        call logger%debug(fname, "Done re-gridding ILS.")
+
+
         retr_count = 0
         mean_duration = 0.0d0
         do i_fp=1, my_instrument%num_fp
-            do i_fr=1234, 1234 !1, num_frames
+            do i_fr=1, num_frames
 
                 call cpu_time(cpu_time_start)
                 call physical_FM(my_instrument, i_fp, i_fr, 1, 1)
@@ -206,6 +294,8 @@ contains
                 end if
             end do
         end do
+
+        deallocate(solar_spectrum_regular)
 
 
     end subroutine
@@ -250,10 +340,16 @@ contains
 
         !! Retrieval quantities
         double precision, allocatable :: K_hi(:,:), K(:,:) ! Jacobian matrices
+        ! Noise covariance, prior covariance (and its inverse)
         double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
+        ! Temporary matrices and vectors for computation
         double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:), tmp_m3(:,:)
-        double precision, allocatable :: tmp_v1(:), tmp_v2(:)
+        double precision, allocatable :: tmp_v1(:), tmp_v2(:), old_sv(:)
+        ! Levenberg-Marquart gamma
         double precision :: lm_gamma
+        ! Iteration-related
+        integer :: iteration, max_iterations
+        logical :: keep_iterating, converged
 
 
         !! Misc
@@ -331,13 +427,13 @@ contains
         end select
 
         do i=1, size(solar_spectrum, 1)
-            if (solar_spectrum(i,1) < high_res_wl_min) then
+            if (solar_spectrum_regular(i,1) < high_res_wl_min) then
                 solar_idx_min = i
             end if
-            if (solar_spectrum(i,1) < high_res_wl_max) then
+            if (solar_spectrum_regular(i,1) < high_res_wl_max) then
                 solar_idx_max = i
             end if
-            if (solar_spectrum(i,1) > high_res_wl_max) then
+            if (solar_spectrum_regular(i,1) > high_res_wl_max) then
                 exit
             end if
         end do
@@ -347,6 +443,9 @@ contains
         allocate(radiance_meas_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
         allocate(radiance_calc_work(size(radiance_meas_work)))
         allocate(noise_work(size(radiance_meas_work)))
+
+        ! Grab a copy of the L1b radiances
+        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
 
         ! Now calculate the noise-equivalent radiances
         select type(my_instrument)
@@ -359,44 +458,44 @@ contains
 
 
 
-        ! Grab a copy of the L1b radiances
-        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+
 
         ! If solar doppler-shift is needed, calculate the distance and relative
         ! velocity between point of measurement and the (fixed) sun
 
-        !call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
-        !call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
-        !solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
+        call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
+        call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
+        solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
 
-        solar_doppler = relative_solar_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+        !solar_doppler = (relative_solar_velocity(i_fp, i_fr) + earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+        solar_doppler = (relative_solar_velocity(i_fp, i_fr)) / SPEED_OF_LIGHT
         ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
-        this_solar(:,1) = solar_spectrum(solar_idx_min:solar_idx_max, 1) / (1.0d0 + solar_doppler)
-        this_solar(:,2) = solar_spectrum(solar_idx_min:solar_idx_max, 2) * solar_irrad(solar_idx_min:solar_idx_max)
+        this_solar(:,1) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 1) / (1.0d0 - solar_doppler)
+        this_solar(:,2) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 2) * solar_irrad(solar_idx_min:solar_idx_max)
+
 
         ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
         ! Grab a copy of the dispersion relation that's shifted according to
         ! spacecraft velocity.
         allocate(this_dispersion(size(radiance_meas_work)))
-        this_dispersion = dispersion(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band) / (1.0d0 + instrument_doppler)
+        this_dispersion = dispersion(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band) / (1.0d0 - instrument_doppler)
 
 
-        select type(my_instrument)
-            type is (oco2_instrument)
-        !        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
-        !        ! take that into account for the incoming solar irradiance
-                albedo_apriori = PI * maxval(radiance_meas_work(:)) / &
-                (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
-        end select
+        write(*,*) "Earth RV: ", earth_rv
+        write(*,*) "Solar RV: ", solar_rv * 1000
+        write(*,*) "Relative velocity solar: ", relative_solar_velocity(i_fp, i_fr)
+        write(*,*) "Relative velocity instrument: ", relative_velocity(i_fp, i_fr)
 
-        ! TODO: What do we do in case of invalid albedo (<0, >1)?
+
+        write(*,*) "Solar doppler: ", solar_doppler
+        write(*,*) "Instrument doppler: ", instrument_doppler
 
 
         ! Set up retrieval quantities:
         N_sv = size(SV%svap)
         N_spec = size(this_dispersion)
-        lm_gamma = 0.0001
+        lm_gamma = 1.0d0
 
         allocate(K(N_spec, N_sv))
         allocate(K_hi(size(this_solar, 1), N_sv))
@@ -415,16 +514,29 @@ contains
         Sa_inv(:,:) = 0.0d0
         Sa_inv(SV%idx_albedo(1), SV%idx_albedo(1)) = 1.0d0
         Sa_inv(SV%idx_albedo(2), SV%idx_albedo(2)) = 1.0d0 / (0.25d0 ** 2)
+        Sa_inv(SV%idx_albedo(3), SV%idx_albedo(3)) = 1.0d0 / (0.1d0 ** 2)
         Sa_inv(SV%idx_sif(1), SV%idx_sif(1)) = 1.0d0 / (1d18 ** 2)
 
         ! Populate state vector priors (this should also be read from config)
 
         ! Albedo
+        select type(my_instrument)
+            type is (oco2_instrument)
+        !        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
+        !        ! take that into account for the incoming solar irradiance
+                albedo_apriori = PI * maxval(radiance_meas_work(:)) / &
+                (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+        end select
+
+        ! TODO: What do we do in case of invalid albedo (<0, >1)?
+
         SV%svap(SV%idx_albedo(1)) = albedo_apriori
         ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
-        do i=2, SV%num_albedo
-            SV%svap(SV%idx_albedo(i)) = 0.0d0
-        end do
+        if (SV%num_albedo > 1) then
+            do i=2, SV%num_albedo
+                SV%svap(SV%idx_albedo(i)) = 0.0d0
+            end do
+        end if
 
         ! Start SIF with zero
         SV%svap(SV%idx_sif(1)) = 0.0d0
@@ -439,101 +551,129 @@ contains
 
 
         ! Retrival iteration loop
+        iteration = 1
+        keep_iterating = .true.
+        allocate(old_sv(size(SV%svsv)))
+
 
         ! Calculate the high-resolution modelled spectrum
         ! High-res spectral resolution determined by solar model
         allocate(radiance_calc_work_hi(size(this_solar, 1)))
         allocate(albedo(size(radiance_calc_work_hi)))
 
-        albedo(:) = albedo_apriori
-        call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
-                                VZA(i_fp, i_fr), albedo, &
-                                radiance_calc_work_hi)
+        do while (keep_iterating)
 
-        ! And multiply with the solar spectrum
-        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
+            if (iteration == 1) then
+                ! For the first iteration, we want to use the prior albedo
+                albedo(:) = albedo_apriori
+                ! and the state vector is the prior (maybe we want to change that later..)
+                SV%svsv = SV%svap
+                old_sv = SV%svap
+            else
+                ! Otherwise, calculate it from the state vector
+                ! Obviously ONLY if we want to retrieve it, otherwise the albedo
+                ! will just stay at the prior value.
+                if (SV%num_albedo > 0) then
+                    albedo = 0.0d0
+                    do i=1, SV%num_albedo
+                        albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (i-1))
+                    end do
+                endif
+                old_sv = SV%svsv
+            endif
 
-        ! Plug in the Jacobians (SIF is easy)
-        K_hi(:, SV%idx_sif(1)) = 1.0d0
-        ! this probably should go into the radiance module
-        do i=1, SV%num_albedo
-            K_hi(:, SV%idx_albedo(i)) =  this_solar(:,2) / PI * cos(DEG2RAD * SZA(i_fp, i_fr)) * &
-                                         ((this_solar(:,1) - this_solar(1,1)) ** (i-1))
-        end do
+            ! Calculate the sun-normalized TOA radiances
+            call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
+                                    VZA(i_fp, i_fr), albedo, &
+                                    radiance_calc_work_hi)
 
-        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * 0.5
+            ! And multiply with the solar spectrum
+            radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
+            ! Add SIF contributions
+            radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + SV%svsv(SV%idx_sif(1))
+
+            ! Plug in the Jacobians (SIF is easy)
+            if (SV%num_sif > 0) then
+                K_hi(:, SV%idx_sif(1)) = 1.0d0
+            end if
+            ! this probably should go into the radiance module
+            if (SV%num_albedo > 0) then
+                do i=1, SV%num_albedo
+                    K_hi(:, SV%idx_albedo(i)) =  this_solar(:,2) / PI * &
+                                              cos(DEG2RAD * SZA(i_fp, i_fr)) * &
+                                  ((this_solar(:,1) - this_solar(1,1)) ** (i-1))
+                end do
+            end if
+
+            ! Stokes coefficients
+            radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * 0.5
 
 
-        ! Convolution with the instrument line shape function(s)
-        ! Note: we are only passing the ILS arrays that correspond to the
-        ! actual pixel boundaries of the chosen microwindow.
+            ! Convolution with the instrument line shape function(s)
+            ! Note: we are only passing the ILS arrays that correspond to the
+            ! actual pixel boundaries of the chosen microwindow.
 
-        select type(my_instrument)
+            select type(my_instrument)
             type is (oco2_instrument)
+                !call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
+                !                          ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                !                          ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                !                          this_dispersion, radiance_calc_work)
+
+                write(*,*) shape(ils_hires_delta_lambda)
+                write(*,*) shape(radiance_calc_work_hi)
+
+
                 call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
-                                          ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                                          ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                          ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                          ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                                           this_dispersion, radiance_calc_work)
 
                 do i=1, N_sv
                     call oco_type_convolution(this_solar(:,1), K_hi(:,i), &
-                                              ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                                              ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                              ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                              ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                                               this_dispersion, K(:,i))
                 end do
-        end select
+            end select
 
+            ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
+            tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv
+            tmp_m1 = tmp_m1 + matmul(matmul(transpose(K), Se_inv), K)
+            call invert_matrix(tmp_m1, tmp_m2)
 
-        write(*,*) "Residual: ", sqrt(sum((radiance_meas_work - radiance_calc_work)**2))
+            tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
+            tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
 
-        SV%svsv = SV%svap
+            SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
 
-        tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv
-        tmp_m1 = tmp_m1 + matmul(matmul(transpose(K), Se_inv), K)
-        call invert_matrix(tmp_m1, tmp_m2)
+            write(*,*) "Iteration: ", iteration
+            do i=1, N_sv
+                write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i)
+            end do
 
-        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-        tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+            write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+            iteration = iteration + 1
 
-        SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+            if (iteration == 5) then
+                keep_iterating = .false.
+            end if
 
-        do i=1, N_sv
-            write(*,*) i, SV%svap(i), SV%svsv(i)
         end do
 
-
-        albedo = 0.0d0
-        do i=1, SV%num_albedo
-            albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (i-1))
-        end do
-
-        call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
-                                VZA(i_fp, i_fr), albedo, &
-                                radiance_calc_work_hi)
-
-        radiance_calc_work_hi(:) = (this_solar(:,2) * radiance_calc_work_hi(:) + SV%svsv(SV%idx_sif(1))) * 0.5
-
-        call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
-                                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                                  this_dispersion, radiance_calc_work)
-
-        write(*,*) "Residual: ", sqrt(sum((radiance_meas_work - radiance_calc_work)**2))
-        
         open(file="l1b_spec.dat", newunit=funit)
         do i=1, size(this_dispersion)
-            write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i), K(i,1), K(i,2), K(i,3)
+            write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i), &
+                           noise_work(i), bad_sample_list(l1b_wl_idx_min+i-1,i_fp,band)
         end do
         close(funit)
 
-        !open(file="hires_spec.dat", newunit=funit)
-        !do i=1, size(this_solar, 1)
-        !    write(funit,*) this_solar(i,1), radiance_calc_work_hi(i)
-        !end do
-        !close(funit)
-
-        read(*,*)
-
+        open(file="hires_spec.dat", newunit=funit)
+        do i=1, size(this_solar, 1)
+            write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
+                           solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
+        end do
+        close(funit)
 
     end subroutine physical_FM
 

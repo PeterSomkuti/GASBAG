@@ -7,16 +7,20 @@ module solar_model_mod
 
 contains
 
-    subroutine read_toon_spectrum(filename, solar_spectrum)
+    subroutine read_toon_spectrum(filename, solar_spectrum, wl_min, wl_max)
 
         implicit none
         character(len=*), intent(in) :: filename
         double precision, dimension(:,:), allocatable, intent(inout) :: solar_spectrum
+        double precision, optional, intent(in) :: wl_min, wl_max
         !!!!!
+
         character(len=*), parameter :: fname = "read_toon_spectrum"
         integer :: funit, line_count, i, io_status
         logical :: exist_file
         double precision :: dummy
+        double precision, allocatable :: tmp_array(:,:)
+        integer :: idx_min, idx_max
 
         call logger%debug(fname, "Reading Toon solar spectrum at: " // trim(filename))
 
@@ -51,6 +55,25 @@ contains
         ! we have the spectrum in units of increasing wavelength
         solar_spectrum(:,:) = solar_spectrum(line_count:1:-1,:)
         solar_spectrum(:,1) = 1e4 / solar_spectrum(:,1)
+
+        ! If the user wants to, we can cut off the fairly large solar spectrum
+        ! array, depending on the wavelength limits supplied to the function
+
+        if(present(wl_min) .and. present(wl_max)) then
+            idx_min = -1
+            idx_max = -1
+
+            call find_closest_index_DP(solar_spectrum(:,1), wl_min, idx_min)
+            call find_closest_index_DP(solar_spectrum(:,1), wl_max, idx_max)
+
+            allocate(tmp_array(idx_max - idx_min + 1, 2))
+            tmp_array(:,:) = solar_spectrum(idx_min:idx_max, :)
+
+            deallocate(solar_spectrum)
+            allocate(solar_spectrum(idx_max - idx_min + 1, 2))
+            solar_spectrum(:,:) = tmp_array(:,:)
+        end if
+
 
     end subroutine
 

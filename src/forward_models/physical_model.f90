@@ -65,6 +65,11 @@ module physical_model_mod
     double precision :: solar_grid_spacing
     integer :: N_solar
 
+
+    ! Final SIF value in physical radiance units, chi2
+    double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, &
+                                                     retrieved_SIF_rel, chi2
+
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
                                                        measured_radiance, &
@@ -80,7 +85,8 @@ contains
         implicit none
         class(generic_instrument), intent(in) :: my_instrument
 
-        integer(hid_t) :: l1b_file_id, met_file_id, output_file_id, dset_id
+        integer(hid_t) :: l1b_file_id, met_file_id, output_file_id, dset_id, result_gid
+        integer(hsize_t), dimension(2) :: out_dims2d
         integer(hsize_t), dimension(:), allocatable :: dset_dims
         integer :: hdferr
         character(len=999) :: dset_name, tmp_str
@@ -88,8 +94,11 @@ contains
 
         integer :: num_frames
 
-        integer :: i_fp, i_fr, i_pix, band
+        integer :: i_fp, i_fr, i_pix, i_win, band
         integer :: i, retr_count
+
+        !! State vector setup
+        integer :: num_albedo_parameters, num_dispersion_parameters, num_sif_parameters
 
         double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
@@ -102,6 +111,7 @@ contains
         !! Store HDF file handler for more convenient access
         met_file_id = MCS%input%met_file_id
         l1b_file_id = MCS%input%l1b_file_id
+        output_file_id = MCS%output%output_file_id
 
         !! Get the necesary MET data profiles. This probably needs expanding for
         !! other instrument types / file structures. (will Geocarb be different?)
@@ -137,8 +147,8 @@ contains
 
                 do band=1,3
                     do i_fp=1,8
-                        call my_instrument%calculate_dispersion(dispersion_coefs, &
-                                                  dispersion(:,i_fp,band), band, i_fp)
+                        call my_instrument%calculate_dispersion(dispersion_coefs(:,i_fp,band), &
+                                             dispersion(:,i_fp,band), band, i_fp)
                     end do
                 end do
 
@@ -165,27 +175,14 @@ contains
 
         end select
 
+
+        allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames))
+        allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames))
+        allocate(chi2(my_instrument%num_fp, num_frames))
+
         allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
         allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
         allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
-
-
-        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        !!!!!! Set up state vector structure here
-
-        ! We can do this once, and simply clear the contents of the state vectors
-        ! inside the loop later on. Might not save an awful lot, but every little
-        ! helps, I guess..
-
-        ! At the moment, we can do following state vectors:
-        !
-        ! Lambertian surface albedo, arbitrary (?) polynomial order
-        ! Zero-level offset / SIF (constant)
-        ! Instrument disperison
-
-        ! TODO: read in state vector stuff from config file
-        call initialize_statevector(SV, 5, 1, 0)
-
 
         ! Main loop over all soundings to perform actual retrieval
         ! footprint, frame, microwindow #, band
@@ -275,27 +272,100 @@ contains
         call logger%debug(fname, "Done re-gridding ILS.")
 
 
+        do i_win=1, 1
+
+            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+            !!!!!! Set up state vector structure here
+
+            ! We can do this once for every window, and simply clear the contents
+            ! of the state vectors inside the loop later on. Might not save an awful
+            !  lot, but every little helps, I guess..
+
+            ! At the moment, we can do following state vectors:
+            !
+            ! Lambertian surface albedo, arbitrary (?) polynomial order
+            ! Zero-level offset / SIF (constant)
+            ! Instrument disperison
+
+            ! TODO: read in state vector stuff from config file
+
+            if (MCS%window(i_win)%albedo_order /= -9999) then
+                num_albedo_parameters = MCS%window(i_win)%albedo_order
+                if (num_albedo_parameters < 0) then
+                    call logger%fatal(fname, "Sorry, need positive value for albedo order.")
+                    stop 1
+                end if
+            else
+                num_albedo_parameters = 0
+            end if
+
+            if (MCS%window(i_win)%dispersion_order /= -9999) then
+                num_dispersion_parameters = MCS%window(i_win)%dispersion_order
+
+                if (num_dispersion_parameters < 0) then
+                    call logger%fatal(fname, "Sorry, need positive value for dispersion order.")
+                    stop 1
+                end if
+
+                if (num_dispersion_parameters > size(dispersion_coefs, 1)) then
+                    call logger%fatal(fname, "Sorry, cannot have more dispersion parameters " &
+                                           // "than present in the L1b file (for now).")
+                    stop 1
+                end if
+            else
+                num_dispersion_parameters = 0
+            end if
+
+            num_sif_parameters = 1
+
+            call initialize_statevector(SV, &
+                                        num_albedo_parameters, &
+                                        num_sif_parameters, &
+                                        num_dispersion_parameters)
+
         retr_count = 0
         mean_duration = 0.0d0
+        do i_fr=2725, num_frames
         do i_fp=1, my_instrument%num_fp
-            do i_fr=1, num_frames
 
                 call cpu_time(cpu_time_start)
-                call physical_FM(my_instrument, i_fp, i_fr, 1, 1)
+                call physical_FM(my_instrument, i_fp, i_fr, i_win, 1)
                 call cpu_time(cpu_time_stop)
 
                 retr_count = retr_count + 1
                 mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count + 1)
 
-                if (mod(retr_count, 10) == 0) then
+                if (mod(retr_count, 100) == 0) then
                     write(tmp_str, '(A, F7.3, A, G0.1)') "Duration: ", mean_duration, ", retrieval No. ", retr_count
                     call logger%debug(fname, trim(tmp_str))
                     !read(*,*)
                 end if
             end do
         end do
+        end do
 
-        deallocate(solar_spectrum_regular)
+        ! And also create the result group in the output file
+        call h5gcreate_f(output_file_id, "physical_retrieval_results", &
+                         result_gid, hdferr)
+        call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
+
+        out_dims2d = shape(chi2)
+        write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_chi2_" // MCS%window(i_win)%name
+        call write_DP_hdf_dataset(output_file_id, &
+                                  trim(tmp_str), &
+                                  chi2, out_dims2d, -9999.99d0)
+
+         out_dims2d = shape(retrieved_sif_abs)
+         write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_abs_" // MCS%window(i_win)%name
+         call write_DP_hdf_dataset(output_file_id, &
+                                   trim(tmp_str), &
+                                   retrieved_sif_abs, out_dims2d, -9999.99d0)
+
+         out_dims2d = shape(retrieved_sif_rel)
+         write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_rel_" // MCS%window(i_win)%name
+         call write_DP_hdf_dataset(output_file_id, &
+                                   trim(tmp_str), &
+                                   retrieved_sif_rel, out_dims2d, -9999.99d0)
 
 
     end subroutine
@@ -309,10 +379,11 @@ contains
         integer, intent(in) :: i_fr, i_fp, i_win, band
 
         !!
-        integer(hid_t) :: l1b_file_id
+        integer(hid_t) :: l1b_file_id, output_file_id
 
         !! Radiances
         double precision, dimension(:), allocatable :: radiance_l1b, &
+                                                       radiance_tmp_work, &
                                                        radiance_meas_work, &
                                                        radiance_calc_work, &
                                                        radiance_calc_work_hi, &
@@ -328,7 +399,10 @@ contains
 
         !! Instrument stuff
         double precision :: instrument_doppler
-        double precision, dimension(:), allocatable :: this_dispersion
+        double precision, dimension(:), allocatable :: this_dispersion, &
+                                                       this_dispersion_tmp, &
+                                                       this_dispersion_coefs, &
+                                                       this_dispersion_coefs_pert
 
         !! Solar stuff
         double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
@@ -342,6 +416,8 @@ contains
         double precision, allocatable :: K_hi(:,:), K(:,:) ! Jacobian matrices
         ! Noise covariance, prior covariance (and its inverse)
         double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
+        double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
+        double precision :: dsigma_sq
         ! Temporary matrices and vectors for computation
         double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:), tmp_m3(:,:)
         double precision, allocatable :: tmp_v1(:), tmp_v2(:), old_sv(:)
@@ -355,11 +431,12 @@ contains
         !! Misc
         character(len=999) :: tmp_str
         character(len=*), parameter :: fname = "physical_FM"
-        integer :: N_spec, N_sv
-        integer :: i
+        integer :: N_spec, N_spec_hi, N_spec_tmp, N_sv
+        integer :: i, j
         integer :: funit
 
         l1b_file_id = MCS%input%l1b_file_id
+        output_file_id = MCS%output%output_file_id
 
 
         ! Create a datetime object for the current measurement
@@ -386,38 +463,20 @@ contains
                 call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
         end select
 
-        ! Here we grab the index limits for the radiance and solar spectra for
-        ! the choice of our microwindow.
-        l1b_wl_idx_min = 0
-        l1b_wl_idx_max = 0
-        solar_idx_min = 0
-        solar_idx_max = 0
-
-        ! This here grabs the boundaries of the L1b data
-        do i=1, size(dispersion, 1)
-            if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_min) then
-                l1b_wl_idx_min = i
-            end if
-            if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_max) then
-                l1b_wl_idx_max = i
-            end if
-            if (dispersion(i, i_fp, band) > MCS%window(i_win)%wl_max) then
-                exit
-            end if
-        end do
-
-        if (l1b_wl_idx_max < size(dispersion, 1)) then
-            l1b_wl_idx_max = l1b_wl_idx_max + 1
-        end if
-
-        if (l1b_wl_idx_max > size(dispersion, 1)) then
-            l1b_wl_idx_max = size(dispersion, 1)
-        end if
+        allocate(this_dispersion(size(radiance_l1b)))
+        allocate(this_dispersion_tmp(size(radiance_l1b)))
+        ! The dispersion coefficients use to generate this soundings' dispersion
+        ! has the same size as the L1b dispersion coefficient array
+        allocate(this_dispersion_coefs(size(dispersion_coefs, 1)))
+        allocate(this_dispersion_coefs_pert(size(dispersion_coefs, 1)))
 
         ! This here grabs the boundaries of the high-resolution solar spectrum.
         ! Depending on the instrument, we have to add some to
         ! the user-defined microwindow, such that we can peform the convolution
         ! to the pixels at the edge of microwindow.
+
+        solar_idx_min = 0
+        solar_idx_max = 0
 
         select type(my_instrument)
             type is (oco2_instrument)
@@ -440,26 +499,6 @@ contains
 
         ! Allocate the micro-window bounded solar and radiance arrays
         allocate(this_solar(solar_idx_max - solar_idx_min + 1, 2))
-        allocate(radiance_meas_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
-        allocate(radiance_calc_work(size(radiance_meas_work)))
-        allocate(noise_work(size(radiance_meas_work)))
-
-        ! Grab a copy of the L1b radiances
-        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
-
-        ! Now calculate the noise-equivalent radiances
-        select type(my_instrument)
-            type is (oco2_instrument)
-                call my_instrument%calculate_noise(snr_coefs, radiance_meas_work, &
-                                                   noise_work, i_fp, band, &
-                                                   l1b_wl_idx_min, l1b_wl_idx_max)
-        end select
-
-
-
-
-
-
         ! If solar doppler-shift is needed, calculate the distance and relative
         ! velocity between point of measurement and the (fixed) sun
 
@@ -473,60 +512,62 @@ contains
         this_solar(:,1) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 1) / (1.0d0 - solar_doppler)
         this_solar(:,2) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 2) * solar_irrad(solar_idx_min:solar_idx_max)
 
-
         ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
-        ! Grab a copy of the dispersion relation that's shifted according to
-        ! spacecraft velocity.
-        allocate(this_dispersion(size(radiance_meas_work)))
-        this_dispersion = dispersion(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band) / (1.0d0 - instrument_doppler)
 
-
-        write(*,*) "Earth RV: ", earth_rv
-        write(*,*) "Solar RV: ", solar_rv * 1000
-        write(*,*) "Relative velocity solar: ", relative_solar_velocity(i_fp, i_fr)
-        write(*,*) "Relative velocity instrument: ", relative_velocity(i_fp, i_fr)
-
-
-        write(*,*) "Solar doppler: ", solar_doppler
-        write(*,*) "Instrument doppler: ", instrument_doppler
+        ! write(*,*) "Earth RV: ", earth_rv
+        ! write(*,*) "Solar RV: ", solar_rv * 1000
+        ! write(*,*) "Relative velocity solar: ", relative_solar_velocity(i_fp, i_fr)
+        ! write(*,*) "Relative velocity instrument: ", relative_velocity(i_fp, i_fr)
+        !
+        !
+        ! write(*,*) "Solar doppler: ", solar_doppler
+        ! write(*,*) "Instrument doppler: ", instrument_doppler
 
 
         ! Set up retrieval quantities:
         N_sv = size(SV%svap)
-        N_spec = size(this_dispersion)
+        N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
+        N_spec_hi = size(this_solar, 1)
         lm_gamma = 1.0d0
 
-        allocate(K(N_spec, N_sv))
-        allocate(K_hi(size(this_solar, 1), N_sv))
-        allocate(Se_inv(N_spec, N_spec))
+        allocate(K_hi(N_spec_hi, N_sv))
         allocate(Sa_inv(N_sv, N_sv))
+        allocate(Shat_inv(N_sv, N_sv))
+        allocate(Shat(N_sv, N_sv))
         allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
         allocate(tmp_v1(N_sv), tmp_v2(N_sv))
 
-        ! Inverse noice covariance
-        Se_inv(:,:) = 0.0d0
-        do i=1, size(Se_inv, 1)
-            Se_inv(i,i) = 1 / (noise_work(i) ** 2)
-        end do
-
         ! Inverse prior covariance
         Sa_inv(:,:) = 0.0d0
-        Sa_inv(SV%idx_albedo(1), SV%idx_albedo(1)) = 1.0d0
-        Sa_inv(SV%idx_albedo(2), SV%idx_albedo(2)) = 1.0d0 / (0.25d0 ** 2)
-        Sa_inv(SV%idx_albedo(3), SV%idx_albedo(3)) = 1.0d0 / (0.1d0 ** 2)
-        Sa_inv(SV%idx_sif(1), SV%idx_sif(1)) = 1.0d0 / (1d18 ** 2)
+        if (SV%num_albedo > 0) then
+            Sa_inv(SV%idx_albedo(1), SV%idx_albedo(1)) = 1.0d0
+            do i=2, SV%num_albedo
+                Sa_inv(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0
+            end do
+        end if
+
+        if (SV%num_sif > 0) then
+            Sa_inv(SV%idx_sif(1), SV%idx_sif(1)) = 1.0d0 / (1d18 ** 2)
+        end if
 
         ! Populate state vector priors (this should also be read from config)
 
         ! Albedo
         select type(my_instrument)
             type is (oco2_instrument)
-        !        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
-        !        ! take that into account for the incoming solar irradiance
-                albedo_apriori = PI * maxval(radiance_meas_work(:)) / &
+                ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
+                ! take that into account for the incoming solar irradiance
+                albedo_apriori = PI * maxval(radiance_l1b(:)) / &
                 (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
         end select
+
+
+        if (albedo_apriori > 1) then
+            write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
+            call logger%error(fname, trim(tmp_str))
+            return
+        end if
 
         ! TODO: What do we do in case of invalid albedo (<0, >1)?
 
@@ -539,15 +580,18 @@ contains
         end if
 
         ! Start SIF with zero
-        SV%svap(SV%idx_sif(1)) = 0.0d0
-
-
-        !write(*,*) i_fp, i_fr, "Albedo: ", albedo_apriori, "Altitude: ", altitude(i_fp, i_fr), "Latitude: ", lat(i_fp, i_fr)
-        if (albedo_apriori > 1) then
-            write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
-            call logger%error(fname, trim(tmp_str))
-            return
+        if (SV%num_sif > 0) then
+            SV%svap(SV%idx_sif(1)) = 0.0d0
         end if
+
+        ! Dispersion
+        if (SV%num_dispersion > 0) then
+            ! Start with the L1b dispersion values as priors
+            do i=1, SV%num_dispersion
+                SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i,i_fp,band)
+            end do
+        end if
+
 
 
         ! Retrival iteration loop
@@ -563,12 +607,12 @@ contains
 
         do while (keep_iterating)
 
+
             if (iteration == 1) then
                 ! For the first iteration, we want to use the prior albedo
                 albedo(:) = albedo_apriori
                 ! and the state vector is the prior (maybe we want to change that later..)
                 SV%svsv = SV%svap
-                old_sv = SV%svap
             else
                 ! Otherwise, calculate it from the state vector
                 ! Obviously ONLY if we want to retrieve it, otherwise the albedo
@@ -579,8 +623,10 @@ contains
                         albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (i-1))
                     end do
                 endif
-                old_sv = SV%svsv
             endif
+
+            ! Save the old state vector
+            old_sv = SV%svsv
 
             ! Calculate the sun-normalized TOA radiances
             call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
@@ -599,7 +645,7 @@ contains
             ! this probably should go into the radiance module
             if (SV%num_albedo > 0) then
                 do i=1, SV%num_albedo
-                    K_hi(:, SV%idx_albedo(i)) =  this_solar(:,2) / PI * &
+                    K_hi(:, SV%idx_albedo(i)) = this_solar(:,2) / PI * &
                                               cos(DEG2RAD * SZA(i_fp, i_fr)) * &
                                   ((this_solar(:,1) - this_solar(1,1)) ** (i-1))
                 end do
@@ -609,74 +655,269 @@ contains
             radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * 0.5
 
 
+            ! Dispersion
+            this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
+            ! If required, replace dispersion coefficients by state vector
+            ! elements
+            if (SV%num_dispersion > 0) then
+                do i=1, SV%num_dispersion
+                    this_dispersion_coefs(i) = SV%svsv(SV%idx_dispersion(i))
+                end do
+            end if
+
+            ! Calculate the wavelength grid
+            select type(my_instrument)
+                type is (oco2_instrument)
+                    call my_instrument%calculate_dispersion(this_dispersion_coefs, &
+                                                            this_dispersion(:), band, i_fp)
+            end select
+
+            ! Grab a copy of the dispersion relation that's shifted according to
+            ! spacecraft velocity.
+            this_dispersion = this_dispersion / (1.0d0 - instrument_doppler)
+
+
+            ! Here we grab the index limits for the radiances for
+            ! the choice of our microwindow and the given dispersion relation
+            call calculate_dispersion_limits(this_dispersion, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
+
+            N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
+
+            allocate(radiance_meas_work(N_spec))
+            allocate(radiance_calc_work(N_spec))
+            allocate(radiance_tmp_work(N_spec))
+            allocate(noise_work(N_spec))
+
+            ! Grab a copy of the L1b radiances
+            radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
+
+            ! Now calculate the noise-equivalent radiances
+            select type(my_instrument)
+                type is (oco2_instrument)
+                    call my_instrument%calculate_noise(snr_coefs, radiance_meas_work, &
+                                                       noise_work, i_fp, band, &
+                                                       l1b_wl_idx_min, l1b_wl_idx_max)
+            end select
+
+            allocate(Se_inv(N_spec, N_spec))
+            ! Inverse noice covariance
+            Se_inv(:,:) = 0.0d0
+            do i=1, N_spec
+                Se_inv(i,i) = 1 / (noise_work(i) ** 2)
+            end do
+
+            allocate(K(N_spec, N_sv))
+
             ! Convolution with the instrument line shape function(s)
             ! Note: we are only passing the ILS arrays that correspond to the
             ! actual pixel boundaries of the chosen microwindow.
 
             select type(my_instrument)
             type is (oco2_instrument)
-                !call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
-                !                          ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                !                          ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                !                          this_dispersion, radiance_calc_work)
-
-                write(*,*) shape(ils_hires_delta_lambda)
-                write(*,*) shape(radiance_calc_work_hi)
-
 
                 call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
                                           ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                                           ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                                          this_dispersion, radiance_calc_work)
+                                          this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work)
 
                 do i=1, N_sv
+
+                    do j=1, SV%num_dispersion
+                        ! This is a dispersion jacobian! Maybe there's a way of doing
+                        ! this analytically, but for now we just perform finite
+                        ! differencing in a separate loop.
+                        if (i == SV%idx_dispersion(j)) then
+                            cycle
+                        end if
+                    end do
+
+                    ! Otherwise just convolve the other Jacobians
                     call oco_type_convolution(this_solar(:,1), K_hi(:,i), &
                                               ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                                               ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                                              this_dispersion, K(:,i))
+                                              this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i))
                 end do
             end select
 
+            ! Disperion Jacobians!
+            if (SV%num_dispersion > 0) then
+                do i=1, SV%num_dispersion
+
+                    ! Set prior covariance
+                    Sa_inv(SV%idx_dispersion(i), SV%idx_dispersion(i)) = 1.0d0 / MCS%window(i_win)%dispersion_cov(i)
+
+                    ! Allocate container for perturbed FM output
+
+                    ! Perturb dispersion coefficient by percentage
+                    this_dispersion_coefs_pert(:) = this_dispersion_coefs(:)
+                    this_dispersion_coefs_pert(i) = this_dispersion_coefs_pert(i) &
+                                                    + MCS%window(i_win)%dispersion_pert(i)
+
+                    ! And finally do the convolution and create the Jacobian by
+                    ! differencing / dividing.
+                    select type(my_instrument)
+                        type is (oco2_instrument)
+
+                            call my_instrument%calculate_dispersion(this_dispersion_coefs_pert, &
+                                                                    this_dispersion_tmp(:), band, i_fp)
+
+                            this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
+
+                            call calculate_dispersion_limits(this_dispersion_tmp, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
+
+                            ! Here's a good fudge. Sometimes, a change in disperison can alter the size of the
+                            ! radiance array, which would make the following operations unusable. A quick fix
+                            ! is to simply trim the new radiance array to the size of the old one.
+                            N_spec_tmp = l1b_wl_idx_max - l1b_wl_idx_min + 1
+                            if (N_spec_tmp /= N_spec) then
+                                !call logger%debug(fname, "Uh-oh, we need to fudge the radiance array size!")
+                                l1b_wl_idx_max = l1b_wl_idx_max - (N_spec_tmp - N_spec)
+                            end if
+
+                            call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
+                                        ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                        ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                                        this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work)
+
+                            ! Store the Jacobian into the right place in the matrix
+                            K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
+                                                          / MCS%window(i_win)%dispersion_pert(i)
+
+                    end select
+
+                end do
+            end if
+
             ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
-            tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv
-            tmp_m1 = tmp_m1 + matmul(matmul(transpose(K), Se_inv), K)
+            tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
             call invert_matrix(tmp_m1, tmp_m2)
 
             tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
             tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
 
+            ! Update state vector
             SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
 
-            write(*,*) "Iteration: ", iteration
-            do i=1, N_sv
-                write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i)
-            end do
+            ! Calculate Shat_inv
+            Shat_inv = matmul(matmul(transpose(K), Se_inv), K) + Sa_inv
+            call invert_matrix(Shat_inv, Shat)
 
-            write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+            ! Check delta sigma square for this iteration
+            dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
+
+            ! Print out SV for visual inspection!
+            ! write(*,*) "Iteration: ", iteration
+            ! do i=1, N_sv
+            !      write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), sqrt(Shat(i,i))
+            ! end do
+            ! !
+            ! write(*,*) "Dsigma_sq: ", dsigma_sq
+
             iteration = iteration + 1
 
-            if (iteration == 5) then
+            if (dsigma_sq < dble(N_sv)) then
                 keep_iterating = .false.
+                ! write(*,*) "Converged!"
+
+                ! open(file="l1b_spec.dat", newunit=funit)
+                ! do i=1, N_spec
+                !      write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+                !                     noise_work(i)
+                ! end do
+                ! close(funit)
+
+                do i=1, N_sv
+                    SV%sver(i) = sqrt(Shat(i,i))
+                end do
+
+                ! Save values
+                chi2(i_fp, i_fr) = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+                retrieved_sif_abs(i_fp, i_fr) = SV%svsv(SV%idx_sif(1))
+                retrieved_sif_rel(i_fp, i_fr) = retrieved_sif_abs(i_fp, i_fr) / maxval(radiance_meas_work)
+
+
+                ! if (i_fr == 51) then
+                ! write(*,*) "Prior, final state vector and errors"
+                ! do i=1, N_sv
+                !     write(*,*) i, SV%svap(i), SV%svsv(i), SV%sver(i)
+                ! end do
+                ! write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+                ! read(*,*)
+                ! end if
+
             end if
 
+            if (iteration > 10) then
+                call logger%warning(fname, "Not converged!")
+                keep_iterating = .false.
+
+                open(file="l1b_spec.dat", newunit=funit)
+                do i=1, N_spec
+                     write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+                                    noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
+                end do
+                close(funit)
+            end if
+
+            ! These quantities are all allocated within the iteration loop, and
+            ! hence need explicit de-allocation.
+            deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
+                       noise_work,Se_inv, K)
+
         end do
 
-        open(file="l1b_spec.dat", newunit=funit)
-        do i=1, size(this_dispersion)
-            write(funit,*) this_dispersion(i), radiance_meas_work(i), radiance_calc_work(i), &
-                           noise_work(i), bad_sample_list(l1b_wl_idx_min+i-1,i_fp,band)
-        end do
-        close(funit)
 
-        open(file="hires_spec.dat", newunit=funit)
-        do i=1, size(this_solar, 1)
-            write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
-                           solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
-        end do
-        close(funit)
+        !
+        !
+        ! open(file="hires_spec.dat", newunit=funit)
+        ! do i=1, size(this_solar, 1)
+        !     write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
+        !                    solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
+        ! end do
+        ! close(funit)
+        !
+        ! read(*,*)
 
     end subroutine physical_FM
 
+
+
+    subroutine calculate_dispersion_limits(this_dispersion, i_win, &
+                                           l1b_wl_idx_min, l1b_wl_idx_max)
+
+        implicit none
+        double precision, intent(in) :: this_dispersion(:)
+        integer, intent(in) :: i_win
+        integer, intent(inout) :: l1b_wl_idx_min, l1b_wl_idx_max
+
+        integer :: i
+
+        l1b_wl_idx_min = 0
+        l1b_wl_idx_max = 0
+
+        ! This here grabs the boundaries of the L1b data
+        do i=1, size(this_dispersion)
+            if (this_dispersion(i) < MCS%window(i_win)%wl_min) then
+                l1b_wl_idx_min = i
+            end if
+            if (this_dispersion(i) < MCS%window(i_win)%wl_max) then
+                l1b_wl_idx_max = i
+            end if
+            if (this_dispersion(i) > MCS%window(i_win)%wl_max) then
+                exit
+            end if
+        end do
+
+        if (l1b_wl_idx_max < size(this_dispersion)) then
+            l1b_wl_idx_max = l1b_wl_idx_max + 1
+        end if
+
+        if (l1b_wl_idx_max > size(this_dispersion)) then
+            l1b_wl_idx_max = size(this_dispersion)
+        end if
+
+
+    end subroutine
 
 
 end module

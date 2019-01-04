@@ -78,8 +78,14 @@ contains
                 valid_options(this_idx,3) = "wl_max"
                 valid_options(this_idx,4) = "basisfunctions"
                 valid_options(this_idx,5) = "gases"
-                valid_options(this_idx,6) = "albedo_apriori"
-                valid_options(this_idx,7) = "albedo_order"
+                valid_options(this_idx,6) = "statevector"
+                valid_options(this_idx,7) = "albedo_apriori"
+                valid_options(this_idx,8) = "albedo_order"
+                valid_options(this_idx,9) = "dispersion_order"
+                valid_options(this_idx,10) = "dispersion_perturbation"
+                valid_options(this_idx,11) = "dispersion_covariance"
+
+
         end do
 
 

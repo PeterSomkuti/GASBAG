@@ -161,29 +161,51 @@ contains
   endif
   endsubroutine get_sections_list
 
+
   function has_option(self, option_name, section_name) result(pres)
-  !< Inquire the presence of (at least one) option with the name passed.
-  !<
-  !< Optional, the first matching section name is returned.
-  !<
-  !< @note All sections are searched and the first occurence is returned.
+  ! Changed by Peter Somkuti, this now scans ONLY the corresponding section for
+  ! the presense of an option.
+
   class(file_ini),        intent(in)    :: self         !< File data.
   character(*),           intent(in)    :: option_name  !< Option name.
-  character(*), optional, intent(inout) :: section_name !< Section name.
+  character(*), optional, intent(in)    :: section_name !< Section name.
   logical                               :: pres         !< Inquiring flag.
   integer(I4P)                          :: s            !< Counter.
 
   pres = .false.
   if (allocated(self%sections)) then
     do s=1, size(self%sections, dim=1)
-      pres = (self%sections(s)%index(option_name=option_name)>0)
-      if (pres) then
-        if (present(section_name)) section_name = self%sections(s)%name()
-        exit
+      if (self%sections(s)%name() == trim(section_name)) then
+          pres = (self%sections(s)%index(option_name=option_name)>0)
       endif
     enddo
   endif
   endfunction has_option
+
+
+  ! function has_option(self, option_name, section_name) result(pres)
+  ! !< Inquire the presence of (at least one) option with the name passed.
+  ! !<
+  ! !< Optional, the first matching section name is returned.
+  ! !<
+  ! !< @note All sections are searched and the first occurence is returned.
+  ! class(file_ini),        intent(in)    :: self         !< File data.
+  ! character(*),           intent(in)    :: option_name  !< Option name.
+  ! character(*), optional, intent(inout) :: section_name !< Section name.
+  ! logical                               :: pres         !< Inquiring flag.
+  ! integer(I4P)                          :: s            !< Counter.
+  !
+  ! pres = .false.
+  ! if (allocated(self%sections)) then
+  !   do s=1, size(self%sections, dim=1)
+  !     pres = (self%sections(s)%index(option_name=option_name)>0)
+  !     if (pres) then
+  !       if (present(section_name)) section_name = self%sections(s)%name()
+  !       exit
+  !     endif
+  !   enddo
+  ! endif
+  ! endfunction has_option
 
   elemental function has_section(self, section_name) result(pres)
   !< Inquire the presence of (at least one) section with the name passed.

@@ -7,7 +7,7 @@ module statevector_mod
         integer :: num_albedo, num_sif, num_dispersion
         integer, dimension(:), allocatable :: idx_albedo, idx_sif, idx_dispersion
         ! State vector (current), state vector a priori
-        double precision, dimension(:), allocatable :: svsv, svap
+        double precision, dimension(:), allocatable :: svsv, svap, sver
         double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
     end type
 
@@ -54,6 +54,10 @@ contains
 
         ! Albedo: arbitrary number of parameters allowed
         if (sv%num_albedo > 0) then
+
+            write(tmp_str, '(A, G0.1)') "Number of albedo SV elements: ", sv%num_albedo
+            call logger%info(fname, trim(tmp_str))
+
             allocate(sv%idx_albedo(sv%num_albedo))
             do i=1, sv%num_albedo
                 sv_count = sv_count + 1
@@ -71,6 +75,10 @@ contains
         end if
 
         if (sv%num_sif > 0) then
+
+            write(tmp_str, '(A, G0.1)') "Number of SIF SV elements: ", sv%num_sif
+            call logger%info(fname, trim(tmp_str))
+
             allocate(sv%idx_sif(sv%num_sif))
             do i=1, sv%num_sif
                 sv_count = sv_count + 1
@@ -86,6 +94,10 @@ contains
         ! actually makes sense.
 
         if (sv%num_dispersion > 0) then
+
+            write(tmp_str, '(A, G0.1)') "Number of dispersion SV elements: ", sv%num_dispersion
+            call logger%info(fname, trim(tmp_str))
+
             allocate(sv%idx_dispersion(sv%num_dispersion))
             do i=1, sv%num_dispersion
                 sv_count = sv_count + 1
@@ -101,9 +113,11 @@ contains
 
         allocate(sv%svap(sv_count))
         allocate(sv%svsv(sv_count))
+        allocate(sv%sver(sv_count))
 
         sv%svap(:) = -9999.99
         sv%svsv(:) = -9999.99
+        sv%sver(:) = -9999.99
 
         allocate(sv%sv_ap_cov(sv_count, sv_count))
         allocate(sv%sv_post_cov(sv_count, sv_count))

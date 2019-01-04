@@ -5,6 +5,8 @@ module file_utils_mod
 
     use HDF5
     use logger_mod, only: logger => master_logger
+    use finer, only: file_ini
+    use stringifor, only: string
 
     implicit none
 
@@ -28,8 +30,17 @@ module file_utils_mod
         module procedure read_3D_INT_hdf_dataset
     end interface
 
+    interface fini_extract
+        module procedure fini_extract_DP
+        module procedure fini_extract_DP_array
+        module procedure fini_extract_INT
+        module procedure fini_extract_CHAR
+    end interface
+
     public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims, &
-           write_DP_hdf_dataset, read_DP_hdf_dataset, read_INT_hdf_dataset
+           check_fini_error, fini_extract, &
+           write_DP_hdf_dataset, &
+           read_DP_hdf_dataset, read_INT_hdf_dataset
 
 contains
 
@@ -197,10 +208,19 @@ contains
 
     subroutine check_hdf_error(hdferr, fname, msg)
         integer, intent(in) :: hdferr
-        character(len=*), intent(in) :: fname
-        character(len=*), intent(in) :: msg
+        character(len=*), intent(in) :: fname, msg
 
         if (hdferr < 0) then
+            call logger%fatal(fname, msg)
+            stop 1
+        end if
+    end subroutine
+
+    subroutine check_fini_error(fini_error, fname, msg)
+        integer, intent(in) :: fini_error
+        character(len=*), intent(in) :: fname, msg
+
+        if (fini_error /= 0) then
             call logger%fatal(fname, msg)
             stop 1
         end if
@@ -261,6 +281,110 @@ contains
         if (hdferr /= 0) then
             call logger%fatal(fname, "Error closing dataset " // trim(dset_name))
         end if
+
+    end subroutine
+
+
+    subroutine fini_extract_INT(fini, section_name, option_name, required, value)
+        integer, intent(inout) :: value
+        !!!!
+        type(file_ini), intent(in) :: fini
+        character(len=*), intent(in) :: section_name
+        character(len=*), intent(in) :: option_name
+
+        logical, intent(in) :: required
+        !!!
+        character(len=len(section_name)) :: section_name_fini
+        character(len=len(option_name)) :: option_name_fini
+
+        logical :: found_option
+        character(len=*), parameter :: fname = "fini_extract"
+        integer :: fini_error, section_index
+
+        value = -9999
+        include "Fini_extract.inc"
+
+    end subroutine
+
+    subroutine fini_extract_DP(fini, section_name, option_name, required, value)
+        double precision, intent(inout) :: value
+        !!!!
+        type(file_ini), intent(in) :: fini
+        character(len=*), intent(in) :: section_name
+        character(len=*), intent(in) :: option_name
+
+        logical, intent(in) :: required
+        !!!
+        character(len=len(section_name)) :: section_name_fini
+        character(len=len(option_name)) :: option_name_fini
+
+        logical :: found_option
+        character(len=*), parameter :: fname = "fini_extract"
+        integer :: fini_error, section_index
+
+        value = -9999.99d0
+        include "Fini_extract.inc"
+
+    end subroutine
+
+    subroutine fini_extract_DP_array(fini, section_name, option_name, required, &
+                                     value_array)
+        double precision, allocatable, intent(inout) :: value_array(:)
+        !!!!
+        type(file_ini), intent(in) :: fini
+        character(len=*), intent(in) :: section_name
+        character(len=*), intent(in) :: option_name
+        character(len=999) :: value
+
+        logical, intent(in) :: required
+        !!!
+        character(len=len(section_name)) :: section_name_fini
+        character(len=len(option_name)) :: option_name_fini
+
+        logical :: found_option
+        character(len=*), parameter :: fname = "fini_extract"
+        character(len=999) :: tmp_str
+        integer :: fini_error, section_index
+        type(string) :: fini_string
+        type(string), allocatable :: split_strings(:)
+        integer :: i
+
+        include "Fini_extract.inc"
+        ! This gives us a character variable with all the numbers in it
+
+        ! Convert to a string object
+        fini_string = trim(value)
+        ! And use the split function to get the single items out
+        call fini_string%split(tokens=split_strings, sep=' ')
+        ! Now allocate a double precision object according to the number of
+        ! splitted strings
+        allocate(value_array(size(split_strings)))
+        ! And cast the objects into double precision values
+        do i=1, size(split_strings)
+            tmp_str = trim(split_strings(i)%chars())
+            read(tmp_str, *) value_array(i)
+        end do
+
+    end subroutine
+
+    subroutine fini_extract_CHAR(fini, section_name, option_name, required, value)
+        character(len=*), intent(inout) :: value
+        !!!!
+        type(file_ini), intent(in) :: fini
+        character(len=*), intent(in) :: section_name
+        character(len=*), intent(in) :: option_name
+
+        logical, intent(in) :: required
+        !!!
+        character(len=len(section_name)) :: section_name_fini
+        character(len=len(option_name)) :: option_name_fini
+
+        logical :: found_option
+        character(len=*), parameter :: fname = "fini_extract"
+        integer :: fini_error
+
+        value = ""
+        include "Fini_extract.inc"
 
     end subroutine
 

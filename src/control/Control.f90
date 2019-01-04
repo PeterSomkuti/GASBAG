@@ -9,7 +9,7 @@ module control_mod
     use stringifor
     use finer, only: file_ini
     use logger_mod, only: logger => master_logger
-    use file_utils_mod, only: check_config_files_exist
+    use file_utils_mod, only: check_config_files_exist, check_fini_error, fini_extract
     use HDF5
 
     implicit none
@@ -46,6 +46,10 @@ module control_mod
         double precision :: wl_min
         double precision :: wl_max
         type(string) :: basisfunction_file
+        ! How many parameters of various state vector elements do we want to
+        ! retrieve (physical retrieval only)
+        integer :: albedo_order, dispersion_order
+        double precision, allocatable :: dispersion_pert(:), dispersion_cov(:)
     end type
 
     type, private :: CS_input
@@ -96,6 +100,8 @@ contains
         character(len=999) :: fini_char
         type(string) :: fini_string
         double precision :: fini_val
+        double precision, allocatable :: fini_val_array(:)
+        integer :: fini_int
 
         integer :: window_nr
         integer :: i
@@ -269,28 +275,15 @@ contains
 
 
         ! Outputs section ------------------------------------------------------
-        call fini%get(section_name='output', option_name='output_file', &
-                      val=fini_char, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Error reading output file name")
-            stop 1
-        end if
-
+        call fini_extract(fini, 'output', 'output_file', .true., fini_char)
         MCS%output%output_filename = trim(fini_char)
-
 
         ! ----------------------------------------------------------------------
 
         ! Instrument section ---------------------------------------------------
 
         ! Get instrument name
-        call fini%get(section_name='instrument', option_name='name', &
-                      val=fini_char, error=fini_error)
-        if (fini_error /= 0) then
-            call logger%fatal(fname, "Error reading instrument name")
-            stop 1
-        end if
-
+        call fini_extract(fini, 'instrument', 'name', .true., fini_char)
         MCS%input%instrument_name = trim(fini_char)
         ! ----------------------------------------------------------------------
 
@@ -303,45 +296,53 @@ contains
 
             ! Is window "window_nr" in the config-file?
             write(tmp_str, '(A, G0.1)') "window-", window_nr
+            tmp_str = trim(tmp_str)
+
             if (fini%has_section(section_name=tmp_str)) then
 
+                ! Let's start with the required one's first!
                 MCS%window(window_nr)%used = .true.
 
-                call fini%get(section_name=tmp_str, option_name='name', &
-                              val=fini_char, error=fini_error)
-                if (fini_error /= 0) then
-                    call logger%fatal(fname, "Could not read name in window section!")
-                    stop 1
-                else
-                    MCS%window(window_nr)%name = trim(fini_char)
+                call fini_extract(fini, tmp_str, 'name', .true., fini_char)
+                MCS%window(window_nr)%name = trim(fini_char)
+
+                call fini_extract(fini, tmp_str, 'wl_min', .true., fini_val)
+                MCS%window(window_nr)%wl_min = fini_val
+
+                call fini_extract(fini, tmp_str, 'wl_max', .true., fini_val)
+                MCS%window(window_nr)%wl_max = fini_val
+
+                ! The rest is potentially optional. Whether a certain option is
+                ! required for a given retrieval setting, will be checked later
+                ! on in the code, usually when it's needed the first time
+
+                call fini_extract(fini, tmp_str, 'basisfunctions', .false., fini_char)
+                MCS%window(window_nr)%basisfunction_file = trim(fini_char)
+
+                call fini_extract(fini, tmp_str, 'albedo_order', .false., fini_int)
+                MCS%window(window_nr)%albedo_order = fini_int
+
+                call fini_extract(fini, tmp_str, 'dispersion_order', .false., fini_int)
+                MCS%window(window_nr)%dispersion_order = fini_int
+
+                call fini_extract(fini, tmp_str, 'dispersion_perturbation', .false., fini_val_array)
+                if (allocated(fini_val_array)) then
+                    allocate(MCS%window(window_nr)%dispersion_pert(size(fini_val_array)))
+                    do i=1, size(fini_val_array)
+                        MCS%window(window_nr)%dispersion_pert(i) = fini_val_array(i)
+                    end do
+                    deallocate(fini_val_array)
                 end if
 
-                call fini%get(section_name=tmp_str, option_name='wl_min', &
-                              val=fini_val, error=fini_error)
-                if (fini_error /= 0) then
-                    call logger%fatal(fname, "Could not read wl_min in window section!")
-                    stop 1
-                else
-                    MCS%window(window_nr)%wl_min = fini_val
+                call fini_extract(fini, tmp_str, 'dispersion_covariance', .false., fini_val_array)
+                if (allocated(fini_val_array)) then
+                    allocate(MCS%window(window_nr)%dispersion_cov(size(fini_val_array)))
+                    do i=1, size(fini_val_array)
+                        MCS%window(window_nr)%dispersion_cov(i) = fini_val_array(i)
+                    end do
+                    deallocate(fini_val_array)
                 end if
 
-                call fini%get(section_name=tmp_str, option_name='wl_max', &
-                              val=fini_val, error=fini_error)
-                if (fini_error /= 0) then
-                    call logger%fatal(fname, "Could not read wl_ax in window section!")
-                    stop 1
-                else
-                    MCS%window(window_nr)%wl_max = fini_val
-                end if
-
-                call fini%get(section_name=tmp_str, option_name='basisfunctions', &
-                              val=fini_char, error=fini_error)
-                if (fini_error /= 0) then
-                    call logger%fatal(fname, "Could not read wl_ax in window section!")
-                    stop 1
-                else
-                    MCS%window(window_nr)%basisfunction_file = trim(fini_char)
-                end if
             else
                 MCS%window(window_nr)%used = .false.
             end if

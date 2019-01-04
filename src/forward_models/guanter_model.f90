@@ -75,7 +75,7 @@ contains
         ! And also create the result group in the output file
         call h5gcreate_f(output_file_id, "linear_fluorescence_results", &
                          sif_result_gid, hdferr)
-        call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+        call check_hdf_error(hdferr, fname, "Error. Could not create group: linear_fluorescence_results")
 
         ! The strategy of this retrieval is:
         ! 1) Read necessary quantities from HDF files (basisfunctions, dispersion, noise)
@@ -143,7 +143,7 @@ contains
 
                 do band=1,3
                     do fp=1,8
-                        call my_instrument%calculate_dispersion(dispersion_coefs, dispersion(:,fp,band), band, fp)
+                        call my_instrument%calculate_dispersion(dispersion_coefs(:,fp,band), dispersion(:,fp,band), band, fp)
                     end do
                 end do
 

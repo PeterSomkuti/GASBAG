@@ -63,8 +63,8 @@ contains
             stop 1
         end if
 
-        write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), ", &
-                                        number of frames: ", n_fp_frames(2)
+        write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), &
+                                         ", number of frames: ", n_fp_frames(2)
         call logger%info(fname, trim(msg))
         write(msg, "(A, G0.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
         call logger%info(fname, trim(msg))
@@ -146,7 +146,7 @@ contains
 
     subroutine calculate_dispersion(disp_coef, dispersion, band, fp)
 
-        double precision, intent(in) :: disp_coef(:,:,:)
+        double precision, intent(in) :: disp_coef(:)
         double precision, intent(out) :: dispersion(:)
         integer, intent(in) :: band, fp
         integer :: pix, order
@@ -155,7 +155,7 @@ contains
 
         do pix=1, 1016
             do order=1, 6
-                dispersion(pix) = dispersion(pix) + (dble(pix) ** (order-1) * disp_coef(order,fp,band))
+                dispersion(pix) = dispersion(pix) + (dble(pix) ** (order-1) * disp_coef(order))
             end do
         end do
 

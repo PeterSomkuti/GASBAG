@@ -305,6 +305,7 @@ contains
 
                 call fini_extract(fini, tmp_str, 'name', .true., fini_char)
                 MCS%window(window_nr)%name = trim(fini_char)
+                write(*,*) "Window ", window_nr, "has name", trim(fini_char)
 
                 call fini_extract(fini, tmp_str, 'wl_min', .true., fini_val)
                 MCS%window(window_nr)%wl_min = fini_val

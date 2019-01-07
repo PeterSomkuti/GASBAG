@@ -63,8 +63,8 @@ contains
             idx_min = -1
             idx_max = -1
 
-            call find_closest_index_DP(solar_spectrum(:,1), wl_min, idx_min)
-            call find_closest_index_DP(solar_spectrum(:,1), wl_max, idx_max)
+            idx_min = find_closest_index_DP(solar_spectrum(:,1), wl_min)
+            idx_max = find_closest_index_DP(solar_spectrum(:,1), wl_max)
 
             allocate(tmp_array(idx_max - idx_min + 1, 2))
             tmp_array(:,:) = solar_spectrum(idx_min:idx_max, :)
@@ -144,7 +144,7 @@ contains
 
         double precision, parameter :: EARTH_ROT_SPD = 7.2921150D-5
         double precision, parameter :: CON = 6.73951496D-3
-        double precision, parameter :: EARTH_RADIUS = 6378.137
+        double precision, parameter :: EARTH_RADIUS = 6378.137 ! [km]
 
         double precision :: gclat, gcrad
 
@@ -155,16 +155,19 @@ contains
 
      end subroutine
 
-     subroutine calculate_solar_planck_function(temp, wavelength, irradiance)
+     subroutine calculate_solar_planck_function(temp, solar_distance, wavelength, irradiance)
          implicit none
-         double precision, intent(in) :: temp
+         double precision, intent(in) :: temp ![K]
+         double precision, intent(in) :: solar_distance ! [m]
          double precision, dimension(:), intent(in) :: wavelength ! in microns
 
          double precision, dimension(:), allocatable, intent(out) :: irradiance
          double precision, parameter :: SPEED_OF_LIGHT = 299792458d+0
          double precision, parameter :: PLANCK_CONST = 6.62607015d-34
          double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
-         double precision, parameter :: SUN_APP_SIZE = 6.807d-5
+        double precision, parameter :: SOLAR_RADIUS = 695.660d6 ! [m] 
+
+         double precision :: solar_solid_angle, solar_angular_radius
 
          double precision, dimension(:), allocatable :: denom
 
@@ -173,11 +176,12 @@ contains
 
          ! Wavelength comes in as microns, so convert them to meters
 
+         solar_angular_radius = atan(SOLAR_RADIUS / solar_distance)
+         solar_solid_angle = PI * solar_angular_radius * solar_angular_radius
+
          irradiance(:) = 2d18 * SPEED_OF_LIGHT / ((wavelength(:))**4)
          denom(:) = exp(1d6 * PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * BOLTZMANN_CONST * temp)) - 1.0d0
-         ! The factor 6.805d-5 is the apparent size of the sun as seen from the Earth
-         ! (on average)
-         irradiance(:) = SUN_APP_SIZE * irradiance(:) / denom(:)
+         irradiance(:) = solar_solid_angle * irradiance(:) / denom(:)
 
          !irradiance(:) = 2 * PLANCK_CONST * (SPEED_OF_LIGHT**2) / ((wavelength(:) * 1d-6) ** 5)
          !denom(:) = exp(PLANCK_CONST * SPEED_OF_LIGHT / (wavelength(:) * 1d-6 * BOLTZMANN_CONST * temp)) - 1.0d0

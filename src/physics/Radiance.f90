@@ -16,6 +16,8 @@ contains
 
         radiance(:) = albedo(:) / PI * cos(DEG2RAD * SZA)
 
+        !radiance(:) = albedo(:)
+
     end subroutine
 
 

@@ -46,7 +46,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O3")
+  set(opt "-O3 -mtune=native")
   set(bounds "-fbounds-check")
 else()
   # only support Gfortran for now
@@ -59,8 +59,9 @@ else()
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-g ${bounds} ${warnings}")
+set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} ${warnings}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
+set(CMAKE_Fortran_FLAGS_PROFILE "-O2 -pg ${warnings}")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.

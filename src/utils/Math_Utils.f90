@@ -55,7 +55,7 @@ contains
         end if
 
         ! Main loop over all (instrument) output pixels
-        do idx_pix=1, N_pix
+        do concurrent (idx_pix=1:N_pix)
 
             ! Note the ILS boundary in wavelength space
             ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
@@ -67,8 +67,11 @@ contains
             idx_hires_ILS_min = -1
             idx_hires_ILS_max = -1
 
-            call find_closest_index_DP(wl_input, wl_output(idx_pix), idx_hires_closest)
-            call find_closest_index_DP(wl_input, ILS_delta_min, idx_hires_ILS_min)
+
+            idx_hires_ILS_min = minloc(abs(wl_input - ILS_delta_min), dim=1)
+
+            !idx_hires_closest = find_closest_index_DP(wl_input, wl_output(idx_pix))
+            !idx_hires_ILS_min = find_closest_index_DP(wl_input, ILS_delta_min)
             idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
             !call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
 
@@ -94,6 +97,12 @@ contains
                 !write(*,*) '--------------'
                 !write(*,*) shape(kernels)
                 !write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max-idx_hires_ILS_min
+
+                if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
+                    write(*,*) "dimension issue in oco_convolution routine"
+                    !stop 1
+                end if
+
 
                 output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
                                  / sum(kernels(:, idx_pix))
@@ -122,12 +131,8 @@ contains
 
         do i=1, size(x_hires)
 
-            if (mod(i, 10000) == 0) then
-                write(*,*) i, size(x_hires)
-            end if
-
             ! Between which to lowres values is our hires value?
-            call find_closest_index_DP(x_lowres, x_hires(i), idx_closest)
+            idx_closest = minloc(abs(x_lowres - x_hires(i)), dim=1) !find_closest_index_DP(x_lowres, x_hires(i))
             if (x_lowres(idx_closest) < x_hires(i)) then
                 idx_right = idx_closest + 1
                 idx_left = idx_closest
@@ -153,11 +158,11 @@ contains
 
     end subroutine
 
-    subroutine find_closest_index_DP(array, value, index)
+    pure function find_closest_index_DP(array, value) result(index)
 
         implicit none
         double precision, intent(in) :: array(:), value
-        integer, intent(inout) :: index
+        integer :: index
 
         double precision :: old_diff, diff
         integer :: i
@@ -172,7 +177,7 @@ contains
             end if
         end do
 
-    end subroutine
+    end function
 
 
     pure function single_convolve(input, kernel)

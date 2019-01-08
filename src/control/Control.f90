@@ -14,59 +14,84 @@ module control_mod
 
     implicit none
 
+    ! These numbers sadly have to be hardcoded, as we cannot (easily) just
+    ! extend the size of these arrays without a more complicated deallocation
+    ! and reallocation procedure.
+
     ! At the moment, we only plan the Guanter and Frankenberg methods
     integer, parameter :: MAX_ALGORITHMS = 2
-    ! Why would you even need more than 2?
-    integer, parameter :: MAX_WINDOWS = 5
+    ! Number of retrieval windows
+    integer, parameter :: MAX_WINDOWS = 10
+    ! Number of absorbers
+    integer, parameter :: MAX_GASES = 10
 
     type, private :: CS_general
         integer(8) :: N_soundings ! Number of soundings to be processed
     end type
 
     type, private :: CS_algorithm
-        type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
-        integer :: N_algorithms ! How many do we want to actually use?
-        integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
-        logical :: using_GK_SIF ! Do we use the Guanter-type retrival?
-        logical :: using_physical ! Do we use a physics-based retrieval?
-        type(string) :: solar_file ! Path to the solar model file_exists
-        type(string) :: solar_type ! Which type of solar model?
-    end type
-
-    type, private :: CS_gas
-        type(string) :: name ! Name of the gas
-        type(string) :: filename ! Path to the filename
-        type(string) :: filetype ! Type of the file (ABSCO, ..)
-        double precision :: wl_min, wl_max ! spectral range of the cross sections
-    end type
+       type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
+       integer :: N_algorithms ! How many do we want to actually use?
+       integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
+       logical :: using_GK_SIF ! Do we use the Guanter-type retrival?
+       logical :: using_physical ! Do we use a physics-based retrieval?
+       type(string) :: solar_file ! Path to the solar model file_exists
+       type(string) :: solar_type ! Which type of solar model?
+    end type CS_algorithm
 
     type, private :: CS_window
-        logical :: used ! Is this CS_window structure used?
-        type(string) :: name
-        double precision :: wl_min
-        double precision :: wl_max
-        type(string) :: basisfunction_file
-        ! How many parameters of various state vector elements do we want to
-        ! retrieve (physical retrieval only)
-        integer :: albedo_order, dispersion_order
-        double precision, allocatable :: dispersion_pert(:), dispersion_cov(:)
-    end type
+       logical :: used ! Is this CS_window structure used?
+       type(string) :: name
+       double precision :: wl_min
+       double precision :: wl_max
+       type(string) :: basisfunction_file
+       ! How many parameters of various state vector elements do we want to
+       ! retrieve (physical retrieval only)
+       integer :: albedo_order, dispersion_order
+       double precision, allocatable :: dispersion_pert(:), dispersion_cov(:)
+       type(string), allocatable :: gases(:)
+       ! This gas_index variable holds the information about which gas-section (CS_gas)
+       ! index corresponds to the gas that is stored in 'gases'
+       integer, allocatable :: gas_index(:)
+    end type CS_window
 
     type, private :: CS_input
-        type(string) :: l1b_filename , met_filename! Path to the L1B/MET file
-        integer(hid_t) :: l1b_file_id, met_file_id ! HDF file handler of L1B/MET file
-        type(string) :: instrument_name ! Name of the instrument
-    end type
+       type(string) :: l1b_filename , met_filename! Path to the L1B/MET file
+       integer(hid_t) :: l1b_file_id, met_file_id ! HDF file handler of L1B/MET file
+       type(string) :: instrument_name ! Name of the instrument
+    end type CS_input
 
     type, private :: CS_output
-        type(string) :: output_filename ! Where does the ouptut HDF file go?
-        integer(hid_t) :: output_file_id
-    end type
+       type(string) :: output_filename ! Where does the ouptut HDF file go?
+       integer(hid_t) :: output_file_id
+    end type CS_output
+
+    type, private :: CS_gas
+       logical :: used ! Is this CS_gas used?
+       type(string) :: name ! Name of the gas/absorber, this will be cross-referenced
+       ! against the names in the CS_window%gases structure to find out which gases
+       ! are to be used in the retrieval window.
+       type(string) :: type
+       type(string) :: filename
+
+       ! At the time, we are using JPL ABSCO tables, which are 4-dimensional.
+       ! Should we ever want to use different spectroscopy in the future, where the
+       ! dimensionality is different, we sadly would need to either extend the array
+       ! dimensions, or not use superfluous dimensions. During the calculation of
+       ! optical properties, the type of spectroscopy will thus have to be referred to.
+       double precision, allocatable :: cross_section(:,:,:,:)
+       ! The wavelength dimension
+       double precision, allocatable :: wavelength(:)
+       ! The temperature, pressure and humidity dimensions of the cross sections
+       double precision, allocatable :: T(:), p(:), SH(:)
+    end type CS_gas
+
 
     ! Main control_mod structure type
     type, private :: CS
         type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
-        type(CS_window), dimension(MAX_WINDOWS) :: window
+        type(CS_window) :: window(MAX_WINDOWS) ! Retrieval windows
+        type(CS_gas) :: gas(MAX_GASES) ! Absorbers
         type(CS_input) :: input ! Input files needed by the program
         type(CS_output) :: output ! Output file path(s)
         type(CS_general) :: general
@@ -101,9 +126,10 @@ contains
         type(string) :: fini_string
         double precision :: fini_val
         double precision, allocatable :: fini_val_array(:)
+        type(string), allocatable :: fini_string_array(:)
         integer :: fini_int
 
-        integer :: window_nr
+        integer :: window_nr, gas_nr
         integer :: i
         logical :: file_exists
 
@@ -303,9 +329,11 @@ contains
                 ! Let's start with the required one's first!
                 MCS%window(window_nr)%used = .true.
 
+                ! Third argument in 'fini_extract' tells the function whether this
+                ! is a required config setting or not. If a required setting is not found,
+                ! the program will terminate with a useful error message.
                 call fini_extract(fini, tmp_str, 'name', .true., fini_char)
                 MCS%window(window_nr)%name = trim(fini_char)
-                write(*,*) "Window ", window_nr, "has name", trim(fini_char)
 
                 call fini_extract(fini, tmp_str, 'wl_min', .true., fini_val)
                 MCS%window(window_nr)%wl_min = fini_val
@@ -334,15 +362,29 @@ contains
                     end do
                     deallocate(fini_val_array)
                 end if
-
+                
                 call fini_extract(fini, tmp_str, 'dispersion_covariance', .false., fini_val_array)
                 if (allocated(fini_val_array)) then
                     allocate(MCS%window(window_nr)%dispersion_cov(size(fini_val_array)))
                     do i=1, size(fini_val_array)
-                        MCS%window(window_nr)%dispersion_cov(i) = fini_val_array(i)
-                    end do
+                       MCS%window(window_nr)%dispersion_cov(i) = fini_val_array(i)
+                     end do
                     deallocate(fini_val_array)
-                end if
+                 end if
+
+                 call fini_extract(fini, tmp_str, 'gases', .false., fini_string_array)
+                 if (allocated(fini_string_array)) then
+                    allocate(MCS%window(window_nr)%gases(size(fini_string_array)))
+                    ! Also allocate the gas_index variable for this window
+                    allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
+
+                    do i=1, size(fini_string_array)
+                       MCS%window(window_nr)%gases(i) = fini_string_array(i)
+                    end do
+                    deallocate(fini_string_array)
+                 end if
+
+
 
             else
                 MCS%window(window_nr)%used = .false.
@@ -350,6 +392,33 @@ contains
         end do
 
         ! ----------------------------------------------------------------------
+
+        ! Gases section --------------------------------------------------------
+        ! This is done exactly the same as the windows section above.
+
+        do gas_nr=1, MAX_GASES
+
+           ! Is window "window_nr" in the config-file?
+           write(tmp_str, '(A, G0.1)') "gas-", gas_nr
+           tmp_str = trim(tmp_str)
+
+           if (fini%has_section(section_name=tmp_str)) then
+
+              MCS%gas(gas_nr)%used = .true.
+
+              call fini_extract(fini, tmp_str, 'name', .true., fini_char)
+              MCS%gas(gas_nr)%name = trim(fini_char)
+
+              call fini_extract(fini, tmp_str, 'spectroscopy_type', .true., fini_char)
+              MCS%gas(gas_nr)%type = trim(fini_char)
+
+              call fini_extract(fini, tmp_str, 'spectroscopy_file', .true., fini_char)
+              MCS%gas(gas_nr)%filename = trim(fini_char)
+
+           else
+              MCS%gas(gas_nr)%used = .false.
+           end if
+        end do
 
     end subroutine
 

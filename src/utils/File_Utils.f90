@@ -35,6 +35,7 @@ module file_utils_mod
         module procedure fini_extract_DP_array
         module procedure fini_extract_INT
         module procedure fini_extract_CHAR
+        module procedure fini_extract_STRING_array
     end interface
 
     public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims, &
@@ -385,6 +386,45 @@ contains
 
         value = ""
         include "Fini_extract.inc"
+
+    end subroutine
+
+    subroutine fini_extract_STRING_array(fini, section_name, option_name, required, &
+         value_array)
+        type(string), allocatable, intent(inout) :: value_array(:)
+        !!!!
+        type(file_ini), intent(in) :: fini
+        character(len=*), intent(in) :: section_name
+        character(len=*), intent(in) :: option_name
+        character(len=999) :: value
+
+        logical, intent(in) :: required
+        !!!
+        character(len=len(section_name)) :: section_name_fini
+        character(len=len(option_name)) :: option_name_fini
+
+        logical :: found_option
+        character(len=*), parameter :: fname = "fini_extract"
+        character(len=999) :: tmp_str
+        integer :: fini_error, section_index
+        type(string) :: fini_string
+        type(string), allocatable :: split_strings(:)
+        integer :: i
+
+        include "Fini_extract.inc"
+        ! This gives us a character variable with all the substrings in it
+
+        ! Convert to a string object
+        fini_string = trim(value)
+        ! And use the split function to get the single items out
+        call fini_string%split(tokens=split_strings, sep=' ')
+        ! Now allocate a double precision object according to the number of
+        ! splitted strings
+        allocate(value_array(size(split_strings)))
+        ! And cast the objects into double precision values
+        do i=1, size(split_strings)
+            value_array(i) = trim(split_strings(i)%chars())
+        end do
 
     end subroutine
 

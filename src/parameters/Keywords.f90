@@ -6,7 +6,7 @@
 module keywords_mod
 
     use stringifor, only: string
-    use control_mod, only: MAX_WINDOWS
+    use control_mod, only: MAX_WINDOWS, MAX_GASES
 
     implicit none
 
@@ -25,7 +25,7 @@ contains
 
         implicit none
         character(len=99) :: tmp_str
-        integer :: window_start, window_nr, this_idx
+        integer :: window_start, window_nr, gas_start, gas_nr, this_idx
 
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         ! Everything is lowercase here!!
@@ -72,7 +72,8 @@ contains
         do window_nr=1, MAX_WINDOWS
             write(tmp_str, '(A, G0.1)') "window-", window_nr
             this_idx = window_start + window_nr
-                valid_sections(this_idx) = trim(tmp_str)
+
+            valid_sections(this_idx) = trim(tmp_str)
                 valid_options(this_idx,1) = "name"
                 valid_options(this_idx,2) = "wl_min"
                 valid_options(this_idx,3) = "wl_max"
@@ -84,10 +85,19 @@ contains
                 valid_options(this_idx,9) = "dispersion_order"
                 valid_options(this_idx,10) = "dispersion_perturbation"
                 valid_options(this_idx,11) = "dispersion_covariance"
-
-
         end do
 
+        ! Section for gases
+        gas_start = this_idx
+        do gas_nr=1, MAX_GASES
+           write(tmp_str, '(A, G0.1)') "gas-", gas_nr
+           this_idx = gas_start + gas_nr
+
+           valid_sections(this_idx) = trim(tmp_str)
+               valid_options(this_idx,1) = "name"
+               valid_options(this_idx,2) = "spectroscopy_type"
+               valid_options(this_idx,3) = "spectroscopy_file"
+        end do
 
     end subroutine
 

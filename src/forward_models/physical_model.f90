@@ -507,10 +507,6 @@ contains
                 call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
         end select
 
-        if (log_retrieval) then
-           radiance_l1b = log(radiance_l1b)
-        end if
-
 
         allocate(this_dispersion(size(radiance_l1b)))
         allocate(this_dispersion_tmp(size(radiance_l1b)))
@@ -565,15 +561,10 @@ contains
         ! Since we now have the solar distance, we can calculate the proper solar
         ! continuum for the given day of the year.
         allocate(solar_irrad(size(this_solar, 1)))
-        call calculate_solar_planck_function(6000.d0, solar_dist * 1000.d0, &
+        call calculate_solar_planck_function(5800.d0, solar_dist * 1000.d0, &
              this_solar(:,1), solar_irrad)
         ! And multiply to get the solar irradiance in physical units
         this_solar(:,2) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 2) * solar_irrad(:)
-
-
-        if (log_retrieval) then
-           this_solar(:,2) = log(this_solar(:,2))
-        end if
 
         ! Correct for instrument doppler shift
         instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
@@ -621,18 +612,19 @@ contains
                 ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
                 ! take that into account for the incoming solar irradiance
 
-                albedo_apriori = PI * maxval(radiance_l1b(:)) / &
+                
+                albedo_apriori = PI * maxval(radiance_l1b) / &
                      (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
-
 
         end select
 
+        if (albedo_apriori > 1) then
+           write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
+           call logger%error(fname, trim(tmp_str))
 
-         if (albedo_apriori > 1) then
-             write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
-             call logger%error(fname, trim(tmp_str))
-        !     return
-         end if
+           !     return
+        end if
+ 
 
         ! TODO: What do we do in case of invalid albedo (<0, >1)?
 
@@ -682,7 +674,7 @@ contains
                 ! Otherwise, calculate it from the state vector
                 ! Obviously ONLY if we want to retrieve it, otherwise the albedo
                 ! will just stay at the prior value.
-                if (SV%num_albedo > 0) then
+               if (SV%num_albedo > 0) then
                     albedo = 0.0d0
                     do i=1, SV%num_albedo
                         albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (dble(i-1)))
@@ -705,18 +697,18 @@ contains
 
             ! Plug in the Jacobians (SIF is easy)
             if (SV%num_sif > 0) then
-                K_hi(:, SV%idx_sif(1)) = 1.0d0
+               K_hi(:, SV%idx_sif(1)) = 1.0d0
             end if
+
             ! this probably should go into the radiance module
             if (SV%num_albedo > 0) then
-                do i=1, SV%num_albedo
-                    K_hi(:, SV%idx_albedo(i)) = this_solar(:,2) / PI * &
-                         cos(DEG2RAD * SZA(i_fp, i_fr)) * &
-                         ((this_solar(:,1) - this_solar(1,1)) ** (dble(i)-1.0d0))
+               do i=1, SV%num_albedo
+                  K_hi(:, SV%idx_albedo(i)) = this_solar(:,2) / PI * &
+                       cos(DEG2RAD * SZA(i_fp, i_fr)) * &
+                       ((this_solar(:,1) - this_solar(1,1)) ** (dble(i)-1.0d0))
+               end do
 
-                !  K_hi(:, SV%idx_albedo(i)) = ((this_solar(:,1) - this_solar(1,1)) ** (dble(i)-1.0d0))
 
-                end do
             end if
 
             ! Stokes coefficients
@@ -843,6 +835,7 @@ contains
                             ! radiance array, which would make the following operations unusable. A quick fix
                             ! is to simply trim the new radiance array to the size of the old one.
                             N_spec_tmp = l1b_wl_idx_max - l1b_wl_idx_min + 1
+
                             if (N_spec_tmp /= N_spec) then
                                 !call logger%debug(fname, "Uh-oh, we need to fudge the radiance array size!")
                                 l1b_wl_idx_max = l1b_wl_idx_max - (N_spec_tmp - N_spec)
@@ -854,30 +847,31 @@ contains
                                  this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work)
 
                             ! Store the Jacobian into the right place in the matrix
-                            K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
-                                                          / MCS%window(i_win)%dispersion_pert(i)
-
+                               K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
+                                    / MCS%window(i_win)%dispersion_pert(i)
                     end select
 
                 end do
             end if
 
             ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
-            tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
+            !tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
+            tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
+
             call invert_matrix(tmp_m1, tmp_m2)
 
             tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
             tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
 
             ! Update state vector
-            SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+            SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1) ! - tmp_v2)
 
             ! Calculate Shat_inv
-            Shat_inv = matmul(matmul(transpose(K), Se_inv), K) + Sa_inv
+            Shat_inv = tmp_m1 !matmul(matmul(transpose(K), Se_inv), K)! + Sa_inv
             call invert_matrix(Shat_inv, Shat)
 
             ! Check delta sigma square for this iteration
-            dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 10.0d0
+            dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.1d0
 
 
 
@@ -885,31 +879,31 @@ contains
                 SV%sver(i) = sqrt(Shat(i,i))
             end do
 
-            ! write(*,*) "Prior, current state vector and errors"
-            ! write(*,*) "Iteration: ", iteration-1
-            ! do i=1, N_sv
-            !      write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), SV%sver(i)
-            !  end do
-            ! write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-            !
-            ! open(file="l1b_spec.dat", newunit=funit)
-            ! do i=1, N_spec
-            !      write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-            !                     noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
-            ! end do
-            ! close(funit)
-            !
-            ! write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
-            ! open(file=trim(tmp_str), newunit=funit)
-            ! do i=1, N_spec
-            !      write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-            !                     noise_work(i)
-            ! end do
-            ! close(funit)
-
-
-            !
-            ! read(*,*)
+!!$             write(*,*) "Prior, current state vector and errors"
+!!$             write(*,*) "Iteration: ", iteration-1
+!!$             do i=1, N_sv
+!!$                 write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), SV%sver(i)
+!!$              end do
+!!$             write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$            
+!!$             open(file="l1b_spec.dat", newunit=funit)
+!!$             do i=1, N_spec
+!!$                  write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$                                 noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
+!!$             end do
+!!$             close(funit)
+!!$            
+!!$             write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
+!!$             open(file=trim(tmp_str), newunit=funit)
+!!$             do i=1, N_spec
+!!$                  write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$                                 noise_work(i)
+!!$             end do
+!!$             close(funit)
+!!$
+!!$
+!!$            !
+!!$             read(*,*)
 
             if (dsigma_sq < dble(N_sv)) then
                 keep_iterating = .false.

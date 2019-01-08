@@ -257,14 +257,6 @@ contains
         integer(hid_t) :: dset_id
         integer :: i, hdferr
 
-        !dims(1) = 3
-        !call h5dopen_f(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", dset_id, hdferr)
-        !call check_hdf_error(hdferr, "calculate_noise", "Error opening: /InstrumentHeader/measureable_signal_max_observed")
-
-        !call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, MaxMS, dims, hdferr)
-        !call read_DP_hdf_dataset()
-
-
         call read_DP_hdf_dataset(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
 
         do i=1, size(noise)

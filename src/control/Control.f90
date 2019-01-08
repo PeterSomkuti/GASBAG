@@ -66,7 +66,7 @@ module control_mod
        integer(hid_t) :: output_file_id
     end type CS_output
 
-    type, private :: CS_gas
+    type :: CS_gas
        logical :: used ! Is this CS_gas used?
        type(string) :: name ! Name of the gas/absorber, this will be cross-referenced
        ! against the names in the CS_window%gases structure to find out which gases
@@ -79,11 +79,13 @@ module control_mod
        ! dimensionality is different, we sadly would need to either extend the array
        ! dimensions, or not use superfluous dimensions. During the calculation of
        ! optical properties, the type of spectroscopy will thus have to be referred to.
+       ! The same holds true fo T,p,SH dimensions. E.g., T is 2-dimensional for ABSCO
+
        double precision, allocatable :: cross_section(:,:,:,:)
        ! The wavelength dimension
        double precision, allocatable :: wavelength(:)
-       ! The temperature, pressure and humidity dimensions of the cross sections
-       double precision, allocatable :: T(:), p(:), SH(:)
+       ! The temperature, pressure and water vapour dimensions of the cross sections
+       double precision, allocatable :: T(:,:), p(:), H2O(:)
     end type CS_gas
 
 

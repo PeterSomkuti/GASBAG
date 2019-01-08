@@ -12,6 +12,7 @@ module physical_model_mod
     use math_utils_mod
     use statevector_mod
     use radiance_mod
+    use absco_mod
 
     use mod_datetime
 
@@ -95,6 +96,7 @@ contains
         character(len=*), parameter :: fname = "physical_retrieval"
 
         logical :: gas_found, all_gases_found
+        integer :: absco_dims
 
 
         integer :: num_frames
@@ -289,6 +291,7 @@ contains
            ! and see if a gas with the corresponding name has been defined.
  
            do i=1, size(MCS%window(i_win)%gases)
+              ! Loop over all gases specified in the retrieval window
 
               ! Skip unused retrieval windows
               if (.not. MCS%window(i_win)%used) cycle
@@ -320,7 +323,20 @@ contains
 
            end do
 
+           ! Read in the spectroscopy data, depending on the type
+           do i=1, size(MCS%window(i_win)%gases)
+              ! Which gas are we reading in? As in 'index of MCS%gases'
+              j = MCS%window(i_win)%gas_index(i)
 
+              if (MCS%gas(j)%type%lower() == "absco") then
+                 call logger%trivia(fname, "Reading in ABSCO-type gas: " // MCS%window(i_win)%gases(i))
+                 call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims)
+              else
+                 call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type // " not implemented!")
+                 stop 1
+              end if
+
+           end do
 
 
            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -388,7 +404,7 @@ contains
 
                  retr_count = retr_count + 1
                  mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count + 1)
-                 
+
                  if (mod(retr_count, 100) == 0) then
                     write(tmp_str, '(A, F7.3, A, G0.1)') "Duration: ", mean_duration, ", retrieval No. ", retr_count
                     call logger%debug(fname, trim(tmp_str))
@@ -401,19 +417,19 @@ contains
            call h5gcreate_f(output_file_id, "physical_retrieval_results", &
                 result_gid, hdferr)
            call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
-           
+
            out_dims2d = shape(chi2)
            write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_chi2_" // MCS%window(i_win)%name
            call write_DP_hdf_dataset(output_file_id, &
                 trim(tmp_str), &
                 chi2, out_dims2d, -9999.99d0)
-           
+
            out_dims2d = shape(retrieved_sif_abs)
            write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_abs_" // MCS%window(i_win)%name
            call write_DP_hdf_dataset(output_file_id, &
                 trim(tmp_str), &
                 retrieved_sif_abs, out_dims2d, -9999.99d0)
-           
+ 
            out_dims2d = shape(retrieved_sif_rel)
            write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_rel_" // MCS%window(i_win)%name
            call write_DP_hdf_dataset(output_file_id, &
@@ -437,7 +453,7 @@ contains
            call write_DP_hdf_dataset(output_file_id, &
                 trim(tmp_str), &
                 measured_radiance, out_dims3d)
-           
+
            out_dims3d = shape(noise_radiance)
            write(tmp_str, '(A,A)') "/physical_retrieval_results/noise_radiance_" // MCS%window(i_win)%name
            call write_DP_hdf_dataset(output_file_id, &

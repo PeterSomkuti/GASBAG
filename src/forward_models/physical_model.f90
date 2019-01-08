@@ -13,6 +13,7 @@ module physical_model_mod
     use statevector_mod
     use radiance_mod
     use absco_mod
+    use gas_tau_mod
 
     use mod_datetime
 
@@ -21,6 +22,21 @@ module physical_model_mod
     public physical_retrieval
 
     private
+
+    ! A simple structure to keep the atmosphere data nice
+    ! and tidy - one per sounding.
+    type atmosphere
+       ! The name(s) of the gas(es)
+       type(string), allocatable :: gas_names(:)
+       ! Gas mixing ratios
+       double precision, allocatable :: gas_vmr(:,:)
+       ! To which spectroscopy data does this gas correspond to?
+       integer, allocatable :: gas_index(:)
+       ! Temperature, pressure, and specific humidity
+       double precision, allocatable :: T(:), p(:), sh(:)
+    end type atmosphere
+
+
 
     ! Dispersion/wavelength array
     double precision, allocatable :: dispersion(:,:,:)
@@ -63,7 +79,7 @@ module physical_model_mod
 
     ! The solar spectrum (wavelength, transmission)
     double precision, allocatable :: solar_spectrum(:,:), solar_spectrum_regular(:,:)
-    double precision :: solar_grid_spacing
+    double precision :: solar_grid_spacing, hires_spacing
     integer :: N_solar
 
 
@@ -74,7 +90,6 @@ module physical_model_mod
 
     ! Radiances
     double precision, dimension(:,:,:), allocatable :: final_radiance, &
-
                                                        measured_radiance, &
                                                        noise_radiance
 
@@ -141,10 +156,10 @@ contains
         call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
         call logger%trivia(fname, "Finished reading in land fraction.")
 
-        !do i=1, size(met_P_levels, 1)
-        !    write(*,*) i, met_P_levels(i,1,1), met_T_profiles(i,1,1), met_SH_profiles(i,1,1)
-        !end do
-        !write(*,*) "Psurf: ", met_psurf(1,1)
+        do i=1, size(met_P_levels, 1)
+            write(*,*) i, met_P_levels(i,1,1), met_T_profiles(i,1,1), met_SH_profiles(i,1,1)
+        end do
+        write(*,*) "Psurf: ", met_psurf(1,1)
 
 
         ! Read-in of dispersion and noise coefficients (THIS IS INSTRUMENT SPECIFIC!)
@@ -156,10 +171,10 @@ contains
                 allocate(dispersion(1016,8,3))
 
                 do band=1,3
-                    do i_fp=1,8
-                        call my_instrument%calculate_dispersion(dispersion_coefs(:,i_fp,band), &
-                                             dispersion(:,i_fp,band), band, i_fp)
-                    end do
+                   do i_fp=1,8
+                      call my_instrument%calculate_dispersion(dispersion_coefs(:,i_fp,band), &
+                           dispersion(:,i_fp,band), band, i_fp)
+                   end do
                 end do
 
                 ! Grab the SNR coefficients for noise calculations
@@ -207,20 +222,22 @@ contains
         ! the following. Since the re-gridding procedure is fairly costly, we want
         ! to keep the solar spectrum data as small as possible. Hence we call all of this
         if (MCS%algorithm%solar_type == "toon") then
-            call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
-                                    solar_spectrum, &
-                                    MCS%window(1)%wl_min - 0.01, &
-                                    MCS%window(1)%wl_max + 0.01)
-
-            N_solar = size(solar_spectrum, 1)
+           call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+                solar_spectrum, &
+                MCS%window(1)%wl_min - 0.01, &
+                MCS%window(1)%wl_max + 0.01)
+           
+           N_solar = size(solar_spectrum, 1)
         else
-            call logger%fatal(fname, "Sorry, solar model type " &
-                                     // MCS%algorithm%solar_type%chars() &
-                                     // " is not known.")
+           call logger%fatal(fname, "Sorry, solar model type " &
+                // MCS%algorithm%solar_type%chars() &
+                // " is not known.")
         end if
+
         ! To make life easier, we want to keep the solar model on a regular,
         ! evenly-spaced grid in wavelength space. So we are going to interpolate
         ! it onto a slightly changed wavelength grid.
+
         allocate(solar_spectrum_regular(N_solar, 2))
         ! Simple choice, just take the start and end-point, and divide by the
         ! number of elements to get even spacing
@@ -230,7 +247,7 @@ contains
         call logger%debug(fname, trim(tmp_str))
 
         do i=1, N_solar
-            solar_spectrum_regular(i,1) = (dble(i)-1.0d0) * solar_grid_spacing + solar_spectrum(1,1)
+            solar_spectrum_regular(i,1) = (dble(i-1)) * solar_grid_spacing + solar_spectrum(1,1)
         end do
 
         call logger%debug(fname, "Re-gridding solar spectrum")
@@ -485,6 +502,8 @@ contains
              radiance_calc_work_hi, &
              noise_work
 
+        type(atmosphere) :: my_atmosphere
+
         !! Dispersion indices
         double precision :: high_res_wl_min, high_res_wl_max
         integer :: l1b_wl_idx_min, l1b_wl_idx_max, solar_idx_min, solar_idx_max
@@ -504,6 +523,10 @@ contains
         double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
         double precision, dimension(:,:), allocatable :: this_solar
         double precision, allocatable :: solar_irrad(:)
+
+        !! Atmosphere
+        integer :: num_gases, num_levels
+        double precision, allocatable :: gas_tau(:,:)
 
         !! Albedo
         double precision :: albedo_apriori
@@ -559,11 +582,41 @@ contains
         !write(*,*) "VAA: ", VAA(i_fp, i_fr)
         !write(*,*) "Lon: ", lon(i_fp, i_fr), " Lat: ", lat(i_fp, i_fr), "Altitude: ", altitude(i_fp, i_fr)
 
-        ! Grab the radiance for this particular sounding
-        select type(my_instrument)
-            type is (oco2_instrument)
-                call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
-        end select
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        ! This is temporary:
+
+        ! This is how we check whether there are gases in the retrieval window
+        if (allocated(MCS%window(i_win)%gases)) then
+           num_gases = size(MCS%window(i_win)%gases)
+           num_levels = size(met_P_levels, 1)
+
+           allocate(my_atmosphere%gas_names(num_gases))
+           allocate(my_atmosphere%gas_vmr(num_levels, num_gases))
+           allocate(my_atmosphere%gas_index(num_levels))
+           allocate(my_atmosphere%T(num_levels))
+           allocate(my_atmosphere%p(num_levels))
+           allocate(my_atmosphere%sh(num_levels))
+  
+           ! Grab the radiance for this particular sounding
+           select type(my_instrument)
+           type is (oco2_instrument)
+              call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
+           end select
+
+           do i=1, num_gases
+              my_atmosphere%gas_names(i) = MCS%window(i_win)%gases(i)
+              my_atmosphere%gas_index(i) = MCS%window(i_win)%gas_index(i)
+
+              if (my_atmosphere%gas_names(i)%lower() == "o2") then
+                 my_atmosphere%gas_vmr(:, i) = 0.2095
+              end if
+           end do
+
+           my_atmosphere%T(:) = met_T_profiles(:, i_fp, i_fr)
+           my_atmosphere%p(:) = met_P_levels(:, i_fp, i_fr)
+           my_atmosphere%sh(:) = met_SH_profiles(:, i_fp, i_fr)
+        end if
+        !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 
         allocate(this_dispersion(size(radiance_l1b)))
@@ -670,7 +723,6 @@ contains
                 ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
                 ! take that into account for the incoming solar irradiance
 
-                
                 albedo_apriori = PI * maxval(radiance_l1b) / &
                      (1.0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
@@ -707,8 +759,6 @@ contains
             end do
         end if
 
-
-
         ! Retrival iteration loop
         iteration = 1
         keep_iterating = .true.
@@ -743,6 +793,26 @@ contains
 
             ! Save the old state vector (iteration - 1'th state vector)
             old_sv = SV%svsv
+
+
+            ! Heavy bit - calculate the optical properties given an atmosphere
+            if (num_gases > 0) then
+
+               allocate(gas_tau(size(this_solar, 1), num_gases))
+
+               call calculate_gas_tau(this_solar(:,1), &
+                    my_atmosphere%gas_vmr(:,1), &
+                    met_psurf(i_fp, i_fr), &
+                    my_atmosphere%p(:), &
+                    my_atmosphere%T(:), &
+                    ! This requires H2O VMR rather than specific humidity
+                    H2Om * (1.0d0 - my_atmosphere%sh(:)) / my_atmosphere%sh(:), & 
+                    MCS%gas(1), &
+                    10, &
+                    gas_tau)
+
+            end if
+
 
             ! Calculate the sun-normalized TOA radiances and store them in
             ! 'radiance_calc_work_hi'

@@ -8,6 +8,9 @@ module math_utils_mod
     double precision, parameter :: PI = 3.141592653589793
     double precision, parameter :: DEG2RAD = 0.017453292519943295
     double precision, parameter :: RAD2DEG = 57.29577951308232
+    double precision, parameter :: NA = 6.022140857d23
+    double precision, parameter :: H2Om = 0.018015422135
+    double precision, parameter :: dry_air_mass = 0.02897
 
     public PI, DEG2RAD, RAD2DEG, combsort, percentile, invert_matrix, &
            single_convolve

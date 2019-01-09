@@ -80,12 +80,13 @@ module control_mod
        ! dimensions, or not use superfluous dimensions. During the calculation of
        ! optical properties, the type of spectroscopy will thus have to be referred to.
        ! The same holds true fo T,p,SH dimensions. E.g., T is 2-dimensional for ABSCO
-
+       logical :: has_h2o ! Does this spectroscopy have H2O broadening?
        double precision, allocatable :: cross_section(:,:,:,:)
        ! The wavelength dimension
        double precision, allocatable :: wavelength(:)
        ! The temperature, pressure and water vapour dimensions of the cross sections
        double precision, allocatable :: T(:,:), p(:), H2O(:)
+
     end type CS_gas
 
 

@@ -530,7 +530,7 @@ contains
 
         !! Atmosphere
         integer :: num_gases, num_levels
-        double precision, allocatable :: gas_tau(:,:)
+        double precision, allocatable :: gas_tau(:,:,:)
 
         !! Albedo
         double precision :: albedo_apriori
@@ -561,6 +561,7 @@ contains
         integer :: N_spec, N_spec_hi, N_spec_tmp, N_sv
         integer :: i, j
         integer :: funit
+        double precision :: cpu_start, cpu_end
 
         l1b_file_id = MCS%input%l1b_file_id
         output_file_id = MCS%output%output_file_id
@@ -805,8 +806,9 @@ contains
             ! Heavy bit - calculate the optical properties given an atmosphere
             if (num_gases > 0) then
                
-               allocate(gas_tau(size(this_solar, 1), num_gases))
+               allocate(gas_tau(size(this_solar, 1), num_levels-1, num_gases))
 
+               call cpu_time(cpu_start)
                call calculate_gas_tau(this_solar(:,1), &
                     my_atmosphere%gas_vmr(:,1), &
                     met_psurf(i_fp, i_fr), &
@@ -816,8 +818,27 @@ contains
                     H2Om * (1.0d0 - my_atmosphere%sh(:)) / my_atmosphere%sh(:), & 
                     MCS%gas(1), &
                     10, &
-                    gas_tau)
+                    gas_tau(:,:,1))
+               call cpu_time(cpu_end)
 
+               write(*,*) "GAS OD time: ", cpu_end - cpu_start
+
+               do i=1, size(gas_tau, 2)
+                  write(tmp_str, '(A,G0.1,A)') "gas_tau_layer_", i, ".txt"
+                  open(newunit=funit, file=trim(tmp_str))
+
+                  do j=1, size(gas_tau, 1)
+                     write(funit, *) gas_tau(j,i,1)
+                  end do
+
+                  close(funit)
+               end do
+
+
+               read(*,*)
+
+
+               deallocate(gas_tau)
             end if
 
 

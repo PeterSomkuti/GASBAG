@@ -54,12 +54,14 @@ contains
     if (absco_dims == 4) then
        call logger%debug(fname, "ABSCO file has 4 dimensions")
        call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", gas%cross_section, dset_dims)
+       gas%has_h2o = .true.
     else if (absco_dims == 3) then
        call logger%debug(fname, "ABSCO file has 3 dimensions")
        call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", absco_3D, dset_dims)
        ! Copy to gas structure
        allocate(gas%cross_section(dset_dims(1), dset_dims(2), dset_dims(3), 1))
-       gas%cross_section(:,:,:,1) = absco_3D(:,:,:)
+       gas%cross_section(:,1,:,:) = absco_3D(:,:,:)
+       gas%has_h2o = .false.
     else
        write(tmp_str, '(A, G0.1, A)') "ABSCO file has ", absco_dims, " dimensions. This is not (yet) supported."
        call logger%fatal(fname, trim(tmp_str))

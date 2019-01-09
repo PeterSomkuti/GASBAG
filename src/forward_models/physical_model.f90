@@ -307,53 +307,57 @@ contains
            ! At the beginning, we check which gases were defined for this window,
            ! and see if a gas with the corresponding name has been defined.
  
-           do i=1, size(MCS%window(i_win)%gases)
+           ! Checking for gases is done only if we have gases in this window
+           if (allocated(MCS%window(i_win)%gases)) then
+
+              do i=1, size(MCS%window(i_win)%gases)
               ! Loop over all gases specified in the retrieval window
 
-              ! Skip unused retrieval windows
-              if (.not. MCS%window(i_win)%used) cycle
+                 ! Skip unused retrieval windows
+                 if (.not. MCS%window(i_win)%used) cycle
 
-              gas_found = .false.
-              do j=1, MAX_GASES
-                 if (MCS%window(i_win)%gases(i) == MCS%gas(j)%name) then
-                    gas_found = .true.
-                    write(tmp_str, '(A, A, A, G0.1, A)')  "Gas found: ",  &
-                         MCS%window(i_win)%gases(i)%chars(), " (gas-", j, ")"
-                    call logger%trivia(fname, trim(tmp_str))
-                    ! And also store which gas section corresponds to this particular gas
-                    ! in the window gas definition.
-                    MCS%window(i_win)%gas_index(i) = j
-                    exit
+                 gas_found = .false.
+                 do j=1, MAX_GASES
+                    if (MCS%window(i_win)%gases(i) == MCS%gas(j)%name) then
+                       gas_found = .true.
+                       write(tmp_str, '(A, A, A, G0.1, A)')  "Gas found: ",  &
+                            MCS%window(i_win)%gases(i)%chars(), " (gas-", j, ")"
+                       call logger%trivia(fname, trim(tmp_str))
+                       ! And also store which gas section corresponds to this particular gas
+                       ! in the window gas definition.
+                       MCS%window(i_win)%gas_index(i) = j
+                       exit
+                    end if
+                 end do
+
+                 ! If this specific gas was not found, kill the program immediately. There's no use-case
+                 ! for a gas being specified in a retrieval window, and that gas then not being defined
+                 ! in a 'gas'-section.
+
+                 if (.not. gas_found) then
+                    write(tmp_str, '(A, A, A, G0.1)') "Sorry - gas '", MCS%window(i_win)%gases(i)%chars(), &
+                         "' was not found in window-", dble(i_win)
+                    call logger%fatal(fname, trim(tmp_str))
+                    stop 1
                  end if
+
               end do
+  
+              ! Read in the spectroscopy data, depending on the type
+              do i=1, size(MCS%window(i_win)%gases)
+                 ! Which gas are we reading in? As in 'index of MCS%gases'
+                 j = MCS%window(i_win)%gas_index(i)
 
-              ! If this specific gas was not found, kill the program immediately. There's no use-case
-              ! for a gas being specified in a retrieval window, and that gas then not being defined
-              ! in a 'gas'-section.
+                 if (MCS%gas(j)%type%lower() == "absco") then
+                    call logger%trivia(fname, "Reading in ABSCO-type gas: " // MCS%window(i_win)%gases(i))
+                    call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims)
+                 else
+                    call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type // " not implemented!")
+                    stop 1
+                 end if
 
-              if (.not. gas_found) then
-                 write(tmp_str, '(A, A, A, G0.1)') "Sorry - gas '", MCS%window(i_win)%gases(i)%chars(), &
-                      "' was not found in window-", dble(i_win)
-                 call logger%fatal(fname, trim(tmp_str))
-                 stop 1
-              end if
-
-           end do
-
-           ! Read in the spectroscopy data, depending on the type
-           do i=1, size(MCS%window(i_win)%gases)
-              ! Which gas are we reading in? As in 'index of MCS%gases'
-              j = MCS%window(i_win)%gas_index(i)
-
-              if (MCS%gas(j)%type%lower() == "absco") then
-                 call logger%trivia(fname, "Reading in ABSCO-type gas: " // MCS%window(i_win)%gases(i))
-                 call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims)
-              else
-                 call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type // " not implemented!")
-                 stop 1
-              end if
-
-           end do
+              end do
+           end if
 
 
            !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -587,6 +591,7 @@ contains
 
         ! This is how we check whether there are gases in the retrieval window
         if (allocated(MCS%window(i_win)%gases)) then
+
            num_gases = size(MCS%window(i_win)%gases)
            num_levels = size(met_P_levels, 1)
 
@@ -597,12 +602,6 @@ contains
            allocate(my_atmosphere%p(num_levels))
            allocate(my_atmosphere%sh(num_levels))
   
-           ! Grab the radiance for this particular sounding
-           select type(my_instrument)
-           type is (oco2_instrument)
-              call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
-           end select
-
            do i=1, num_gases
               my_atmosphere%gas_names(i) = MCS%window(i_win)%gases(i)
               my_atmosphere%gas_index(i) = MCS%window(i_win)%gas_index(i)
@@ -615,9 +614,17 @@ contains
            my_atmosphere%T(:) = met_T_profiles(:, i_fp, i_fr)
            my_atmosphere%p(:) = met_P_levels(:, i_fp, i_fr)
            my_atmosphere%sh(:) = met_SH_profiles(:, i_fp, i_fr)
+        else
+           ! Default: no gases
+           num_gases = 0
         end if
         !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
+        
+        ! Grab the radiance for this particular sounding
+        select type(my_instrument)
+        type is (oco2_instrument)
+           call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
+        end select
 
         allocate(this_dispersion(size(radiance_l1b)))
         allocate(this_dispersion_tmp(size(radiance_l1b)))
@@ -719,12 +726,12 @@ contains
 
         ! Albedo
         select type(my_instrument)
-            type is (oco2_instrument)
-                ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
-                ! take that into account for the incoming solar irradiance
+        type is (oco2_instrument)
+           ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
+           ! take that into account for the incoming solar irradiance
 
-                albedo_apriori = PI * maxval(radiance_l1b) / &
-                     (1.0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+           albedo_apriori = PI * maxval(radiance_l1b) / &
+                (1.0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
         end select
 
@@ -794,10 +801,10 @@ contains
             ! Save the old state vector (iteration - 1'th state vector)
             old_sv = SV%svsv
 
-
+            
             ! Heavy bit - calculate the optical properties given an atmosphere
             if (num_gases > 0) then
-
+               
                allocate(gas_tau(size(this_solar, 1), num_gases))
 
                call calculate_gas_tau(this_solar(:,1), &

@@ -805,7 +805,7 @@ contains
              call calculate_gas_tau( &
                   this_solar(:,1), &
                   this_atm%gas_vmr(:,j), &
-                  met_psurf(i_fp, i_fr), &
+                  met_psurf(i_fp, i_fr) + 30000, &
                   this_atm%p(:), &
                   this_atm%T(:), &
                   ! This requires H2O VMR rather than specific humidity
@@ -818,11 +818,11 @@ contains
 
           write(*,*) "GAS OD time: ", cpu_end - cpu_start
 
-!          open(newunit=funit, file="gas_od.txt")
-!          do j=1, size(gas_tau, 1)
-!             write(funit, *) sum(gas_tau(j,:,1))
-!          end do
-!          close(funit)
+          open(newunit=funit, file="gas_od.txt")
+          do j=1, size(gas_tau, 1)
+             write(funit, *) sum(gas_tau(j,:,1))
+          end do
+          close(funit)
 
        end if
 
@@ -830,7 +830,7 @@ contains
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'
        call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
-            VZA(i_fp, i_fr), albedo, &
+            VZA(i_fp, i_fr), albedo, gas_tau, &
             radiance_calc_work_hi)
 
        ! And multiply with the solar spectrum for physical units
@@ -899,7 +899,8 @@ contains
        ! Now calculate the noise-equivalent radiances
        select type(my_instrument)
        type is (oco2_instrument)
-          call my_instrument%calculate_noise(snr_coefs, radiance_meas_work, &
+          call my_instrument%calculate_noise( &
+               snr_coefs, radiance_meas_work, &
                noise_work, i_fp, band, &
                l1b_wl_idx_min, l1b_wl_idx_max)
        end select
@@ -1032,17 +1033,17 @@ contains
 !!$             end do
 !!$             close(funit)
 !!$            
-!!$             write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
-!!$             open(file=trim(tmp_str), newunit=funit)
-!!$             do i=1, N_spec
-!!$                  write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$                                 noise_work(i)
-!!$             end do
-!!$             close(funit)
+             write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
+             open(file=trim(tmp_str), newunit=funit)
+             do i=1, N_spec
+                  write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+                                 noise_work(i)
+             end do
+             close(funit)
 !!$
 !!$
 !!$            !
-!!$             read(*,*)
+             read(*,*)
 
        if (dsigma_sq < dble(N_sv)) then
           keep_iterating = .false.

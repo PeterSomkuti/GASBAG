@@ -137,7 +137,7 @@ contains
              ! (p_lower > p_higher). Sure, you could just flip the signs of the
              ! weights ..
              gas_tau(j,l-1) = gas_tau(j,l-1) - GK_weights_f(k) * (CS_value_grid(j) * this_VMR * (1.0d0 - this_H2O) &
-                  / (9.81 * this_M) * NA * 0.1d0)
+                  / (9.81 * this_M) * NA * 1.0d0)
           end do
 
        end do

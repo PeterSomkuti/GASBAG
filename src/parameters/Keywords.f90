@@ -85,6 +85,7 @@ contains
                 valid_options(this_idx,9) = "dispersion_order"
                 valid_options(this_idx,10) = "dispersion_perturbation"
                 valid_options(this_idx,11) = "dispersion_covariance"
+                valid_options(this_idx,12) = "atmosphere"
         end do
 
         ! Section for gases

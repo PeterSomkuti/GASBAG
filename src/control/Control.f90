@@ -50,9 +50,11 @@ module control_mod
        integer :: albedo_order, dispersion_order
        double precision, allocatable :: dispersion_pert(:), dispersion_cov(:)
        type(string), allocatable :: gases(:)
+       integer :: num_gases
        ! This gas_index variable holds the information about which gas-section (CS_gas)
        ! index corresponds to the gas that is stored in 'gases'
        integer, allocatable :: gas_index(:)
+       type(string) :: atmosphere_file
     end type CS_window
 
     type, private :: CS_input
@@ -375,6 +377,7 @@ contains
                     deallocate(fini_val_array)
                  end if
 
+                 MCS%window(window_nr)%num_gases = 0
                  call fini_extract(fini, tmp_str, 'gases', .false., fini_string_array)
                  if (allocated(fini_string_array)) then
                     allocate(MCS%window(window_nr)%gases(size(fini_string_array)))
@@ -383,11 +386,13 @@ contains
 
                     do i=1, size(fini_string_array)
                        MCS%window(window_nr)%gases(i) = fini_string_array(i)
+                       MCS%window(window_nr)%num_gases = MCS%window(window_nr)%num_gases + 1
                     end do
                     deallocate(fini_string_array)
                  end if
 
-
+                 call fini_extract(fini, tmp_str, 'atmosphere', .false., fini_char)
+                 MCS%window(window_nr)%atmosphere_file = trim(fini_char)
 
             else
                 MCS%window(window_nr)%used = .false.

@@ -628,11 +628,17 @@ contains
   errd = err_source_missing
   call source%split(tokens=tokens, sep=new_line('a'))
 
+  ! This has been slightly changed by Peter Somkuti. If a line contains
+  ! a comment token, that line is automatically ignored. This means no
+  ! proper 'inline' comments are possible.
+
   Ns = 0
   s = 0
   do while (s+1<=size(tokens, dim=1))
     s = s + 1
-    if (scan(adjustl(tokens(s)), comments) == 1) cycle
+    if (scan(adjustl(tokens(s)), comments) >= 1) then
+       cycle
+    end if
     if (index(trim(adjustl(tokens(s))), "[") == 1) then
       Ns = Ns + 1
       dummy = trim(adjustl(tokens(s)))//new_line('a')
@@ -642,17 +648,16 @@ contains
         if (index(trim(adjustl(tokens(ss))), "[") == 1) then
           ! new section... go back
           exit
-        else
+       else
+          if (scan(adjustl(tokens(ss)), comments) >= 1) then
+             cycle
+          end if
           ! continuation of current section
           dummy = trim(adjustl(dummy))//new_line('a')//trim(adjustl(tokens(ss)))
           tokens(ss) = comments ! forcing skip this in the following scan
         endif
       enddo
       tokens(s) = trim(adjustl(dummy))
-      ! This addition here was done by Peter Somkuti, it automatically
-      ! converts all tokens (sections, options or values) to lower case
-      ! BAD FOR FILENAMES!!!!
-      !tokens(s) = tokens(s)%lower()
     endif
   enddo
 

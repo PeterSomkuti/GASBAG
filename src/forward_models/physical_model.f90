@@ -809,13 +809,14 @@ contains
                allocate(gas_tau(size(this_solar, 1), num_levels-1, num_gases))
 
                call cpu_time(cpu_start)
-               call calculate_gas_tau(this_solar(:,1), &
+               call calculate_gas_tau( &
+                    this_solar(:,1), &
                     my_atmosphere%gas_vmr(:,1), &
                     met_psurf(i_fp, i_fr), &
                     my_atmosphere%p(:), &
                     my_atmosphere%T(:), &
                     ! This requires H2O VMR rather than specific humidity
-                    H2Om * (1.0d0 - my_atmosphere%sh(:)) / my_atmosphere%sh(:), & 
+                    H2Om * my_atmosphere%sh(:) / (1.0d0 - my_atmosphere%sh(:)), & 
                     MCS%gas(1), &
                     10, &
                     gas_tau(:,:,1))

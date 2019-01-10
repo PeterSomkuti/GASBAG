@@ -23,12 +23,13 @@ contains
     double precision :: VMR_lower, VMR_higher
     double precision :: this_p, p_fac, this_p_fac, this_T, this_H2O, this_VMR, this_M
     double precision :: CS_value_grid(size(wl))
-
+    integer :: wl_left_indices(size(wl))
 
     double precision :: GK_abscissae(N_sublayer+1), GK_weights(N_sublayer+1), G_weights(N_sublayer+1)
 
     integer :: N_lay, N_lev, N_wl
     integer :: i,j,k,l
+    integer :: funit
 
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
@@ -42,6 +43,24 @@ contains
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
+
+    do i=1, size(wl)
+       if (wl(i) <= gas%wavelength(1)) then
+          wl_left_indices(i) = 1
+          cycle
+       else if (wl(i) >= gas%wavelength(size(gas%wavelength))) then
+          wl_left_indices(i) = size(gas%wavelength) - 1
+          cycle
+       end if
+
+       do j=1, size(gas%wavelength)-1
+          if ((wl(i) >= gas%wavelength(j)) .and. &
+               (wl(i) < gas%wavelength(j+1))) then
+             wl_left_indices(i) = j
+             exit
+          end if
+       end do
+    end do
 
     ! Traverse the atmosphere layers(!), starting from the bottom to the top
     do l=N_lev,2,-1
@@ -88,16 +107,16 @@ contains
           this_M = 1d3 * (((1 - this_H2O) * dry_air_mass) + (H2Om * this_H2O))
 
           do j=1, size(wl)
-             CS_value_grid(j) = get_CS_value_at(gas, wl(j), this_p, this_T, this_H2O)
-             !gas_tau(j,l-1) = gas_tau(j,l-1) + (CS_value_grid(j) + this_vmr * (1.0d0 - this_H2O) &
-             !     / (9.81 * this_M) * NA * GK_weights(k) * 0.1d0)
+             CS_value_grid(j) = get_CS_value_at(gas, wl(j), this_p, this_T, this_H2O, wl_left_indices(j))
+             gas_tau(j,l-1) = gas_tau(j,l-1) + (CS_value_grid(j) * this_VMR * (1.0d0 - this_H2O) &
+                  / (9.81 * this_M) * NA * GK_weights(k) * 0.1d0)
           end do
 
-
+          close(funit)
 
        end do
 
-       !gas_tau(:,l-1) = gas_tau(:,l-1) * (p_lower - p_higher)
+       gas_tau(:,l-1) = gas_tau(:,l-1) * (p_lower - p_higher)
 
     end do
 
@@ -108,10 +127,11 @@ contains
 
 
 
- pure function get_CS_value_at(gas, wl, p, T, H2O) result(CS_value)
+  function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
    type(CS_gas), intent(in) :: gas
    double precision, intent(in) :: wl, p, T, H2O
+   integer, optional, intent(in) :: wl_left_idx
 
    double precision :: CS_value
 
@@ -126,34 +146,104 @@ contains
    double precision :: C3(0:1,0:1,0:1) ! 0 is 'left', 1 is 'right'
    double precision :: C2(0:1, 0:1), C1(0:1)
    double precision :: wl_d, p_d, T_d_l, T_d_r, H2O_d
-   integer :: i,j
+   integer :: i,j,k
+   double precision :: diff, newdiff
 
+
+   ! This next section here "just" finds the left and right indices of p,T,H2O,wl values within the
+   ! grids of the cross section tables. Unfortunately, sourcing this bit out into a PURE FUNCTION still
+   ! comes with such a large overhead that I had to inline them explicitly. Maybe there's a way around
+   ! it, but for now the performance increase is totally worth it!
 
    ! Get the pressure indices
-   idx_l_p = get_left_index(p, gas%p)
+   if (p <= gas%p(1)) then
+      idx_l_p = 1
+   else if (p >= gas%p(size(gas%p))) then
+      idx_l_p = size(gas%p) - 1
+   else
+      do i=1, size(gas%p)-1
+         if ((p >= gas%p(i)) .and. (p < gas%p(i+1))) then
+            idx_l_p = i
+            exit
+         end if
+      end do
+   end if
    idx_r_p = idx_l_p + 1
+
 
    ! Get the temperature indices, which depend on P - so we have two
    ! indices for the temperature dimension. One set of T indices (idx_l(l,r)_T)
    ! corresponds to the left index of pressure (idx_l_p), the other set
    ! (idx_r(l,r)_T) corresponds to the right index of pressure (idx_r_p).
-   idx_ll_T = get_left_index(T, gas%T(:, idx_l_p))
+   if (T <= gas%T(1, idx_l_p)) then
+      idx_ll_T = 1
+   else if (T >= gas%T(size(gas%T, 1), idx_l_p)) then
+      idx_ll_T = size(gas%T, 1) - 1
+   else
+      do i=1, size(gas%T, 1)-1
+         if ((T > gas%T(i, idx_l_p)) .and. (T <= gas%T(i+1, idx_l_p))) then
+            idx_ll_T = i
+            exit
+         end if
+      end do
+   end if
    idx_lr_T = idx_ll_T + 1
 
-   idx_rl_T = get_left_index(T, gas%T(:, idx_r_p))
+   if (T <= gas%T(1, idx_r_p)) then
+      idx_rl_T = 1
+   else if (T >= gas%T(size(gas%T, 1), idx_r_p)) then
+      idx_rl_T = size(gas%T) - 1
+   else
+      do i=1, size(gas%T, 1)-1
+         if ((T >= gas%T(i, idx_r_p)) .and. (T < gas%T(i+1, idx_r_p))) then
+            idx_rl_T = i
+            exit
+         end if
+      end do
+   end if
    idx_rr_T = idx_rl_T + 1
 
    ! Get the water vapor indices
    if (gas%has_H2O) then
-      idx_l_H2O = get_left_index(H2O, gas%H2O)
+      if (H2O <= gas%H2O(1)) then
+         idx_l_H2O = 1
+      else if (H2O >= gas%H2O(size(gas%H2O))) then
+         idx_l_H2O = size(gas%H2O) - 1
+      else
+         do i=1, size(gas%H2O)-1
+            if ((H2O > gas%H2O(i)) .and. (H2O <= gas%H2O(i+1))) then
+               idx_l_H2O = i
+               exit
+            end if
+         end do
+      end if
       idx_r_H2O = idx_l_H2O + 1
    else
       idx_l_H2O = 1
       idx_r_H2O = 1
    end if
 
-   ! Get the wavelength indices
-   idx_l_wl = get_left_index(wl, gas%wavelength)
+   ! Get the wavelength indices - unless the wl_idx is already specified
+   !if (present(wl_left_idx)) then
+   !   idx_l_wl = wl_left_idx
+   !else
+!!$      if (wl <= gas%wavelength(1)) then
+!!$         idx_l_wl = 1
+!!$      else if (wl >= gas%wavelength(size(gas%wavelength))) then
+!!$         idx_l_wl = size(gas%wavelength) - 1
+!!$      else
+!!$         do i=1, size(gas%wavelength)
+!!$            if ((wl > gas%wavelength(i)) .and. (wl <= gas%wavelength(i))) then
+!!$               idx_l_wl = i
+!!$               exit
+!!$            end if
+!!$         end do
+!!$      end if
+!!$      write(*,*) idx_l_wl, wl_left_idx
+!!$      read(*,*)
+   !end if
+   idx_l_wl = wl_left_idx
+   idx_r_wl = idx_l_wl + 1
 
    ! And perform the linear interpolation in now 3 or 4 dimensions!
    ! Remember, we store the CS grid in the following way:
@@ -168,10 +258,11 @@ contains
    else
       H2O_d = 0.0d0
    end if
+
    T_d_l = (T - gas%T(idx_ll_T, idx_l_p)) / &
         (gas%T(idx_lr_T, idx_l_p) - gas%T(idx_ll_T, idx_l_p))
-   T_d_r = (T - gas%T(idx_lr_T, idx_r_p)) / &
-        (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_lr_T, idx_r_p))
+   T_d_r = (T - gas%T(idx_rl_T, idx_r_p)) / &
+        (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
 
    ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
    C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
@@ -183,11 +274,11 @@ contains
    C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
         + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
 
-   C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_l_p) * (1.0d0 - wl_d) &
+   C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
         + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
 
    C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
+        + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
 
    C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
         + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
@@ -213,36 +304,11 @@ contains
    end do
 
    ! Finally, we interpolate along pressure, which is the final result that
-   ! we pass back.
+   ! we pass back. If below zero, set to zero.
    CS_value = C1(0) * (1.0d0 - p_d) + C1(1) * p_d
+   if (CS_value < 0.0d0) CS_value = 0.0d0
 
  end function
-
- pure function get_left_index(x, array) result(left_index)
-
-   double precision, intent(in) :: x, array(:)
-   integer :: left_index
-
-   integer :: idx_closest
-
-   idx_closest = minloc(abs(x - array), dim=1)
-
-   if ((x < array(1)) .or. (idx_closest == 1)) then
-      left_index = 1
-      return
-   else if ((x > array(size(array))) .or. (idx_closest == size(array))) then
-      left_index = size(array) - 1
-      return
-   else
-      if (abs(x - array(idx_closest)) < abs(x - array(idx_closest - 1))) then
-         left_index = idx_closest
-      else
-         left_index = idx_closest - 1
-      end if
-   end if
-
- end function get_left_index
-
 
 
 end module gas_tau_mod

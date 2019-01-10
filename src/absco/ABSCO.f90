@@ -23,6 +23,7 @@ contains
     character(len=2) :: gas_index ! Is this always going to stay 2-characters long?
     double precision, allocatable :: absco_3D(:,:,:)
     character(len=999) :: tmp_str
+    integer :: N_wl
 
     call logger%trivia(fname, "Reading in ABSCO HDF file at: " // trim(filename))
 
@@ -73,11 +74,14 @@ contains
     call read_DP_hdf_dataset(absco_file_id, "Temperature", gas%T, dset_dims)
     deallocate(dset_dims)
     call read_DP_hdf_dataset(absco_file_id, "Pressure", gas%p, dset_dims)
-
     deallocate(dset_dims)
     call read_DP_hdf_dataset(absco_file_id, "Wavenumber", gas%wavelength, dset_dims)
     ! ABSCO comes in wavenumber, but we'd rather work in wavelengths [microns], so let's convert
     gas%wavelength = 1.0d4 / gas%wavelength
+    ! We also have to re-arrange the arrays
+    N_wl = size(gas%wavelength)
+    gas%wavelength(:) = gas%wavelength(N_wl:1:-1)
+    gas%cross_section(:,:,:,:) = gas%cross_section(N_wl:1:-1,:,:,:)
 
     ! Now if ABSCO is 4-dimensional, we also need the broadener gas data
     if (absco_dims == 4) then

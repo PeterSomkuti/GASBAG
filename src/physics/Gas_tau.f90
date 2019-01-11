@@ -7,7 +7,8 @@ module gas_tau_mod
 
 contains
 
-  subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, gas, N_sub, gas_tau)
+  subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, &
+       gas, N_sub, need_psurf_jac, gas_tau, gas_tau_dpsurf)
 
     implicit none
     double precision, intent(in) :: wl(:) ! Wavelength array
@@ -16,17 +17,25 @@ contains
     double precision, intent(in) :: p(:), T(:), H2O(:) ! Pressure, temperature and water vapor profiles
     type(CS_gas), intent(in) :: gas ! Gas structure which contains the cross sections
     integer, intent(in) :: N_sub ! How many sublayers for more accurate calculation?
+    logical, intent(in) :: need_psurf_jac
 
-    double precision, intent(inout) :: gas_tau(:,:) ! Gas optical depth - wavelength, layer
+    ! Gas optical depth - wavelength, layer
+    double precision, intent(inout) :: gas_tau(:,:)
+    ! Gas optical depth after psurf pert. - wavelength, layer
+    double precision, intent(inout) :: gas_tau_dpsurf(:,:)
 
     double precision :: p_lower, p_higher, T_lower, T_higher, H2O_lower, H2O_higher
     double precision :: VMR_lower, VMR_higher
     double precision :: this_p, p_fac, this_p_fac, this_T, this_H2O, this_VMR, this_M
+    double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
+         H2O_lower_pert, VMR_lower_pert, this_VMR_pert, this_M_pert, &
+         this_T_pert, this_H2O_pert
     double precision :: CS_value_grid(size(wl))
     integer :: wl_left_indices(size(wl))
 
     double precision :: GK_abscissae((N_sub-1)/2+1), GK_weights((N_sub-1)/2+1), G_weights((N_sub-1)/2+1)
     double precision :: GK_abscissae_f(N_sub), GK_weights_f(N_sub), G_weights_f(N_sub)
+    double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
 
     integer :: N_lay, N_lev, N_wl
     integer :: i,j,k,l
@@ -38,6 +47,11 @@ contains
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
+    gas_tau_dpsurf(:,:) = 0.0d0
+
+    ! Pre-compute the indicies of the ABSCO wavlength dimension at which
+    ! we can find the wavelengths supplied to this function and at which we
+    ! want to calculate the optical depths
 
     do i=1, size(wl)
        if (wl(i) <= gas%wavelength(1)) then
@@ -57,6 +71,10 @@ contains
        end do
     end do
 
+    ! Given the number of sublayers, we precompute the Gauss-Kronrod weights for
+    ! the integral approximation.
+    call kronrod((N_sub-1)/2, 1d-6, GK_abscissae, GK_weights, G_weights)
+
     ! Traverse the atmosphere layers(!), starting from the bottom to the top
     do l=N_lev,2,-1
 
@@ -72,6 +90,15 @@ contains
           T_lower = (1.0d0 - p_fac) * T(l-1) + p_fac * T(l)
           H2O_lower = (1.0d0 - p_fac) * H2O(l-1) + p_fac * H2O(l)
           VMR_lower = (1.0d0 - p_fac) * gas_vmr(l-1) + p_fac * gas_vmr(l)
+
+          if (need_psurf_jac) then
+             ! Calculate perturbed properties when psurf jacobian is needed
+             p_fac_pert = (p_lower + PSURF_PERTURB - p(l-1)) / (p(l) - p(l-1))
+             T_lower_pert = (1.0d0 - p_fac_pert) * T(l-1) + p_fac_pert * T(l)
+             H2O_lower_pert = (1.0d0 - p_fac_pert) * H2O(l-1) + p_fac_pert * H2O(l)
+             VMR_lower_pert = (1.0d0 - p_fac_pert) * gas_vmr(l-1) + p_fac_pert * gas_vmr(l)
+          end if
+
        else
           p_lower = p(l)
           T_lower = T(l)
@@ -84,11 +111,9 @@ contains
        H2O_higher = H2O(l-1)
        VMR_higher = gas_vmr(l-1)
 
-       ! Given the number of sublayers, we precompute the Gauss-Kronrod weights for
-       ! the integral approximation.
-       call kronrod((N_sub-1)/2, 1d-6, GK_abscissae, GK_weights, G_weights)
+       ! Map the GK abscissae and weights from [0,1] to symmetric [-1,1] by mirroring. This section
+       ! seems a bit excessive - maybe a shorter way of doing it?
 
-       ! Map the GK abscissae and weights from [0,1] to symmetric [-1,1] by mirroring
        if (MOD(N_sub, 2) /= 0) then ! For odd number of sublayers
           GK_abscissae_f((N_sub+1)/2) = GK_abscissae(size(GK_abscissae))
           GK_weights_f((N_sub+1)/2) = GK_weights(size(GK_weights))
@@ -108,9 +133,18 @@ contains
           stop 1
        end if
        ! And adjust the GK abscissae and weights to our pressure interval
-       ! between p_lower and p_higher
-       call kronrod_adjust(p_lower, p_higher, N_sub, &
+       ! between p_lower and p_higher. This way, we don't have to re-scale the
+       ! result after integration and can obtain it simply by multiplying with
+       ! the GK weights.
+       call kronrod_adjust(p_higher, p_lower, N_sub, &
             GK_abscissae_f, GK_weights_f, G_weights_f)
+
+       if (need_psurf_jac) then
+          ! Since we altered the integration limit, we also need to re-scale the
+          ! GK weights accordingly for the Jacobian
+          call kronrod_adjust(p_higher, p_lower_pert, N_sub, &
+               GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
+       end if
 
        do k=1, N_sub
 
@@ -129,18 +163,40 @@ contains
           ! Loop through all wavelengths, and grab the cross section value corresponding to
           ! the ACTUAL p,T,wl,H2O coordinates.
           do j=1, size(wl)
-             CS_value_grid(j) = get_CS_value_at(gas, wl(j), this_p, this_T, this_H2O, wl_left_indices(j))
-
              ! and finally calculate the sub-layer optical depth and add it to
-             ! the value of the layer optical depth. Note the minus sign, that's
-             ! merely because we are integrating from p_lower to p_higher where
-             ! (p_lower > p_higher). Sure, you could just flip the signs of the
-             ! weights ..
-             gas_tau(j,l-1) = gas_tau(j,l-1) - GK_weights_f(k) * (CS_value_grid(j) * this_VMR * (1.0d0 - this_H2O) &
-                  / (9.81 * this_M) * NA * 1.0d0)
+             ! the value of the layer optical depth.
+
+             gas_tau(j,l-1) = gas_tau(j,l-1) + GK_weights_f(k) * (&
+                  get_CS_value_at(gas, wl(j), this_p, this_T, this_H2O, wl_left_indices(j)) &
+                  * this_VMR * (1.0d0 - this_H2O) &
+                  / (9.81 * this_M) * NA * 0.1d0)
           end do
 
+          ! The same is required in the case of surface pressure jacobians,
+          ! but we obviously only do this for the BOA layer
+          if (need_psurf_jac .and. (l == N_lev)) then
+             this_p_pert = GK_abscissae_f_pert(k)
+
+             this_p_fac_pert = ((this_p_pert - p_higher) / (p_lower_pert - p_higher))
+             this_T_pert = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
+             this_H2O_pert = (1.0d0 - this_p_fac) * H2O_lower + this_p_fac * H2O_higher
+             this_VMR_pert = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
+             this_M_pert = 1d3 * (((1 - this_H2O) * dry_air_mass) + (H2Om * this_H2O))
+
+             do j=1, size(wl)
+!!$                gas_tau(j,l-1) = gas_tau_dpsurf(j,l-1) + GK_weights_f_pert(k) * (&
+!!$                     get_CS_value_at(gas, wl(j), this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(j)) &
+!!$                     * this_VMR_pert * (1.0d0 - this_H2O_pert) &
+!!$                     / (9.81 * this_M_pert) * NA * 0.1d0)
+             end do
+
+          end if
        end do
+
+       if (need_psurf_jac .and. (l < N_lev)) then
+          ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array
+          gas_tau_dpsurf(:,l-1) = gas_tau(:,l-1)
+       end if
 
     end do
 

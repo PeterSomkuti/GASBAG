@@ -545,7 +545,7 @@ contains
 
     !! Atmosphere
     integer :: num_gases, num_levels
-    double precision, allocatable :: gas_tau(:,:,:)
+    double precision, allocatable :: gas_tau(:,:,:), gas_tau_dpsurf(:,:,:)
 
     !! Albedo
     double precision :: albedo_apriori
@@ -776,6 +776,11 @@ contains
           ! initial atmosphere, and potentially re-gridding it - depending on where the
           ! surface pressure lies. We use the initial surface pressure coming from MET.
           this_atm = regrid_atmosphere(initial_atm, met_psurf(i_fp, i_fr))
+          ! And get the T and SH profiles onto our new atmosphere grid
+          call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+               met_T_profiles(:,i_fp, i_fr), this_atm%T)
+          call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+               met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
        else
           ! Otherwise, calculate it from the state vector
           ! Obviously ONLY if we want to retrieve it, otherwise the albedo
@@ -800,27 +805,31 @@ contains
        if (num_gases > 0) then
 
           allocate(gas_tau(size(this_solar, 1), num_levels-1, num_gases))
+          allocate(gas_tau_dpsurf(size(this_solar, 1), num_levels-1, num_gases))
+
           call cpu_time(cpu_start)
           do j=1, num_gases
              call calculate_gas_tau( &
                   this_solar(:,1), &
                   this_atm%gas_vmr(:,j), &
-                  met_psurf(i_fp, i_fr) + 30000, &
+                  met_psurf(i_fp, i_fr), &
                   this_atm%p(:), &
                   this_atm%T(:), &
                   ! This requires H2O VMR rather than specific humidity
                   H2Om * this_atm%sh(:) / (1.0d0 - this_atm%sh(:)), & 
                   MCS%gas(j), &
                   3, &
-                  gas_tau(:,:,j))
-             end do
-             call cpu_time(cpu_end)
+                  .true., &
+                  gas_tau(:,:,j), &
+                  gas_tau_dpsurf(:,:,j))
+          end do
+          call cpu_time(cpu_end)
 
           write(*,*) "GAS OD time: ", cpu_end - cpu_start
 
           open(newunit=funit, file="gas_od.txt")
           do j=1, size(gas_tau, 1)
-             write(funit, *) sum(gas_tau(j,:,1))
+             write(funit, *) gas_tau(j,num_levels-1,1), gas_tau_dpsurf(j,1,1)
           end do
           close(funit)
 
@@ -1101,6 +1110,7 @@ contains
             noise_work,Se_inv, K)
 
        if (allocated(gas_tau)) deallocate(gas_tau)
+       if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
 
        iteration = iteration + 1
 
@@ -1387,6 +1397,22 @@ contains
     new_atm%gas_index(:) = old_atm%gas_index(:)
     new_atm%gas_vmr(:,:) = old_atm%gas_vmr(1:N_lev_new, :)
   end function regrid_atmosphere
+
+
+  subroutine resample_atmosphere(p, T, sh, atm)
+
+    implicit none
+    double precision, intent(in) :: p(:), T(:), sh(:)
+    type(atmosphere), intent(inout) :: atm
+
+    call linear_upsample(atm%p, p, T, atm%T)
+    call linear_upsample(atm%p, p, sh, atm%sh)
+
+  end subroutine resample_atmosphere
+
+
+
+
 
 
 end module physical_model_mod

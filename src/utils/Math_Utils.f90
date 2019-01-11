@@ -10,7 +10,8 @@ module math_utils_mod
     double precision, parameter :: RAD2DEG = 57.29577951308232
     double precision, parameter :: NA = 6.022140857d23
     double precision, parameter :: H2Om = 0.018015422135
-    double precision, parameter :: dry_air_mass = 0.02897
+    double precision, parameter :: DRY_AIR_MASS = 0.02897
+    double precision, parameter :: PSURF_PERTURB = 100 !Pa
 
     public PI, DEG2RAD, RAD2DEG, combsort, percentile, invert_matrix, &
            single_convolve

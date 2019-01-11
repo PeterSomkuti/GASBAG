@@ -7,6 +7,25 @@ module gas_tau_mod
 
 contains
 
+  recursive function binarySearch_R (a, value) result (bsresult)
+    double precision, intent(in) :: a(:), value
+    integer          :: bsresult, mid
+
+    mid = size(a)/2 + 1
+    if (size(a) == 0) then
+       bsresult = 0        ! not found
+    else if (a(mid) > value) then
+       bsresult= binarySearch_R(a(:mid-1), value)
+    else if (a(mid) < value) then
+       bsresult = binarySearch_R(a(mid+1:), value)
+       if (bsresult /= 0) then
+          bsresult = mid + bsresult
+       end if
+    else
+       bsresult = mid      ! SUCCESS!!
+    end if
+  end function binarySearch_R
+
   subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, &
        gas, N_sub, need_psurf_jac, gas_tau, gas_tau_dpsurf)
 
@@ -41,6 +60,11 @@ contains
     integer :: i,j,k,l
     integer :: funit
 
+    double precision :: gas_wl_step_avg, gas_wl_start
+    integer :: gas_idx_fg
+
+    double precision :: cpu_start, cpu_end
+
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
     N_wl = size(wl)
@@ -51,21 +75,37 @@ contains
 
     ! Pre-compute the indicies of the ABSCO wavlength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
-    ! want to calculate the optical depths
+    ! want to calculate the optical depths. A linear search is slow and
+    ! massively kills the performance of this entire subroutine. Hence this
+    ! somewhat specialised search routine. First, we calculate an average
+    ! step size of the spectroscopy wavelength grid, and then take a first
+    ! guess as to where the index might be. Then we step backwards if we went
+    ! too far (which is usally not the case as the step size is increasing).
+    ! Lastly, we just step forwards to see if our wavelength falls into the
+    ! next spectroscopy wavelength grid points.
 
-    do i=1, size(wl)
-       if (wl(i) <= gas%wavelength(1)) then
-          wl_left_indices(i) = 1
+    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
+         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
+    gas_wl_start = gas%wavelength(1)
+
+    do j=1, size(wl)
+       if (wl(j) <= gas%wavelength(1)) then
+          wl_left_indices(j) = 1
           cycle
-       else if (wl(i) >= gas%wavelength(size(gas%wavelength))) then
-          wl_left_indices(i) = size(gas%wavelength) - 1
+       elseif (wl(j) >= gas%wavelength(size(gas%wavelength))) then
+          wl_left_indices(j) = size(gas%wavelength) - 1
           cycle
        end if
 
-       do j=1, size(gas%wavelength)-1
-          if ((wl(i) >= gas%wavelength(j)) .and. &
-               (wl(i) < gas%wavelength(j+1))) then
-             wl_left_indices(i) = j
+       gas_idx_fg = int(floor((wl(j) - gas_wl_start) / gas_wl_step_avg))
+
+       do while (wl(j) < gas%wavelength(gas_idx_fg))
+          gas_idx_fg = gas_idx_fg - 1
+       end do
+
+       do k=gas_idx_fg, size(gas%wavelength)-1
+          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
+             wl_left_indices(j) = k
              exit
           end if
        end do
@@ -93,12 +133,12 @@ contains
 
           if (need_psurf_jac) then
              ! Calculate perturbed properties when psurf jacobian is needed
-             p_fac_pert = (p_lower + PSURF_PERTURB - p(l-1)) / (p(l) - p(l-1))
+             p_lower_pert = psurf - PSURF_PERTURB
+             p_fac_pert = (p_lower_pert - p(l-1)) / (p(l) - p(l-1))
              T_lower_pert = (1.0d0 - p_fac_pert) * T(l-1) + p_fac_pert * T(l)
              H2O_lower_pert = (1.0d0 - p_fac_pert) * H2O(l-1) + p_fac_pert * H2O(l)
              VMR_lower_pert = (1.0d0 - p_fac_pert) * gas_vmr(l-1) + p_fac_pert * gas_vmr(l)
           end if
-
        else
           p_lower = p(l)
           T_lower = T(l)
@@ -136,15 +176,19 @@ contains
        ! between p_lower and p_higher. This way, we don't have to re-scale the
        ! result after integration and can obtain it simply by multiplying with
        ! the GK weights.
-       call kronrod_adjust(p_higher, p_lower, N_sub, &
-            GK_abscissae_f, GK_weights_f, G_weights_f)
 
        if (need_psurf_jac) then
           ! Since we altered the integration limit, we also need to re-scale the
           ! GK weights accordingly for the Jacobian
+          GK_abscissae_f_pert = GK_abscissae_f
+          GK_weights_f_pert = GK_weights_f
+          G_weights_f_pert = G_weights_f
           call kronrod_adjust(p_higher, p_lower_pert, N_sub, &
                GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
        end if
+
+       call kronrod_adjust(p_higher, p_lower, N_sub, &
+            GK_abscissae_f, GK_weights_f, G_weights_f)
 
        do k=1, N_sub
 
@@ -158,7 +202,7 @@ contains
           this_T = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
           this_H2O = (1.0d0 - this_p_fac) * H2O_lower + this_p_fac * H2O_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
-          this_M = 1d3 * (((1 - this_H2O) * dry_air_mass) + (H2Om * this_H2O))
+          this_M = 1d3 * (((1 - this_H2O) * DRY_AIR_MASS) + (H2Om * this_H2O))
 
           ! Loop through all wavelengths, and grab the cross section value corresponding to
           ! the ACTUAL p,T,wl,H2O coordinates.
@@ -175,26 +219,34 @@ contains
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
           if (need_psurf_jac .and. (l == N_lev)) then
+
              this_p_pert = GK_abscissae_f_pert(k)
 
              this_p_fac_pert = ((this_p_pert - p_higher) / (p_lower_pert - p_higher))
-             this_T_pert = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
-             this_H2O_pert = (1.0d0 - this_p_fac) * H2O_lower + this_p_fac * H2O_higher
-             this_VMR_pert = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
-             this_M_pert = 1d3 * (((1 - this_H2O) * dry_air_mass) + (H2Om * this_H2O))
+             this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
+             this_H2O_pert = (1.0d0 - this_p_fac_pert) * H2O_lower_pert + this_p_fac_pert * H2O_higher
+             this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
+             this_M_pert = 1d3 * (((1 - this_H2O_pert) * DRY_AIR_MASS) + (H2Om * this_H2O_pert))
 
              do j=1, size(wl)
-!!$                gas_tau(j,l-1) = gas_tau_dpsurf(j,l-1) + GK_weights_f_pert(k) * (&
-!!$                     get_CS_value_at(gas, wl(j), this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(j)) &
-!!$                     * this_VMR_pert * (1.0d0 - this_H2O_pert) &
-!!$                     / (9.81 * this_M_pert) * NA * 0.1d0)
+                ! This calculates the gas OD, as a result of a perturbed surface pressure
+                gas_tau_dpsurf(j,l-1) = gas_tau_dpsurf(j,l-1) + GK_weights_f_pert(k) * (&
+                     get_CS_value_at(gas, wl(j), this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(j)) &
+                     * this_VMR_pert * (1.0d0 - this_H2O_pert) &
+                     / (9.81 * this_M_pert) * NA * 0.1d0)
              end do
 
           end if
        end do
 
+       if (need_psurf_jac .and. (l == N_lev)) then
+          ! Divide by the perturbation value to get dtau/dpsurf
+          !gas_tau_dpsurf(:,l-1) = -(gas_tau_dpsurf(:,l-1)
+       end if
+
        if (need_psurf_jac .and. (l < N_lev)) then
-          ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array
+          ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array, as the
+          ! surface pressure Jacobian merely affects the BOA layer ODs 
           gas_tau_dpsurf(:,l-1) = gas_tau(:,l-1)
        end if
 

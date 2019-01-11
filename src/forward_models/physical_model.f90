@@ -421,7 +421,8 @@ contains
        call initialize_statevector(SV, &
             num_albedo_parameters, &
             num_sif_parameters, &
-            num_dispersion_parameters)
+            num_dispersion_parameters, &
+            1) ! surface pressure
 
        retr_count = 0
        mean_duration = 0.0d0
@@ -550,6 +551,9 @@ contains
     !! Albedo
     double precision :: albedo_apriori
     double precision, allocatable :: albedo(:)
+
+    !! Surface pressure
+    double precision :: psurf
 
     double precision :: continuum
 
@@ -713,7 +717,7 @@ contains
        ! take that into account for the incoming solar irradiance
 
        albedo_apriori = PI * maxval(radiance_l1b) / &
-            (1.0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+            (0.5 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
     end select
 
@@ -748,6 +752,11 @@ contains
        end do
     end if
 
+    ! Surface pressure
+    if (SV%num_psurf == 1) then
+       SV%svap(SV%idx_psurf(1)) = met_psurf(i_fp, i_fr)
+    end if
+
     ! Retrival iteration loop
     iteration = 1
     keep_iterating = .true.
@@ -777,10 +786,16 @@ contains
           ! surface pressure lies. We use the initial surface pressure coming from MET.
           this_atm = regrid_atmosphere(initial_atm, met_psurf(i_fp, i_fr))
           ! And get the T and SH profiles onto our new atmosphere grid
-          call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-               met_T_profiles(:,i_fp, i_fr), this_atm%T)
-          call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-               met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
+          !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+          !     met_T_profiles(:,i_fp, i_fr), this_atm%T)
+          call pwl_value_1d(size(met_P_levels, 1), &
+               met_P_levels(:,i_fp,i_fr), met_T_profiles(:,i_fp,i_fr), &
+               size(this_atm%p), this_atm%p, this_atm%T)
+          !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+          !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
+          call pwl_value_1d(size(met_P_levels, 1), &
+               met_P_levels(:,i_fp,i_fr), met_SH_profiles(:,i_fp,i_fr), &
+               size(this_atm%p), this_atm%p, this_atm%sh)
        else
           ! Otherwise, calculate it from the state vector
           ! Obviously ONLY if we want to retrieve it, otherwise the albedo
@@ -791,12 +806,38 @@ contains
                 albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (dble(i-1)))
              end do
           endif
+
+          ! If we are retrieving surface pressure, we possibly need
+          ! to re-grid the atmosphere if the surface pressure jumps to the
+          ! next layer.
+
+          if (SV%num_psurf == 1) then
+             if (SV%svsv(SV%idx_psurf(1)) < this_atm%p(size(this_atm%p) - 1)) then
+                call logger%debug(fname, "Re-gridding atmosphere!")
+                this_atm = regrid_atmosphere(this_atm, SV%svsv(SV%idx_psurf(1)))
+                ! And get the T and SH profiles onto our new atmosphere grid
+                !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+                !     met_T_profiles(:,i_fp, i_fr), this_atm%T)
+                call pwl_value_1d(size(met_P_levels, 1), &
+                     met_P_levels(:,i_fp,i_fr), met_T_profiles(:,i_fp,i_fr), &
+                     size(this_atm%p), this_atm%p, this_atm%T)
+                call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+                     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
+             end if
+          end if
        endif
+
+       this_atm%sh = 1d-5
 
        ! Save the old state vector (iteration - 1'th state vector)
        old_sv = SV%svsv
 
        num_levels = size(this_atm%p)
+
+       do j=1, num_levels
+          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
+       end do
+
 
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
        ! and their VMRs. This branch of the code will only be entered if we have at least
@@ -807,18 +848,27 @@ contains
           allocate(gas_tau(size(this_solar, 1), num_levels-1, num_gases))
           allocate(gas_tau_dpsurf(size(this_solar, 1), num_levels-1, num_gases))
 
+          if (SV%num_psurf == 1) then
+             psurf = SV%svsv(SV%idx_psurf(1))
+          else
+             psurf = met_psurf(i_fp, i_fr)
+          end if
+
+
+          write(*,*) "My surface pressure is :", psurf
+
           call cpu_time(cpu_start)
           do j=1, num_gases
              call calculate_gas_tau( &
                   this_solar(:,1), &
                   this_atm%gas_vmr(:,j), &
-                  met_psurf(i_fp, i_fr), &
+                  psurf, &
                   this_atm%p(:), &
                   this_atm%T(:), &
                   ! This requires H2O VMR rather than specific humidity
                   H2Om * this_atm%sh(:) / (1.0d0 - this_atm%sh(:)), & 
                   MCS%gas(j), &
-                  3, &
+                  19, &
                   .true., &
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j))
@@ -827,9 +877,10 @@ contains
 
           write(*,*) "GAS OD time: ", cpu_end - cpu_start
 
-          open(newunit=funit, file="gas_od.txt")
+          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
+          open(newunit=funit, file=trim(tmp_str))
           do j=1, size(gas_tau, 1)
-             write(funit, *) gas_tau(j,num_levels-1,1), gas_tau_dpsurf(j,1,1)
+             write(funit, *) gas_tau(j,num_levels-1,1), gas_tau_dpsurf(j,num_levels-1,1)
           end do
           close(funit)
 
@@ -859,13 +910,23 @@ contains
                   cos(DEG2RAD * SZA(i_fp, i_fr)) * &
                   ((this_solar(:,1) - this_solar(1,1)) ** (dble(i-1)))
           end do
+       end if
 
-
+       ! Surface pressure Jacobian
+       if (SV%num_psurf == 1) then
+          K_hi(:, SV%idx_psurf(1)) = radiance_calc_work_hi(:) &
+               * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2) - sum(sum(gas_tau, dim=2), dim=2)) / PSURF_PERTURB
+          open(newunit=funit, file='psurf_jac.dat')
+          do j=1, size(radiance_calc_work_hi)
+             write(funit,*) K_hi(j, SV%idx_psurf(1))
+          end do
+          close(funit)
        end if
 
        ! Stokes coefficients
-       radiance_calc_work_hi(:) = radiance_calc_work_hi(:)! * 0.5
-       K_hi(:,:) = K_hi(:,:)! * 0.5
+       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * 0.5
+       K_hi(:,:) = K_hi(:,:) * 0.5
 
 
        ! Dispersion
@@ -1028,31 +1089,29 @@ contains
           SV%sver(i) = sqrt(Shat(i,i))
        end do
 
-!!$             write(*,*) "Prior, current state vector and errors"
-!!$             write(*,*) "Iteration: ", iteration-1
-!!$             do i=1, N_sv
-!!$                 write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), SV%sver(i)
-!!$              end do
-!!$             write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$            
-!!$             open(file="l1b_spec.dat", newunit=funit)
-!!$             do i=1, N_spec
-!!$                  write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$                                 noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
-!!$             end do
-!!$             close(funit)
-!!$            
-             write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
-             open(file=trim(tmp_str), newunit=funit)
-             do i=1, N_spec
-                  write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-                                 noise_work(i)
-             end do
-             close(funit)
-!!$
-!!$
-!!$            !
-             read(*,*)
+       write(*,*) "Prior, current state vector and errors"
+       write(*,*) "Iteration: ", iteration-1
+       do i=1, N_sv
+          write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), SV%sver(i)
+       end do
+       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i), K(i, SV%idx_psurf(1))
+       end do
+       close(funit)
+
+       write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
+       open(file=trim(tmp_str), newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i)
+       end do
+       close(funit)
+
+       read(*,*)
 
        if (dsigma_sq < dble(N_sv)) then
           keep_iterating = .false.
@@ -1081,7 +1140,7 @@ contains
 
        end if
 
-       if (iteration == 5) then
+       if (iteration == 50) then
           call logger%warning(fname, "Not converged!")
           keep_iterating = .false.
 

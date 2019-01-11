@@ -135,7 +135,7 @@ contains
 
         do i=1, size(x_hires)
 
-            ! Between which to lowres values is our hires value?
+            ! Between which two lowres values is our hires value?
             idx_closest = minloc(abs(x_lowres - x_hires(i)), dim=1) !find_closest_index_DP(x_lowres, x_hires(i))
             if (x_lowres(idx_closest) < x_hires(i)) then
                 idx_right = idx_closest + 1

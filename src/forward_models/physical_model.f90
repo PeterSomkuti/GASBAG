@@ -823,11 +823,11 @@ contains
                 ! And get the T and SH profiles onto our new atmosphere grid
                 !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
                 !     met_T_profiles(:,i_fp, i_fr), this_atm%T)
-                !call pwl_value_1d(size(met_P_levels, 1), &
-                !     met_P_levels(:,i_fp,i_fr), met_T_profiles(:,i_fp,i_fr), &
-                !     size(this_atm%p), this_atm%p, this_atm%T)
-                !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-                !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
+                call pwl_value_1d(size(met_P_levels, 1), &
+                     met_P_levels(:,i_fp,i_fr), met_T_profiles(:,i_fp,i_fr), &
+                     size(this_atm%p), this_atm%p, this_atm%T)
+                call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
+                     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
              end if
           end if
        endif
@@ -842,17 +842,17 @@ contains
           end if
        end do
 
-       this_atm%sh = 1d-5
-       this_atm%T = 220.0d0
+       !this_atm%sh = 1d-5
+       !this_atm%T = 220.0d0
 
        ! Save the old state vector (iteration - 1'th state vector)
        old_sv = SV%svsv
 
 
 
-       do j=1, num_active_levels
-          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
-       end do
+!!$       do j=1, num_active_levels
+!!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
+!!$       end do
 
 
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
@@ -870,6 +870,8 @@ contains
           else
              psurf = met_psurf(i_fp, i_fr)
           end if
+
+          if (psurf < 0) return
 
 
           write(*,*) "My surface pressure is :", psurf
@@ -890,29 +892,29 @@ contains
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j))
 
-             call calculate_gas_tau( &
-                  this_solar(:,1), &
-                  this_atm%gas_vmr(:,j), &
-                  psurf - PSURF_PERTURB, &
-                  this_atm%p(:), &
-                  this_atm%T(:), &
-                  this_atm%sh(:), &
-                  MCS%gas(j), &
-                  5, &
-                  .true., &
-                  gas_tau_pert(:,:,j), &
-                  gas_tau_dpsurf(:,:,j))
+!!$             call calculate_gas_tau( &
+!!$                  this_solar(:,1), &
+!!$                  this_atm%gas_vmr(:,j), &
+!!$                  psurf - PSURF_PERTURB, &
+!!$                  this_atm%p(:), &
+!!$                  this_atm%T(:), &
+!!$                  this_atm%sh(:), &
+!!$                  MCS%gas(j), &
+!!$                  5, &
+!!$                  .true., &
+!!$                  gas_tau_pert(:,:,j), &
+!!$                  gas_tau_dpsurf(:,:,j))
           end do
           call cpu_time(cpu_end)
 
           write(*,*) "GAS OD time: ", cpu_end - cpu_start
 
-          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
-          open(newunit=funit, file=trim(tmp_str))
-          do j=1, size(gas_tau, 1)
-             write(funit, *) gas_tau(j,num_active_levels-1,1), gas_tau_pert(j,num_active_levels-1,1)
-          end do
-          close(funit)
+!!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
+!!$          open(newunit=funit, file=trim(tmp_str))
+!!$          do j=1, size(gas_tau, 1)
+!!$             write(funit, *) gas_tau(j,num_active_levels-1,1), gas_tau_pert(j,num_active_levels-1,1)
+!!$          end do
+!!$          close(funit)
 
        end if
 
@@ -944,22 +946,22 @@ contains
 
        ! Surface pressure Jacobian
        if (SV%num_psurf == 1) then
-          !K_hi(:, SV%idx_psurf(1)) = radiance_calc_work_hi(:) &
-          !     * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-          !     * (sum(sum(gas_tau_dpsurf, dim=2), dim=2) - sum(sum(gas_tau, dim=2), dim=2)) / PSURF_PERTURB
+          K_hi(:, SV%idx_psurf(1)) = radiance_calc_work_hi(:) &
+               * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2)) / PSURF_PERTURB
 
-          call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
-               VZA(i_fp, i_fr), albedo, gas_tau_pert, &
-               radiance_tmp_work_hi)
-          radiance_tmp_work_hi = radiance_tmp_work_hi * this_solar(:,2) + SV%svsv(SV%idx_sif(1))
-
-          K_hi(:, SV%idx_psurf(1)) = -(radiance_tmp_work_hi(:) - radiance_calc_work_hi(:)) / PSURF_PERTURB
-
-          open(newunit=funit, file='psurf_jac.dat')
-          do j=1, size(radiance_calc_work_hi)
-             write(funit,*) radiance_calc_work_hi(j), radiance_tmp_work_hi(j), K_hi(j, SV%idx_psurf(1))
-          end do
-          close(funit)
+!!$          call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
+!!$               VZA(i_fp, i_fr), albedo, gas_tau_pert, &
+!!$               radiance_tmp_work_hi)
+!!$          radiance_tmp_work_hi = radiance_tmp_work_hi * this_solar(:,2) + SV%svsv(SV%idx_sif(1))
+!!$
+!!$          K_hi(:, SV%idx_psurf(1)) = -(radiance_tmp_work_hi(:) - radiance_calc_work_hi(:)) / PSURF_PERTURB
+!!$
+!!$          open(newunit=funit, file='psurf_jac.dat')
+!!$          do j=1, size(radiance_calc_work_hi)
+!!$             write(funit,*) radiance_calc_work_hi(j), radiance_tmp_work_hi(j), K_hi(j, SV%idx_psurf(1))
+!!$          end do
+!!$          close(funit)
        end if
 
        ! Stokes coefficients
@@ -1127,27 +1129,27 @@ contains
           SV%sver(i) = sqrt(Shat(i,i))
        end do
 
-       write(*,*) "Prior, current state vector and errors"
-       write(*,*) "Iteration: ", iteration-1
-       do i=1, N_sv
-          write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), SV%sver(i)
-       end do
-       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i), K(i, SV%idx_psurf(1))
-       end do
-       close(funit)
-
-       write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
-       open(file=trim(tmp_str), newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i)
-       end do
-       close(funit)
+!!$       write(*,*) "Prior, current state vector and errors"
+!!$       write(*,*) "Iteration: ", iteration-1
+!!$       do i=1, N_sv
+!!$          write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), SV%sver(i)
+!!$       end do
+!!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i), K(i, SV%idx_psurf(1))
+!!$       end do
+!!$       close(funit)
+!!$
+!!$       write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
+!!$       open(file=trim(tmp_str), newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i)
+!!$       end do
+!!$       close(funit)
 
        if (dsigma_sq < dble(N_sv)) then
           keep_iterating = .false.
@@ -1173,30 +1175,30 @@ contains
 
           !if (i_fr == 51) then
           ! end if
-          read(*,*)
+          !read(*,*)
        end if
 
-       if (iteration == 50) then
+       if (iteration == 10) then
           call logger%warning(fname, "Not converged!")
           keep_iterating = .false.
 
           ! Print out SV for visual inspection!
-          write(*,*) "Iteration: ", iteration
-          do i=1, N_sv
-             write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), sqrt(Shat(i,i))
-          end do
-          write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$          write(*,*) "Iteration: ", iteration
+!!$          do i=1, N_sv
+!!$             write(*,*) i, SV%svap(i), old_sv(i), SV%svsv(i), sqrt(Shat(i,i))
+!!$          end do
+!!$          write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$
+!!$          write(*,*) "Dsigma_sq: ", dsigma_sq
+!!$
+!!$          open(file="l1b_spec.dat", newunit=funit)
+!!$          do i=1, N_spec
+!!$             write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$                  noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
+!!$          end do
+!!$          close(funit)
 
-          write(*,*) "Dsigma_sq: ", dsigma_sq
-
-          open(file="l1b_spec.dat", newunit=funit)
-          do i=1, N_spec
-             write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-                  noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
-          end do
-          close(funit)
-
-          read(*,*)
+          !read(*,*)
        end if
 
        ! These quantities are all allocated within the iteration loop, and

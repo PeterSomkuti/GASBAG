@@ -231,13 +231,13 @@ contains
 
        if (need_psurf_jac .and. (l == num_active_levels)) then
           ! Divide by the perturbation value to get dtau/dpsurf
-          !gas_tau_dpsurf(:,l-1) = -(gas_tau_dpsurf(:,l-1)
+          gas_tau_dpsurf(:,l-1) = (gas_tau_dpsurf(:,l-1) - gas_tau(:,l-1))
        end if
 
        if (need_psurf_jac .and. (l < num_active_levels)) then
           ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array, as the
           ! surface pressure Jacobian merely affects the BOA layer ODs 
-          gas_tau_dpsurf(:,l-1) = gas_tau(:,l-1)
+          gas_tau_dpsurf(:,l-1) = 0.0d0 !gas_tau(:,l-1)
        end if
 
     end do

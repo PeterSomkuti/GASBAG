@@ -7,24 +7,6 @@ module gas_tau_mod
 
 contains
 
-  recursive function binarySearch_R (a, value) result (bsresult)
-    double precision, intent(in) :: a(:), value
-    integer          :: bsresult, mid
-
-    mid = size(a)/2 + 1
-    if (size(a) == 0) then
-       bsresult = 0        ! not found
-    else if (a(mid) > value) then
-       bsresult= binarySearch_R(a(:mid-1), value)
-    else if (a(mid) < value) then
-       bsresult = binarySearch_R(a(mid+1:), value)
-       if (bsresult /= 0) then
-          bsresult = mid + bsresult
-       end if
-    else
-       bsresult = mid      ! SUCCESS!!
-    end if
-  end function binarySearch_R
 
   subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, &
        gas, N_sub, need_psurf_jac, gas_tau, gas_tau_dpsurf)
@@ -56,7 +38,7 @@ contains
     double precision :: GK_abscissae_f(N_sub), GK_weights_f(N_sub), G_weights_f(N_sub)
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
 
-    integer :: N_lay, N_lev, N_wl
+    integer :: N_lay, N_lev, N_wl, num_active_levels
     integer :: i,j,k,l
     integer :: funit
 
@@ -68,6 +50,14 @@ contains
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
     N_wl = size(wl)
+
+    do j=1, N_lev
+       if (psurf > p(j)) then
+          num_active_levels = j+1
+       end if
+    end do
+
+    write(*,*) "Active levels: ", num_active_levels
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
@@ -116,12 +106,12 @@ contains
     call kronrod((N_sub-1)/2, 1d-6, GK_abscissae, GK_weights, G_weights)
 
     ! Traverse the atmosphere layers(!), starting from the bottom to the top
-    do l=N_lev,2,-1
+    do l=num_active_levels, 2, -1
 
        ! First, grab the lower (altitude-wise) and higher values for
        ! p,T,H2O from the atmosphere profiles for whatever layer l we're in.
 
-       if (l == N_lev) then
+       if (l == num_active_levels) then
           ! BOA layer - psurf should be between lowermost level and
           ! the level above (ideally). But this will extrapolate linearly
           ! anyway, which might cause some trouble.
@@ -218,7 +208,7 @@ contains
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
-          if (need_psurf_jac .and. (l == N_lev)) then
+          if (need_psurf_jac .and. (l == num_active_levels)) then
 
              this_p_pert = GK_abscissae_f_pert(k)
 
@@ -239,12 +229,12 @@ contains
           end if
        end do
 
-       if (need_psurf_jac .and. (l == N_lev)) then
+       if (need_psurf_jac .and. (l == num_active_levels)) then
           ! Divide by the perturbation value to get dtau/dpsurf
           !gas_tau_dpsurf(:,l-1) = -(gas_tau_dpsurf(:,l-1)
        end if
 
-       if (need_psurf_jac .and. (l < N_lev)) then
+       if (need_psurf_jac .and. (l < num_active_levels)) then
           ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array, as the
           ! surface pressure Jacobian merely affects the BOA layer ODs 
           gas_tau_dpsurf(:,l-1) = gas_tau(:,l-1)
@@ -370,7 +360,7 @@ contains
          idx_l_wl = size(gas%wavelength) - 1
       else
          do i=1, size(gas%wavelength)
-            if ((wl > gas%wavelength(i)) .and. (wl <= gas%wavelength(i))) then
+            if ((wl > gas%wavelength(i)) .and. (wl <= gas%wavelength(i+1))) then
                idx_l_wl = i
                exit
             end if
@@ -425,15 +415,16 @@ contains
         + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
 
    ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
-   C2(0,0) = C3(0,1,0) * (1.0d0 - H2O_d) + C3(1,1,0) * H2O_d
-   C2(0,1) = C3(0,1,1) * (1.0d0 - H2O_d) + C3(1,1,1) * H2O_d
+   C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d
+   C2(0,1) = C3(0,0,1) * (1.0d0 - H2O_d) + C3(1,0,1) * H2O_d
    C2(1,0) = C3(0,1,0) * (1.0d0 - H2O_d) + C3(1,1,0) * H2O_d
    C2(1,1) = C3(0,1,1) * (1.0d0 - H2O_d) + C3(1,1,1) * H2O_d
 
    ! Next, go across the T dimension - remember that we have two normalised
    ! temperatures, one is for the lower, one is for the higher pressure index!
+   ! C1 = C1(pressure)
    C1(0) = C2(0,0) * (1.0d0 - T_d_l) + C2(1,0) * T_d_l
-   C1(0) = C2(0,1) * (1.0d0 - T_d_r) + C2(1,1) * T_d_r
+   C1(1) = C2(0,1) * (1.0d0 - T_d_r) + C2(1,1) * T_d_r
 
    ! Finally, we interpolate along pressure, which is the final result that
    ! we pass back. If below zero, set to zero.

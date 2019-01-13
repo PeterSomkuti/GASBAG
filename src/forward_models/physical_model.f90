@@ -427,7 +427,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
+       do i_fr=5555, num_frames
           do i_fp=1, my_instrument%num_fp
 
              if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -874,7 +874,7 @@ contains
           if (psurf < 0) return
 
 
-          write(*,*) "My surface pressure is :", psurf
+          !write(*,*) "My surface pressure is :", psurf
 
           call cpu_time(cpu_start)
 
@@ -887,7 +887,7 @@ contains
                   this_atm%T(:), &
                   this_atm%sh(:), &
                   MCS%gas(j), &
-                  5, &
+                  3, &
                   .true., &
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j))
@@ -907,7 +907,7 @@ contains
           end do
           call cpu_time(cpu_end)
 
-          write(*,*) "GAS OD time: ", cpu_end - cpu_start
+          !write(*,*) "GAS OD time: ", cpu_end - cpu_start
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
 !!$          open(newunit=funit, file=trim(tmp_str))
@@ -1153,10 +1153,9 @@ contains
 
        if (dsigma_sq < dble(N_sv)) then
           keep_iterating = .false.
-          ! write(*,*) "Converged!"
-
-          ! write(*,*) "Iterations: ", iteration
-          ! write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+          !write(*,*) "Converged!"
+          !write(*,*) "Iterations: ", iteration
+          !write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 
           do i=1, N_sv
              SV%sver(i) = sqrt(Shat(i,i))
@@ -1211,6 +1210,7 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
+       !read(*,*)
 
     end do
 

@@ -57,8 +57,6 @@ contains
        end if
     end do
 
-    write(*,*) "Active levels: ", num_active_levels
-
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
@@ -194,17 +192,10 @@ contains
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
           this_M = 1d3 * (((1 - this_H2O) * DRY_AIR_MASS) + (H2Om * this_H2O))
 
-          ! Loop through all wavelengths, and grab the cross section value corresponding to
-          ! the ACTUAL p,T,wl,H2O coordinates.
-          do j=1, size(wl)
-             ! and finally calculate the sub-layer optical depth and add it to
-             ! the value of the layer optical depth.
-
-             gas_tau(j,l-1) = gas_tau(j,l-1) + GK_weights_f(k) * (&
-                  get_CS_value_at(gas, wl(j), this_p, this_T, this_H2O, wl_left_indices(j)) &
+          gas_tau(:,l-1) = gas_tau(:,l-1) + GK_weights_f(k) * (&
+                  get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:)) &
                   * this_VMR * (1.0d0 - this_H2O) &
                   / (9.81 * this_M) * NA * 0.1d0)
-          end do
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
@@ -218,13 +209,11 @@ contains
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
              this_M_pert = 1d3 * (((1 - this_H2O_pert) * DRY_AIR_MASS) + (H2Om * this_H2O_pert))
 
-             do j=1, size(wl)
-                ! This calculates the gas OD, as a result of a perturbed surface pressure
-                gas_tau_dpsurf(j,l-1) = gas_tau_dpsurf(j,l-1) + GK_weights_f_pert(k) * (&
-                     get_CS_value_at(gas, wl(j), this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(j)) &
+             ! This calculates the gas OD, as a result of a perturbed surface pressure
+             gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&
+                     get_CS_value_at(gas, wl, this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(:)) &
                      * this_VMR_pert * (1.0d0 - this_H2O_pert) &
                      / (9.81 * this_M_pert) * NA * 0.1d0)
-             end do
 
           end if
        end do
@@ -249,14 +238,14 @@ contains
 
 
 
-  pure function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+ pure function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
    implicit none
    type(CS_gas), intent(in) :: gas
-   double precision, intent(in) :: wl, p, T, H2O
-   integer, optional, intent(in) :: wl_left_idx
+   double precision, intent(in) :: wl(:), p, T, H2O
+   integer, intent(in) :: wl_left_idx(:)
 
-   double precision :: CS_value
+   double precision :: CS_value(size(wl))
 
    ! These here are the indices between which the CS array will
    ! be linearly interpolated: e.g. idx_(left, right)_(pressure)
@@ -349,33 +338,11 @@ contains
       idx_r_H2O = 1
    end if
 
-   ! Get the wavelength indices - unless the wl_left_dx is already specified,
-   ! from a previous calculation.
-   if (present(wl_left_idx)) then
-      idx_l_wl = wl_left_idx
-   else
-      if (wl <= gas%wavelength(1)) then
-         idx_l_wl = 1
-      else if (wl >= gas%wavelength(size(gas%wavelength))) then
-         idx_l_wl = size(gas%wavelength) - 1
-      else
-         do i=1, size(gas%wavelength)
-            if ((wl > gas%wavelength(i)) .and. (wl <= gas%wavelength(i+1))) then
-               idx_l_wl = i
-               exit
-            end if
-         end do
-      end if
-   end if
-   idx_r_wl = idx_l_wl + 1
-
    ! And perform the linear interpolation in now 3 or 4 dimensions!
    ! Remember, we store the CS grid in the following way:
    ! wavelength, h2o, temperature, pressure
    ! .. so we order the vertices of our polytope in the same way.
 
-   wl_d = (wl - gas%wavelength(idx_l_wl)) / &
-        (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
    p_d = (p - gas%p(idx_l_p)) / (gas%p(idx_r_p) - gas%p(idx_l_p))
    if (gas%has_H2O) then
       H2O_d = (H2O - gas%H2O(idx_l_H2O)) / (gas%H2O(idx_r_H2O) - gas%H2O(idx_l_H2O))
@@ -389,49 +356,59 @@ contains
    T_d_r = (T - gas%T(idx_rl_T, idx_r_p)) / &
         (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
 
-   ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
-   C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_l_H2O, idx_ll_T, idx_l_p) * wl_d
+   do i=1, size(wl)
 
-   C3(1,0,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_r_H2O, idx_ll_T, idx_l_p) * wl_d
+      idx_l_wl = wl_left_idx(i)
+      idx_r_wl = idx_l_wl + 1
 
-   C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
+      wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
+           (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
 
-   C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
+      ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
+      C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_ll_T, idx_l_p) * wl_d
 
-   C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
+      C3(1,0,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_ll_T, idx_l_p) * wl_d
 
-   C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
+      C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
 
-   C3(1,0,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rl_T, idx_r_p) * wl_d
+      C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
 
-   C3(1,1,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
-        + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
+      C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
 
-   ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
-   C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d
-   C2(0,1) = C3(0,0,1) * (1.0d0 - H2O_d) + C3(1,0,1) * H2O_d
-   C2(1,0) = C3(0,1,0) * (1.0d0 - H2O_d) + C3(1,1,0) * H2O_d
-   C2(1,1) = C3(0,1,1) * (1.0d0 - H2O_d) + C3(1,1,1) * H2O_d
+      C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
 
-   ! Next, go across the T dimension - remember that we have two normalised
-   ! temperatures, one is for the lower, one is for the higher pressure index!
-   ! C1 = C1(pressure)
-   C1(0) = C2(0,0) * (1.0d0 - T_d_l) + C2(1,0) * T_d_l
-   C1(1) = C2(0,1) * (1.0d0 - T_d_r) + C2(1,1) * T_d_r
+      C3(1,0,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rl_T, idx_r_p) * wl_d
 
-   ! Finally, we interpolate along pressure, which is the final result that
-   ! we pass back. If below zero, set to zero.
-   CS_value = C1(0) * (1.0d0 - p_d) + C1(1) * p_d
-   if (CS_value < 0.0d0) CS_value = 0.0d0
+      C3(1,1,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
+           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
 
- end function
+      ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
+      C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d
+      C2(0,1) = C3(0,0,1) * (1.0d0 - H2O_d) + C3(1,0,1) * H2O_d
+      C2(1,0) = C3(0,1,0) * (1.0d0 - H2O_d) + C3(1,1,0) * H2O_d
+      C2(1,1) = C3(0,1,1) * (1.0d0 - H2O_d) + C3(1,1,1) * H2O_d
+
+      ! Next, go across the T dimension - remember that we have two normalised
+      ! temperatures, one is for the lower, one is for the higher pressure index!
+      ! C1 = C1(pressure)
+      C1(0) = C2(0,0) * (1.0d0 - T_d_l) + C2(1,0) * T_d_l
+      C1(1) = C2(0,1) * (1.0d0 - T_d_r) + C2(1,1) * T_d_r
+
+      ! Finally, we interpolate along pressure, which is the final result that
+      ! we pass back. If below zero, set to zero.
+      CS_value(i) = C1(0) * (1.0d0 - p_d) + C1(1) * p_d
+      if (CS_value(i) < 0.0d0) CS_value(i) = 0.0d0
+
+   end do
+
+ end function get_CS_value_at
 
 
 end module gas_tau_mod

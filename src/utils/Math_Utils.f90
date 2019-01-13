@@ -5,13 +5,13 @@ module math_utils_mod
     implicit none
 
     double precision, parameter :: SPEED_OF_LIGHT = 299792458d0
-    double precision, parameter :: PI = 3.141592653589793
-    double precision, parameter :: DEG2RAD = 0.017453292519943295
-    double precision, parameter :: RAD2DEG = 57.29577951308232
+    double precision, parameter :: PI = 3.141592653589793d0
+    double precision, parameter :: DEG2RAD = 0.017453292519943295d0
+    double precision, parameter :: RAD2DEG = 57.29577951308232d0
     double precision, parameter :: NA = 6.022140857d23
-    double precision, parameter :: H2Om = 0.018015422135
-    double precision, parameter :: DRY_AIR_MASS = 0.02897
-    double precision, parameter :: PSURF_PERTURB = 100 !Pa
+    double precision, parameter :: H2Om = 0.018015422135d0
+    double precision, parameter :: DRY_AIR_MASS = 0.02897d0
+    double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
 
     public PI, DEG2RAD, RAD2DEG, combsort, percentile, invert_matrix, &
            single_convolve

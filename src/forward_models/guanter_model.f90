@@ -299,6 +299,8 @@ contains
         ! Are the radiances that we process sensible?
         logical :: radiance_OK
 
+        logical :: success_inv_mat
+
         double precision :: tmp_chi2, BIC
         logical :: BIC_converged
 
@@ -442,7 +444,12 @@ contains
         Shat_inv(:,:) = m_tmp1
 
         allocate(m_tmp2, mold=m_tmp1)
-        call invert_matrix(m_tmp1, m_tmp2)
+        call invert_matrix(m_tmp1, m_tmp2, success_inv_mat)
+        if (.not. success_inv_mat) then
+           call logger%error(fname, "Failed to invert K^T Se^-1 K")
+           return
+        end if
+
         ! m_tmp2 is know (K^T Se_inv K)^-1 = Shat
         Shat(:,:) = m_tmp2(:,:)
 

@@ -238,7 +238,7 @@ contains
 
 
 
- pure function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+ function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
    implicit none
    type(CS_gas), intent(in) :: gas

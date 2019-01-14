@@ -21,101 +21,120 @@ module math_utils_mod
 contains
 
 
-    subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
-                                    wl_output, output)
+  subroutine fft_convolution(input, kernel, output)
 
-        !! This is an implementation of the OCO-type ILS application, which ins't
-        !! quite a convolution since we have to treat every pixel with a different
-        !! ILS. wl_output is the DESIRED output wavelength grid
-
-        ! High-resolution bits
-        double precision, intent(in) :: wl_input(:), input(:)
-        ! "Convolution" wavelengths and kernels
-        double precision, intent(in) :: wl_kernels(:,:), kernels(:,:)
-        double precision, intent(in) :: wl_output(:)
-        double precision, intent(inout) :: output(:)
-
-        character(len=*), parameter :: fname = "oco_type_convolution"
-        integer :: N_pix, N_ils_pix
-        integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
-        double precision :: ILS_delta_min, ILS_delta_max
-        double precision :: wl_diff, wl_diff_old
-
-        double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
-        double precision :: time_start, time_stop
-        integer :: i, funit
-
-        N_pix = size(wl_output)
-        N_ils_pix = size(wl_kernels, 1)
-
-        if (N_pix /= size(wl_kernels, 2)) then
-            call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
-            stop 1
-        end if
-
-        if (N_pix /= size(kernels, 2)) then
-            call logger%fatal(fname, "kernels or wl_output have incompatible sizes.")
-            stop 1
-        end if
-
-        ! Main loop over all (instrument) output pixels
-        do concurrent (idx_pix=1:N_pix)
-
-            ! Note the ILS boundary in wavelength space
-            ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
-            ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
-
-            ! Find out, which index of the high-res input is closest to the
-            ! detector pixel, and also which is the center pixel
-            idx_hires_closest = -1
-            idx_hires_ILS_min = -1
-            idx_hires_ILS_max = -1
+    implicit none
+    double precision, intent(in) :: input(:), kernel(:)
+    double precision, intent(inout) :: output(:)
 
 
-            idx_hires_ILS_min = minloc(abs(wl_input - ILS_delta_min), dim=1)
-
-            !idx_hires_closest = find_closest_index_DP(wl_input, wl_output(idx_pix))
-            !idx_hires_ILS_min = find_closest_index_DP(wl_input, ILS_delta_min)
-            idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
-            !call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
-
-            ! Now we have to either interpolate the ILS data onto the high-res grid,
-            ! or, if the ILS data is higher resolution, do the other way round.
-            !if (N_ils_pix > (idx_hires_ILS_max - idx_hires_ILS_min + 1)) then
-                ! ILS is higher resolution than hires radiances
-            !    write(*,*) N_ils_pix
-            !    write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max - idx_hires_ILS_min
-            !    call logger%fatal(fname, "Oops - not implemented yet! Call Peter.")
-            !    stop 1
-            !else
-                ! ILS is lower resolution than hires radiances
-                !allocate(ILS_upsampled(idx_hires_ILS_max - idx_hires_ILS_min + 1))
-
-                ! This is a fairly expensive call! 0.3ms - but we do it 1016 times..
-                ! Upsample the ILS to the hires wavelength grid
-                !call linear_upsample(wl_input(idx_hires_ILS_min:idx_hires_ILS_max), &
-                !                     wl_output(idx_pix) + wl_kernels(:, idx_pix), &
-                !                     kernels(:, idx_pix), &
-                !                     ILS_upsampled)
-                ! And do the 'convolution'
-                !write(*,*) '--------------'
-                !write(*,*) shape(kernels)
-                !write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max-idx_hires_ILS_min
-
-                if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
-                    write(*,*) "dimension issue in oco_convolution routine"
-                    !stop 1
-                end if
+    ! FFT-type convolution using FFTPACK5.1, which is most efficient and
+    ! quickest if our two arrays are powers of 2. We thus must zero pad
+    ! to a) get the dimension of the array to 2^x (or at least some low
+    ! number of prime factors), and b) to mitigate the wrap-around problem
+    ! of the FFT method.
 
 
-                output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
-                                 / sum(kernels(:, idx_pix))
 
-                !deallocate(ILS_upsampled)
-            !end if
-        end do
 
-    end subroutine
+  end subroutine fft_convolution
+
+
+  subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
+       wl_output, output)
+
+    !! This is an implementation of the OCO-type ILS application, which ins't
+    !! quite a convolution since we have to treat every pixel with a different
+    !! ILS. wl_output is the DESIRED output wavelength grid
+
+    ! High-resolution bits
+    double precision, intent(in) :: wl_input(:), input(:)
+    ! "Convolution" wavelengths and kernels
+    double precision, intent(in) :: wl_kernels(:,:), kernels(:,:)
+    double precision, intent(in) :: wl_output(:)
+    double precision, intent(inout) :: output(:)
+
+    character(len=*), parameter :: fname = "oco_type_convolution"
+    integer :: N_pix, N_ils_pix
+    integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
+    double precision :: ILS_delta_min, ILS_delta_max
+    double precision :: wl_diff, wl_diff_old
+
+    double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
+    double precision :: time_start, time_stop
+    integer :: i, funit
+
+    N_pix = size(wl_output)
+    N_ils_pix = size(wl_kernels, 1)
+
+    if (N_pix /= size(wl_kernels, 2)) then
+       call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
+       stop 1
+    end if
+
+    if (N_pix /= size(kernels, 2)) then
+       call logger%fatal(fname, "kernels or wl_output have incompatible sizes.")
+       stop 1
+    end if
+
+    ! Main loop over all (instrument) output pixels
+    do idx_pix=1, N_pix
+
+       ! Note the ILS boundary in wavelength space
+       ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
+       ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
+
+       ! Find out, which index of the high-res input is closest to the
+       ! detector pixel, and also which is the center pixel
+       idx_hires_closest = -1
+       idx_hires_ILS_min = -1
+       idx_hires_ILS_max = -1
+
+
+       idx_hires_ILS_min = minloc(abs(wl_input - ILS_delta_min), dim=1)
+
+       !idx_hires_closest = find_closest_index_DP(wl_input, wl_output(idx_pix))
+       !idx_hires_ILS_min = find_closest_index_DP(wl_input, ILS_delta_min)
+       idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
+       !call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
+
+       ! Now we have to either interpolate the ILS data onto the high-res grid,
+       ! or, if the ILS data is higher resolution, do the other way round.
+       !if (N_ils_pix > (idx_hires_ILS_max - idx_hires_ILS_min + 1)) then
+       ! ILS is higher resolution than hires radiances
+       !    write(*,*) N_ils_pix
+       !    write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max - idx_hires_ILS_min
+       !    call logger%fatal(fname, "Oops - not implemented yet! Call Peter.")
+       !    stop 1
+       !else
+       ! ILS is lower resolution than hires radiances
+       !allocate(ILS_upsampled(idx_hires_ILS_max - idx_hires_ILS_min + 1))
+
+       ! This is a fairly expensive call! 0.3ms - but we do it 1016 times..
+       ! Upsample the ILS to the hires wavelength grid
+       !call linear_upsample(wl_input(idx_hires_ILS_min:idx_hires_ILS_max), &
+       !                     wl_output(idx_pix) + wl_kernels(:, idx_pix), &
+       !                     kernels(:, idx_pix), &
+       !                     ILS_upsampled)
+       ! And do the 'convolution'
+       !write(*,*) '--------------'
+       !write(*,*) shape(kernels)
+       !write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max-idx_hires_ILS_min
+
+       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
+          write(*,*) "dimension issue in oco_convolution routine"
+          !stop 1
+       end if
+
+
+       output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
+            / sum(kernels(:, idx_pix))
+
+       !deallocate(ILS_upsampled)
+       !end if
+    end do
+
+  end subroutine oco_type_convolution
 
     subroutine linear_upsample(x_hires, x_lowres, y_lowres, output)
 
@@ -208,38 +227,43 @@ contains
     end function
 
 
-    subroutine invert_matrix(mat_in, mat_out)
+    subroutine invert_matrix(mat_in, mat_out, success)
 
-        double precision, dimension(:,:), intent(in) :: mat_in
-        double precision, dimension(:,:), intent(out) :: mat_out
+      double precision, dimension(:,:), intent(in) :: mat_in
+      double precision, dimension(:,:), intent(out) :: mat_out
+      logical, intent(out):: success
 
-        double precision, dimension(size(mat_in,1)) :: work  ! work array for LAPACK
-        integer, dimension(size(mat_in,1)) :: ipiv   ! pivot indices
-        integer :: n, info
+      double precision, dimension(size(mat_in,1)) :: work  ! work array for LAPACK
+      integer, dimension(size(mat_in,1)) :: ipiv   ! pivot indices
+      integer :: n, info
 
-        ! Store A in Ainv to prevent it from being overwritten by LAPACK
-        mat_out(:,:) = mat_in(:,:)
-        n = size(mat_in,1)
+      ! Store A in Ainv to prevent it from being overwritten by LAPACK
+      mat_out(:,:) = mat_in(:,:)
+      n = size(mat_in,1)
 
-        ! DGETRF computes an LU factorization of a general M-by-N matrix A
-        ! using partial pivoting with row interchanges.
-        call DGETRF(n, n, mat_out, n, ipiv, info)
+      ! DGETRF computes an LU factorization of a general M-by-N matrix A
+      ! using partial pivoting with row interchanges.
+      call DGETRF(n, n, mat_out, n, ipiv, info)
 
-        if (info /= 0) then
-            call logger%fatal("invert_matrix", "Matrix is numerically singular!")
-            stop 1
-        end if
+      if (info /= 0) then
+         call logger%fatal("invert_matrix", "Matrix is numerically singular!")
+         success = .false.
+         return
+      end if
 
-        ! DGETRI computes the inverse of a matrix using the LU factorization
-        ! computed by DGETRF.
-        call DGETRI(n, mat_out, n, ipiv, work, n, info)
+      ! DGETRI computes the inverse of a matrix using the LU factorization
+      ! computed by DGETRF.
+      call DGETRI(n, mat_out, n, ipiv, work, n, info)
 
-        if (info /= 0) then
-            call logger%fatal("invert_matrix", "Matrix inversion failed!")
-            stop 1
-        end if
+      if (info /= 0) then
+         call logger%fatal("invert_matrix", "Matrix inversion failed!")
+         success = .false.
+         return
+      end if
 
-    end subroutine
+      success = .true.
+
+    end subroutine invert_matrix
 
 
     function percentile(x, perc)

@@ -23,14 +23,14 @@ maxval = 5e18
 extent = [-maxval, maxval, -maxval, maxval]
 
 # we want to filter out those that are flagged bad in IDP
-qual = ((new['physical_retrieval_results/retrieved_chi2_757nm'][:] != 0) &
-        (new['physical_retrieval_results/retrieved_chi2_757nm'][:] < 2.5))
+qual = ((new['physical_retrieval_results/retrieved_chi2_771nm'][:] > 0.001) &
+        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 1.2))
 sounding_ids = new['SoundingGeometry/sounding_id'][:].astype('str')
 
 fig, axarr = plt.subplots(2, 2, figsize=(7, 6))
 
-for i, (idp_key, new_key) in enumerate([('DOASFluorescence/fluorescence_radiance_757nm_idp',
-                                         f'{retr_type}/retrieved_sif_abs_757nm')]):
+for i, (idp_key, new_key) in enumerate([('DOASFluorescence/fluorescence_radiance_771nm_idp',
+                                         f'{retr_type}/retrieved_sif_abs_771nm')]):
                                         #('DOASFluorescence/fluorescence_offset_relative_771nm_idp',
                                         # f'{retr_type}/retrieved_sif_rel_771nm')]):
 
@@ -70,8 +70,8 @@ for i, (idp_key, new_key) in enumerate([('DOASFluorescence/fluorescence_radiance
     ax.set_xlabel("IDP SIF (abs)")
     ax.legend(fontsize=8)
 
-for i, (idp_key, new_key) in enumerate([('DOASFluorescence/residual_reduced_chi2_fluorescence_757nm_idp',
-                                         f'{retr_type}/retrieved_chi2_757nm')]):
+for i, (idp_key, new_key) in enumerate([('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
+                                         f'{retr_type}/retrieved_chi2_771nm')]):
                                         #('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
                                         # f'{retr_type}/retrieved_chi2_771nm')]):
 

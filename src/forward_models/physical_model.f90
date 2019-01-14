@@ -123,6 +123,7 @@ contains
     integer :: num_frames
     integer :: i_fp, i_fr, i_pix, i_win, band
     integer :: i, j, retr_count
+    logical :: this_converged
 
     !! State vector setup
     integer :: num_albedo_parameters, num_dispersion_parameters, num_sif_parameters
@@ -427,7 +428,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=5555, num_frames
+       do i_fr=1, num_frames
           do i_fp=1, my_instrument%num_fp
 
              if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -435,15 +436,17 @@ contains
              end if
 
              call cpu_time(cpu_time_start)
-             call physical_FM(my_instrument, i_fp, i_fr, i_win, 1)
+             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, 1)
              call cpu_time(cpu_time_stop)
 
              retr_count = retr_count + 1
-             mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count + 1)
+             !mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count)
 
-             !if (mod(retr_count, 10) == 0) then
-             write(tmp_str, '(A, F7.3, A, G0.1)') "Duration: ", mean_duration, ", retrieval No. ", retr_count
-             call logger%debug(fname, trim(tmp_str))
+             !if (mod(retr_count, 100) == 0) then
+                !mean_duration = (cpu_time_stop - cpu_time_start)
+             write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
+                  "Frame/FP: ", i_fr, "/", i_fp, " - ", cpu_time_stop-cpu_time_start, ' - ', this_converged
+                call logger%debug(fname, trim(tmp_str))
              !read(*,*)
              !end if
           end do
@@ -503,12 +506,13 @@ contains
   end subroutine physical_retrieval
 
 
-  subroutine physical_FM(my_instrument, i_fp, i_fr, i_win, band)
+  function physical_FM(my_instrument, i_fp, i_fr, i_win, band) result(converged)
 
     implicit none
 
     class(generic_instrument), intent(in) :: my_instrument
     integer, intent(in) :: i_fr, i_fp, i_win, band
+    logical :: converged
 
     !!
     integer(hid_t) :: l1b_file_id, output_file_id
@@ -572,8 +576,9 @@ contains
     double precision :: lm_gamma
     ! Iteration-related
     integer :: iteration, max_iterations
-    logical :: keep_iterating, converged
+    logical :: keep_iterating
     logical :: log_retrieval
+    logical :: success_inv_mat
 
 
     !! Misc
@@ -774,7 +779,7 @@ contains
 
 
 
-
+    converged = .false.
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
 
@@ -834,7 +839,11 @@ contains
 
        num_levels = size(this_atm%p)
 
-       if (SV%svsv(SV%idx_psurf(1)) > this_atm%p(size(this_atm%p))) return
+       if (SV%svsv(SV%idx_psurf(1)) > this_atm%p(size(this_atm%p))) then
+          write(*,*) "Psurf: ", SV%svsv(SV%idx_psurf(1))
+          write(*,*) "Lowest p: ", this_atm%p(size(this_atm%p))
+          return
+       end if
 
        do j=1, num_levels
           if (SV%svsv(SV%idx_psurf(1)) > this_atm%p(j)) then
@@ -871,8 +880,10 @@ contains
              psurf = met_psurf(i_fp, i_fr)
           end if
 
-          if (psurf < 0) return
-
+          if (psurf < 0) then
+             write(*,*) "Psurf negative!"
+             return
+          end if
 
           !write(*,*) "My surface pressure is :", psurf
 
@@ -1110,7 +1121,12 @@ contains
        !tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
        tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
 
-       call invert_matrix(tmp_m1, tmp_m2)
+       call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
+       if (.not. success_inv_mat) then
+          call logger%error(fname, "Failed to invert K^T Se K")
+          return
+       end if
+
 
        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
        !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
@@ -1120,10 +1136,15 @@ contains
 
        ! Calculate Shat_inv
        Shat_inv = matmul(matmul(transpose(K), Se_inv), K)! + Sa_inv
-       call invert_matrix(Shat_inv, Shat)
+       call invert_matrix(Shat_inv, Shat, success_inv_mat)
+
+       if (.not. success_inv_mat) then
+          call logger%error(fname, "Failed to invert Shat^-1")
+          return
+       end if
 
        ! Check delta sigma square for this iteration
-       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.1d0
+       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.25d0
 
        do i=1, N_sv
           SV%sver(i) = sqrt(Shat(i,i))
@@ -1171,6 +1192,8 @@ contains
           final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+
+          converged = .true.
 
           !if (i_fr == 51) then
           ! end if
@@ -1229,7 +1252,7 @@ contains
     ! ! !
     !read(*,*)
 
-  end subroutine physical_FM
+  end function physical_FM
 
 
 

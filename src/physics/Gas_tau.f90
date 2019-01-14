@@ -25,6 +25,7 @@ contains
     ! Gas optical depth after psurf pert. - wavelength, layer
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
 
+    logical :: log_scaling
     double precision :: p_lower, p_higher, T_lower, T_higher, H2O_lower, H2O_higher
     double precision :: VMR_lower, VMR_higher
     double precision :: this_p, p_fac, this_p_fac, this_T, this_H2O, this_VMR, this_M
@@ -68,8 +69,9 @@ contains
     ! somewhat specialised search routine. First, we calculate an average
     ! step size of the spectroscopy wavelength grid, and then take a first
     ! guess as to where the index might be. Then we step backwards if we went
-    ! too far (which is usally not the case as the step size is increasing).
-    ! Lastly, we just step forwards to see if our wavelength falls into the
+    ! too far (which is usally not the case as the step size is increasing,
+    ! because of the WN->WL conversion).
+    ! Lastly, we just step forwards to see if our wavelength between the
     ! next spectroscopy wavelength grid points.
 
     gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
@@ -77,6 +79,8 @@ contains
     gas_wl_start = gas%wavelength(1)
 
     do j=1, size(wl)
+       ! If out of range, set the left index to either first
+       ! or penultimate one.
        if (wl(j) <= gas%wavelength(1)) then
           wl_left_indices(j) = 1
           cycle
@@ -85,6 +89,7 @@ contains
           cycle
        end if
 
+       ! Take a rough first guess as to where the wavelength fits in
        gas_idx_fg = int(floor((wl(j) - gas_wl_start) / gas_wl_step_avg))
 
        do while (wl(j) < gas%wavelength(gas_idx_fg))
@@ -114,7 +119,11 @@ contains
           ! the level above (ideally). But this will extrapolate linearly
           ! anyway, which might cause some trouble.
           p_lower = psurf
-          p_fac = (p_lower - p(l-1)) / (p(l) - p(l-1))
+          if (log_scaling) then
+             p_fac = (log(p_lower) - log(p(l-1))) / (log(p(l)) - log(p(l-1)))
+          else
+             p_fac = (p_lower - p(l-1)) / (p(l) - p(l-1))
+          end if
           T_lower = (1.0d0 - p_fac) * T(l-1) + p_fac * T(l)
           H2O_lower = (1.0d0 - p_fac) * H2O(l-1) + p_fac * H2O(l)
           VMR_lower = (1.0d0 - p_fac) * gas_vmr(l-1) + p_fac * gas_vmr(l)
@@ -186,7 +195,11 @@ contains
 
           ! And get corresponding values for T,sh and the VMR at this (scaled)
           ! pressure value, which is obtained via simple linear interpolation.
-          this_p_fac = ((this_p - p_higher) / (p_lower - p_higher))
+          if (log_scaling) then
+             this_p_fac = ((log(this_p) - log(p_higher)) / (log(p_lower) - log(p_higher)))
+          else
+             this_p_fac = ((this_p - p_higher) / (p_lower - p_higher))
+          end if
           this_T = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
           this_H2O = (1.0d0 - this_p_fac) * H2O_lower + this_p_fac * H2O_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
@@ -202,8 +215,11 @@ contains
           if (need_psurf_jac .and. (l == num_active_levels)) then
 
              this_p_pert = GK_abscissae_f_pert(k)
-
-             this_p_fac_pert = ((this_p_pert - p_higher) / (p_lower_pert - p_higher))
+             if (log_scaling) then
+                this_p_fac_pert = ((log(this_p_pert) - log(p_higher)) / (log(p_lower_pert) - log(p_higher)))
+             else
+                this_p_fac_pert = ((this_p_pert - p_higher) / (p_lower_pert - p_higher))
+             end if
              this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
              this_H2O_pert = (1.0d0 - this_p_fac_pert) * H2O_lower_pert + this_p_fac_pert * H2O_higher
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
@@ -219,8 +235,8 @@ contains
        end do
 
        if (need_psurf_jac .and. (l == num_active_levels)) then
-          ! Divide by the perturbation value to get dtau/dpsurf
-          gas_tau_dpsurf(:,l-1) = (gas_tau_dpsurf(:,l-1) - gas_tau(:,l-1))
+          ! Get the difference: tau(psurf - psurb_perturb) - tau(psurf)
+          gas_tau_dpsurf(:,l-1) = (gas_tau_dpsurf(:,l-1) - gas_tau(:,l-1)) / PSURF_PERTURB
        end if
 
        if (need_psurf_jac .and. (l < num_active_levels)) then

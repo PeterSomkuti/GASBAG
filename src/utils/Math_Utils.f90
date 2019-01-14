@@ -11,7 +11,7 @@ module math_utils_mod
     double precision, parameter :: NA = 6.022140857d23
     double precision, parameter :: H2Om = 0.018015422135d0
     double precision, parameter :: DRY_AIR_MASS = 0.02897d0
-    double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
+    double precision, parameter :: PSURF_PERTURB = 5000.0d0 !Pa
 
     public PI, DEG2RAD, RAD2DEG, combsort, percentile, invert_matrix, &
            single_convolve

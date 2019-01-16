@@ -21,19 +21,19 @@ new = h5py.File(new_fname, 'r')
 retr_type = "physical_retrieval_results"
 
 # extent
-maxval = 0.03
-#maxval = 3.5e18
+maxval = 0.04
+#maxval = 5e18
 extent = [-maxval, maxval, -maxval, maxval]
 
 # we want to filter out those that are flagged bad in IDP
 qual = ((new['physical_retrieval_results/retrieved_chi2_771nm'][:] > 0.001) &
-        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 2.000))
+        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 5.000))
 sounding_ids = new['SoundingGeometry/sounding_id'][:].astype('str')
 
 fig, axarr = plt.subplots(2, 2, figsize=(7, 6))
 
-for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radiance_771nm_idp',
-                                        # f'{retr_type}/retrieved_sif_abs_771nm')]):
+for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radiance_757nm_idp',
+                                        #f'{retr_type}/retrieved_sif_abs_757nm')]):
                                         ('DOASFluorescence/fluorescence_offset_relative_771nm_idp',
                                          f'{retr_type}/retrieved_sif_rel_771nm')]):
 
@@ -87,10 +87,10 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     ax.set_xlabel("IDP SIF (abs)")
     ax.legend(fontsize=8)
 
-for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
-                                        # f'{retr_type}/retrieved_chi2_771nm')]):
-                                        ('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
+for i, (idp_key, new_key) in enumerate([('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
                                          f'{retr_type}/retrieved_chi2_771nm')]):
+                                        #('DOASFluorescence/residual_reduced_chi2_fluorescence_757nm_idp',
+                                        # f'{retr_type}/retrieved_chi2_757nm')]):
 
     ax = axarr[1, i]
     ax.hist(idp[idp_key][:][qual].flatten(), range=(0,3), bins=100,

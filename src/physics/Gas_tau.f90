@@ -58,6 +58,8 @@ contains
        end if
     end do
 
+    log_scaling = .false.
+
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
@@ -90,8 +92,7 @@ contains
        end if
 
        ! Take a rough first guess as to where the wavelength fits in
-       gas_idx_fg = int(floor((wl(j) - gas_wl_start) / gas_wl_step_avg))
-
+       gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
        do while (wl(j) < gas%wavelength(gas_idx_fg))
           gas_idx_fg = gas_idx_fg - 1
        end do
@@ -131,7 +132,11 @@ contains
           if (need_psurf_jac) then
              ! Calculate perturbed properties when psurf jacobian is needed
              p_lower_pert = psurf - PSURF_PERTURB
-             p_fac_pert = (p_lower_pert - p(l-1)) / (p(l) - p(l-1))
+             if (log_scaling) then
+                p_fac_pert = (log(p_lower_pert) - log(p(l-1))) / (log(p(l)) - log(p(l-1)))
+             else
+                p_fac_pert = (p_lower_pert - p(l-1)) / (p(l) - p(l-1))
+             end if
              T_lower_pert = (1.0d0 - p_fac_pert) * T(l-1) + p_fac_pert * T(l)
              H2O_lower_pert = (1.0d0 - p_fac_pert) * H2O(l-1) + p_fac_pert * H2O(l)
              VMR_lower_pert = (1.0d0 - p_fac_pert) * gas_vmr(l-1) + p_fac_pert * gas_vmr(l)

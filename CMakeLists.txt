@@ -88,7 +88,7 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 set_source_files_properties(
   ${third-party}
   PROPERTIES
-  COMPILE_FLAGS "-w ${opt}"
+  COMPILE_FLAGS "-w"
 )
 
 # Define the executable

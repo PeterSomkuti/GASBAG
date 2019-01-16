@@ -88,7 +88,7 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 set_source_files_properties(
   ${third-party}
   PROPERTIES
-  COMPILE_FLAGS "-w"
+  COMPILE_FLAGS "-w -O3"
 )
 
 # Define the executable
@@ -101,4 +101,6 @@ message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS} ${GPERFTOOLS_INCLUDE_DIRS})
 target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES} ${GPERFTOOLS_PROFILER})
 
+# This is needed for Gperfmonitor (or the profiler portion of it) to work
+# properly on Mac's as the have some memory address randomization going on..
 set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)

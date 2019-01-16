@@ -26,8 +26,8 @@ maxval = 0.035
 extent = [-maxval, maxval, -maxval, maxval]
 
 # we want to filter out those that are flagged bad in IDP
-qual = ((new['physical_retrieval_results/retrieved_chi2_757nm'][:] > 0.001) &
-        (new['physical_retrieval_results/retrieved_chi2_757nm'][:] < 2.000))
+qual = ((new['physical_retrieval_results/retrieved_chi2_771nm'][:] > 0.001) &
+        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 2.000))
 sounding_ids = new['SoundingGeometry/sounding_id'][:].astype('str')
 
 fig, axarr = plt.subplots(2, 2, figsize=(7, 6))
@@ -36,17 +36,17 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
                                         #f'{retr_type}/retrieved_sif_abs_757nm')]):
                                         #('DOASFluorescence/fluorescence_offset_relative_771nm_idp',
                                         # f'{retr_type}/retrieved_sif_rel_771nm')]):
-                                        ('/RetrievalResults/fluorescence_757nm/RetrievedStateVector/state_vector',
-                                         f'{retr_type}/retrieved_sif_rel_757nm')]):
+                                        ('/RetrievalResults/fluorescence_771nm/RetrievedStateVector/state_vector',
+                                         f'{retr_type}/retrieved_sif_rel_771nm')]):
 
     print(i, idp_key, new_key)
 
-    mask = qual & (np.abs(idp[idp_key][:-1,:,4]) < maxval)
+    mask = qual & (np.abs(idp[idp_key][:-1,:,5]) < maxval)
     mask = mask & (np.abs(new[new_key][:]) < maxval)
     num_frames = np.sum(mask, axis=1)
 
     # We want to average over an entire frame here.
-    x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,4], mask=~mask), axis=1)[num_frames > 0].compressed()
+    x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1)[num_frames > 0].compressed()
     y = np.nanmean(np.ma.masked_array(new[new_key][:], mask=~mask), axis=1)[num_frames > 0].compressed()
 
     #x = np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask).compressed()
@@ -88,10 +88,10 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     ax.set_xlabel("IDP SIF (abs)")
     ax.legend(fontsize=8)
 
-for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_757nm/SpectralParameters/residual_reduced_chi2',
-                                         f'{retr_type}/retrieved_chi2_757nm')]):
-                                        #('DOASFluorescence/residual_reduced_chi2_fluorescence_757nm_idp',
-                                        # f'{retr_type}/retrieved_chi2_757nm')]):
+for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_771nm/SpectralParameters/residual_reduced_chi2',
+                                         f'{retr_type}/retrieved_chi2_771nm')]):
+                                        #('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
+                                        # f'{retr_type}/retrieved_chi2_771nm')]):
 
     ax = axarr[1, i]
     ax.hist(idp[idp_key][1:,:][qual].flatten(), range=(0,3), bins=100,
@@ -103,6 +103,6 @@ for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_757nm/S
     ax.legend()
 
 plt.tight_layout(h_pad=2.5, w_pad=2.0)
-plt.savefig('idp_comparison_757.pdf', bbox_inches='tight')
+plt.savefig('idp_comparison_771_2.pdf', bbox_inches='tight')
 
 embed()

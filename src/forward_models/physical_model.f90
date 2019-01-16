@@ -424,7 +424,7 @@ contains
             num_albedo_parameters, &
             num_sif_parameters, &
             num_dispersion_parameters, &
-            0) ! surface pressure
+            1) ! surface pressure
 
        retr_count = 0
        mean_duration = 0.0d0
@@ -810,10 +810,10 @@ contains
                   size(this_atm%p), log(this_atm%p), this_atm%T)
              !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
              !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
-             !call pwl_value_1d(size(met_P_levels, 1), &
-             !     met_P_levels(:,i_fp,i_fr), met_SH_profiles(:,i_fp,i_fr), &
-             !     size(this_atm%p), this_atm%p, this_atm%sh)
-             this_atm%sh = 0.0d0
+             call pwl_value_1d(size(met_P_levels, 1), &
+                  log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
+                  size(this_atm%p), log(this_atm%p), this_atm%sh)
+             !this_atm%sh = 0.0d0
           end if
        else
           ! Otherwise, calculate it from the state vector
@@ -840,6 +840,9 @@ contains
                 call pwl_value_1d(size(met_P_levels, 1), &
                      log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
                      size(this_atm%p), log(this_atm%p), this_atm%T)
+                call pwl_value_1d(size(met_P_levels, 1), &
+                     log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
+                     size(this_atm%p), log(this_atm%p), this_atm%sh)
                 !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
                 !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
              end if
@@ -1102,17 +1105,18 @@ contains
 
                 this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
 
-                call calculate_dispersion_limits(this_dispersion_tmp, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
+                !call calculate_dispersion_limits(this_dispersion_tmp, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
 
                 ! Here's a good fudge. Sometimes, a change in disperison can alter the size of the
                 ! radiance array, which would make the following operations unusable. A quick fix
                 ! is to simply trim the new radiance array to the size of the old one.
-                N_spec_tmp = l1b_wl_idx_max - l1b_wl_idx_min + 1
+                !N_spec_tmp = l1b_wl_idx_max - l1b_wl_idx_min 
 
-                if (N_spec_tmp /= N_spec) then
-                   !call logger%debug(fname, "Uh-oh, we need to fudge the radiance array size!")
-                   l1b_wl_idx_max = l1b_wl_idx_max - (N_spec_tmp - N_spec)
-                end if
+                !if (N_spec_tmp /= N_spec) then
+                !   call logger%debug(fname, "Uh-oh, we need to fudge the radiance array size!")
+                !   write(*,*) N_spec, N_spec_tmp
+                !   l1b_wl_idx_max = l1b_wl_idx_max - (N_spec_tmp - N_spec)
+                !end if
 
                 ! Convolve the perturbed TOA radiance
                 call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
@@ -1155,7 +1159,7 @@ contains
        end if
 
        ! Check delta sigma square for this iteration
-       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 1.0d0
+       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.1d0
 
        do i=1, N_sv
           SV%sver(i) = sqrt(Shat(i,i))
@@ -1164,7 +1168,7 @@ contains
 !!$       do j=1, num_active_levels
 !!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
 !!$       end do
-!!$
+
 !!$       write(*,*) "old, current and delta state vector, and errors"
 !!$       write(*,*) "Iteration: ", iteration-1
 !!$       do i=1, N_sv
@@ -1176,16 +1180,16 @@ contains
 !!$       open(file="l1b_spec.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i), K(i, SV%idx_psurf(1))
+!!$               noise_work(i), K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
 !!$       end do
 !!$       close(funit)
 
-       if (num_gases > 0) then
-          if (abs(SV%svsv(SV%idx_psurf(1)) - old_sv(SV%idx_psurf(1))) > 20.0d3) then
-             write(*,*) "psurf delta too large", old_sv(SV%idx_psurf(1)), SV%svsv(SV%idx_psurf(1))
-             return
-          end if
-       end if
+!!$       if (num_gases > 0) then
+!!$          if (abs(SV%svsv(SV%idx_psurf(1)) - old_sv(SV%idx_psurf(1))) > 20.0d3) then
+!!$             write(*,*) "psurf delta too large", old_sv(SV%idx_psurf(1)), SV%svsv(SV%idx_psurf(1))
+!!$             return
+!!$          end if
+!!$       end if
 
 !!$
 !!$       write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"

@@ -424,12 +424,12 @@ contains
             num_albedo_parameters, &
             num_sif_parameters, &
             num_dispersion_parameters, &
-            1) ! surface pressure
+            0) ! surface pressure
 
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=300, 500 !num_frames
+       do i_fr=1, num_frames
           do i_fp=1, my_instrument%num_fp
 
              if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -1180,9 +1180,11 @@ contains
 !!$       end do
 !!$       close(funit)
 
-       if (abs(SV%svsv(SV%idx_psurf(1)) - old_sv(SV%idx_psurf(1))) > 20.0d3) then
-          write(*,*) "psurf delta too large", old_sv(SV%idx_psurf(1)), SV%svsv(SV%idx_psurf(1))
-          return
+       if (num_gases > 0) then
+          if (abs(SV%svsv(SV%idx_psurf(1)) - old_sv(SV%idx_psurf(1))) > 20.0d3) then
+             write(*,*) "psurf delta too large", old_sv(SV%idx_psurf(1)), SV%svsv(SV%idx_psurf(1))
+             return
+          end if
        end if
 
 !!$
@@ -1219,12 +1221,12 @@ contains
 
           converged = .true.
 
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i), K(i, SV%idx_psurf(1))
-       end do
-       close(funit)
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i), K(i, SV%idx_psurf(1))
+!!$       end do
+!!$       close(funit)
           
           !if (i_fr == 51) then
           ! end if

@@ -27,7 +27,7 @@ extent = [-maxval, maxval, -maxval, maxval]
 
 # we want to filter out those that are flagged bad in IDP
 qual = ((new['physical_retrieval_results/retrieved_chi2_771nm'][:] > 0.001) &
-        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 2.000))
+        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 3.500))
 sounding_ids = new['SoundingGeometry/sounding_id'][:].astype('str')
 
 fig, axarr = plt.subplots(2, 2, figsize=(7, 6))
@@ -46,8 +46,11 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     num_frames = np.sum(mask, axis=1)
 
     # We want to average over an entire frame here.
-    x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1)[num_frames > 0].compressed()
-    y = np.nanmean(np.ma.masked_array(new[new_key][:], mask=~mask), axis=1)[num_frames > 0].compressed()
+    x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1)[num_frames > 3].compressed()
+    y = new[f'{retr_type}/retrieved_sif_abs_771nm'][:] / idp['RetrievalResults/fluorescence_771nm/Ancillary/continuumLevelRadiance'][:-1,:]
+    y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1)[num_frames > 3].compressed()
+    #y = np.nanmean(np.ma.masked_array(new[f'{retr_type}/retrieved_sif_rel_771nm'][:], mask=~mask), axis=1)[num_frames > 3].compressed()
+
 
     #x = np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask).compressed()
     #y = np.ma.masked_array(new[new_key][:], mask=~mask).compressed()  #[num_frames > 4].compressed() * 1.8
@@ -63,7 +66,7 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     ax = axarr[0, i]
     ax.set_aspect(1)
     ax.hexbin(x, y, extent=[x.min(), x.max(), y.min(), y.max()],
-              linewidths=0, mincnt=1, gridsize=30, cmap='plasma')
+              linewidths=0, mincnt=1, gridsize=100, cmap='plasma')
     ax.set_xlim(x.min(), x.max())
     ax.set_ylim(y.min(), y.max())
 
@@ -80,13 +83,15 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
 
     ax.plot(x_, x_, lw=1.0, color='grey', linestyle='dotted', label='1:1')
 
+    ax.grid()
+
     if (i == 0):
         ax.set_ylabel("GeoCARB SIF (abs)")
-        ax.set_title('757 nm')
+        ax.set_title('771 nm')
     elif (i == 1):
         ax.set_title('771 nm')
     ax.set_xlabel("IDP SIF (abs)")
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=6)
 
 for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_771nm/SpectralParameters/residual_reduced_chi2',
                                          f'{retr_type}/retrieved_chi2_771nm')]):

@@ -1159,7 +1159,7 @@ contains
        end if
 
        ! Check delta sigma square for this iteration
-       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.1d0
+       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.5d0
 
        do i=1, N_sv
           SV%sver(i) = sqrt(Shat(i,i))
@@ -1183,13 +1183,6 @@ contains
 !!$               noise_work(i), K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
 !!$       end do
 !!$       close(funit)
-
-!!$       if (num_gases > 0) then
-!!$          if (abs(SV%svsv(SV%idx_psurf(1)) - old_sv(SV%idx_psurf(1))) > 20.0d3) then
-!!$             write(*,*) "psurf delta too large", old_sv(SV%idx_psurf(1)), SV%svsv(SV%idx_psurf(1))
-!!$             return
-!!$          end if
-!!$       end if
 
 !!$
 !!$       write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"

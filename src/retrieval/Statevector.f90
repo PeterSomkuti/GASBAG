@@ -1,6 +1,8 @@
 module statevector_mod
 
-    use logger_mod, only: logger => master_logger
+  use logger_mod, only: logger => master_logger
+  use control_mod, only: MCS
+  use stringifor, only: string
 
     type statevector
         ! Number of state vector elements per type
@@ -11,9 +13,179 @@ module statevector_mod
         double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
     end type
 
-    public initialize_statevector
+    public initialize_statevector, parse_and_initialize_SV, clear_SV
 
 contains
+
+
+
+  subroutine clear_SV(SV)
+    implicit none
+    type(statevector), intent(inout) :: SV
+
+    if (allocated(SV%idx_albedo)) deallocate(SV%idx_albedo)
+    if (allocated(SV%idx_sif)) deallocate(SV%idx_sif)
+    if (allocated(SV%idx_dispersion)) deallocate(SV%idx_dispersion)
+    if (allocated(SV%idx_psurf)) deallocate(SV%idx_psurf)
+
+    if (allocated(SV%svap)) deallocate(SV%svap)
+    if (allocated(SV%svsv)) deallocate(SV%svsv)
+    if (allocated(SV%sver)) deallocate(SV%sver)
+
+    if (allocated(SV%sv_ap_cov)) deallocate(SV%sv_ap_cov)
+    if (allocated(SV%sv_post_cov)) deallocate(SV%sv_post_cov)
+
+    SV%num_albedo = -1
+    SV%num_sif = -1
+    SV%num_dispersion = -1
+    SV%num_psurf = -1
+
+  end subroutine clear_SV
+
+
+  subroutine parse_and_initialize_SV(i_win, SV)
+
+    implicit none
+    integer, intent(in) :: i_win
+    type(statevector), intent(inout) :: SV
+
+    character(len=*), parameter :: fname = "parse_and_initialize_statevector"
+    type(string), allocatable :: split_string(:)
+
+    ! Which are the SV elements known by the code, and which one's are used?
+    type(string) :: known_SV(99)
+
+    integer :: num_SV, i, j
+    logical :: SV_found
+
+    integer :: num_albedo_parameters, num_dispersion_parameters, num_sif_parameters, &
+         num_psurf_parameters
+
+    ! These are the known state vector elements - only these will be properly
+    ! parsed. The order in which they are defined is not significant.
+    known_SV(1) = "albedo"
+    known_SV(2) = "dispersion"
+    known_SV(3) = "sif"
+    known_SV(4) = "psurf"
+
+    known_SV(5:size(known_SV)) = ""
+
+    ! Split the state vector string from the config file
+    call MCS%window(i_win)%SV_string%split(tokens=split_string, sep=' ')
+
+    do i=1, size(split_string)
+       SV_found = .false.
+
+       ! Loop through the known SV elements, and exit if any requested
+       ! one is not found.
+       do j=1, size(known_SV)
+          if (known_SV(j) /= "") then
+             if (split_string(i)%lower() == known_SV(j)) then
+                SV_found = .true.
+                exit
+             end if
+          end if
+       end do
+
+       if (.not. SV_found) then
+          call logger%fatal(fname, "This SV element was not recognized: " // &
+               trim(split_string(i)%chars()))
+          stop 1
+       else
+          call logger%info(fname, "SV element recognized: " // &
+               trim(split_string(i)%chars()))
+       end if
+    end do
+
+    ! Now that we have made sure that only SV elements known by the code are being
+    ! supplied, we can loop through them, and depending on the type also check
+    ! if necessary parameters are available. Example: if we want to retrieve
+    ! dispersion, we also require the order and perturbation values.
+
+    num_albedo_parameters = 0
+    num_dispersion_parameters = 0
+    num_sif_parameters = 0
+    num_psurf_parameters = 0
+
+
+    do i=1, size(split_string)
+
+       ! We are retrieving ALBEDO!
+       if (split_string(i)%lower() == "albedo") then
+
+          ! Albedo order needs to be >= 0
+          if (MCS%window(i_win)%albedo_order < 0) then
+             call logger%fatal(fname, "We are retrieving albedo, but the albedo order " &
+                  // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
+             stop 1
+          else
+             ! Albedo order 0 means simple factor, order 1 is with slope etc.
+             num_albedo_parameters = MCS%window(i_win)%albedo_order + 1
+          end if
+
+       end if
+
+
+       ! We are retrieving DISPERSION!
+       if (split_string(i)%lower() == "dispersion") then
+          ! Dispersion order needs to be > 0
+          if (MCS%window(i_win)%dispersion_order <= 0) then
+             call logger%fatal(fname, "We are retrieving dispersion, but the dispersion order " &
+                  // "needs to be > 0. Check if you've supplied a sensible value (or at all).")
+             stop 1
+          else
+             ! Dispersion order 1 means shift, 2 is stretch etc.
+             num_dispersion_parameters = MCS%window(i_win)%dispersion_order
+
+             ! We MUST have at least the same number of dispersion perturbation
+             ! elements.
+             if (.not. allocated(MCS%window(i_win)%dispersion_pert)) then
+                call logger%fatal(fname, "Dispersion perturbation not in config file!")
+                stop 1
+             end if
+
+             if (num_dispersion_parameters >= size(MCS%window(i_win)%dispersion_pert)) then
+                call logger%fatal(fname, "Not enough disperison perturbation values!")
+                stop 1
+             end if
+          end if
+       end if
+
+       ! We are retrieving SIF!
+       if (split_string(i)%lower() == "sif") then
+          num_sif_parameters = 1
+       end if
+
+       ! We are retrieving surface pressure!
+       if (split_string(i)%lower() == "psurf") then
+          ! Surface pressure only makes sense if we have gases defined
+          ! in our current microwindow. 
+
+          if (MCS%window(i_win)%num_gases == 0) then
+             call logger%fatal(fname, "Sorry, you must have at least one gas in the window " &
+                  // "to retrieve surface pressure!")
+             stop 1
+          else
+             num_psurf_parameters = 1
+          end if
+       end if
+
+    end do
+
+    ! Once we have all the data, initialize the state vector with the appropriate
+    ! number of elements for each type.
+
+    call initialize_statevector( &
+         SV, &
+         num_albedo_parameters, &
+         num_sif_parameters, &
+         num_dispersion_parameters, &
+         num_psurf_parameters)
+
+  end subroutine parse_and_initialize_SV
+
+
+
 
   subroutine initialize_statevector(sv, count_albedo, count_sif, &
        count_dispersion, count_psurf)
@@ -26,32 +198,6 @@ contains
     character(len=999) :: tmp_str
     integer :: sv_count
     integer :: i
-
-    ! First, check if we've got silly values
-    if (count_albedo < 0) then
-       call logger%fatal(fname, "Albedo SV count < 0.")
-       stop 1
-    end if
-
-    if (count_sif < 0) then
-       call logger%fatal(fname, "SIF SV count < 0.")
-       stop 1
-    end if
-
-    if (count_dispersion < 0) then
-       call logger%fatal(fname, "Albedo SV count < 0.")
-       stop 1
-    end if
-
-    if (count_dispersion < 0) then
-       call logger%fatal(fname, "Albedo SV count < 0.")
-       stop 1
-    end if
-
-    if ((count_psurf < 0) .or. (count_psurf > 1)) then
-       call logger%fatal(fname, "Surface pressure count < 0 or > 1")
-       stop 1
-    end if
 
     ! Set The Number of Statevector parameters
     sv%num_albedo = count_albedo

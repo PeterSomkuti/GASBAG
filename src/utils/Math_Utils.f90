@@ -41,7 +41,7 @@ contains
 
 
   subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
-       wl_output, output)
+       wl_output, output, success)
 
     !! This is an implementation of the OCO-type ILS application, which ins't
     !! quite a convolution since we have to treat every pixel with a different
@@ -53,6 +53,7 @@ contains
     double precision, intent(in) :: wl_kernels(:,:), kernels(:,:)
     double precision, intent(in) :: wl_output(:)
     double precision, intent(inout) :: output(:)
+    logical, intent(out) :: success
 
     character(len=*), parameter :: fname = "oco_type_convolution"
     integer :: N_pix, N_ils_pix
@@ -86,16 +87,34 @@ contains
 
        ! Find out, which index of the high-res input is closest to the
        ! detector pixel, and also which is the center pixel
-       idx_hires_closest = -1
+       !idx_hires_closest = -1
        idx_hires_ILS_min = -1
        idx_hires_ILS_max = -1
 
 
-       idx_hires_ILS_min = minloc(abs(wl_input - ILS_delta_min), dim=1)
+       !idx_hires_ILS_min = minloc(abs(wl_input - ILS_delta_min), dim=1)
+       do i=1, size(wl_input)-1
+          if ((ILS_delta_min >= wl_input(i)) .and. (ILS_delta_min <= wl_input(i+1))) then
+             idx_hires_ILS_min = i
+             exit
+          end if
+       end do
+
+       if (idx_hires_ILS_min == -1) then
+          success = .false.
+          return
+       end if
 
        !idx_hires_closest = find_closest_index_DP(wl_input, wl_output(idx_pix))
        !idx_hires_ILS_min = find_closest_index_DP(wl_input, ILS_delta_min)
        idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
+
+       if (idx_hires_ILS_max > size(input)) then
+          success = .false.
+          return
+       end if
+
+       !if (idx_hires_ILS_max > size(input)) idx_hires_ILS_max = size(input)
        !call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
 
        ! Now we have to either interpolate the ILS data onto the high-res grid,
@@ -123,12 +142,17 @@ contains
 
        if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
           write(*,*) "dimension issue in oco_convolution routine"
+          write(*,*) ILS_delta_min, ILS_delta_max
+          write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, size(input)
+          write(*,*) wl_input(1), wl_input(size(wl_input)), ILS_delta_min, wl_output(idx_pix)
           !stop 1
        end if
 
 
        output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
             / sum(kernels(:, idx_pix))
+
+       success = .true.
 
        !deallocate(ILS_upsampled)
        !end if

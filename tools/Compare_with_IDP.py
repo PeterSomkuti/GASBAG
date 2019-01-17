@@ -25,9 +25,7 @@ maxval = 0.035
 #maxval = 5e18
 extent = [-maxval, maxval, -maxval, maxval]
 
-# we want to filter out those that are flagged bad in IDP
-qual = ((new['physical_retrieval_results/retrieved_chi2_771nm'][:] > 0.001) &
-        (new['physical_retrieval_results/retrieved_chi2_771nm'][:] < 3.500))
+
 sounding_ids = new['SoundingGeometry/sounding_id'][:].astype('str')
 
 fig, axarr = plt.subplots(2, 2, figsize=(7, 6))
@@ -36,19 +34,34 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
                                         #f'{retr_type}/retrieved_sif_abs_757nm')]):
                                         #('DOASFluorescence/fluorescence_offset_relative_771nm_idp',
                                         # f'{retr_type}/retrieved_sif_rel_771nm')]):
-                                        ('/RetrievalResults/fluorescence_771nm/RetrievedStateVector/state_vector',
-                                         f'{retr_type}/retrieved_sif_rel_771nm')]):
+                                        ('/RetrievalResults/fluorescence_757nm/RetrievedStateVector/state_vector',
+                                         f'{retr_type}/retrieved_sif_rel_757nm')]):
+
+
+    if (i==0):
+        win = '757nm'
+    elif (i==1):
+        win = '771nm'
 
     print(i, idp_key, new_key)
 
-    mask = qual & (np.abs(idp[idp_key][:-1,:,5]) < maxval)
+    # we want to filter out those that are flagged bad in IDP
+    qual = ((new[f'{retr_type}/retrieved_chi2_{win}'][:] > 0.001) &
+            (new[f'physical_retrieval_results/retrieved_chi2_{win}'][:] < 3.500))
+
+    if (i == 0):
+        mask = qual & (np.abs(idp[idp_key][:-1,:,4]) < maxval)
+        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,4], mask=~mask), axis=1)[num_frames > 0].compressed()
+    elif (i==1):
+        mask = qual & (np.abs(idp[idp_key][:-1,:,5]) < maxval)
+        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1)[num_frames > 0].compressed()
+
     mask = mask & (np.abs(new[new_key][:]) < maxval)
     num_frames = np.sum(mask, axis=1)
 
     # We want to average over an entire frame here.
-    x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1)[num_frames > 3].compressed()
-    y = new[f'{retr_type}/retrieved_sif_abs_771nm'][:] / idp['RetrievalResults/fluorescence_771nm/Ancillary/continuumLevelRadiance'][:-1,:]
-    y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1)[num_frames > 3].compressed()
+    y = new[f'{retr_type}/retrieved_sif_abs_757nm'][:] / idp['RetrievalResults/fluorescence_757nm/Ancillary/continuumLevelRadiance'][:-1,:]
+    y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1)[num_frames > 0].compressed()
     #y = np.nanmean(np.ma.masked_array(new[f'{retr_type}/retrieved_sif_rel_771nm'][:], mask=~mask), axis=1)[num_frames > 3].compressed()
 
 
@@ -65,7 +78,7 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
 
     ax = axarr[0, i]
     ax.set_aspect(1)
-    ax.hexbin(x, y, extent=[x.min(), x.max(), y.min(), y.max()],
+    ax.hexbin(x, y, extent=extent, #extent=[x.min(), x.max(), y.min(), y.max()],
               linewidths=0, mincnt=1, gridsize=100, cmap='plasma')
     ax.set_xlim(x.min(), x.max())
     ax.set_ylim(y.min(), y.max())
@@ -87,16 +100,24 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
 
     if (i == 0):
         ax.set_ylabel("GeoCARB SIF (abs)")
-        ax.set_title('771 nm')
+        ax.set_title('757 nm')
     elif (i == 1):
-        ax.set_title('771 nm')
+        ax.set_title('757 nm')
     ax.set_xlabel("IDP SIF (abs)")
     ax.legend(fontsize=6)
 
-for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_771nm/SpectralParameters/residual_reduced_chi2',
-                                         f'{retr_type}/retrieved_chi2_771nm')]):
+for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_757nm/SpectralParameters/residual_reduced_chi2',
+                                         f'{retr_type}/retrieved_chi2_757nm')]):
                                         #('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
                                         # f'{retr_type}/retrieved_chi2_771nm')]):
+
+    if (i==0):
+        win = '757nm'
+    elif (i==1):
+        win = '771nm'
+
+    qual = ((new[f'{retr_type}/retrieved_chi2_{win}'][:] > 0.001) &
+            (new[f'physical_retrieval_results/retrieved_chi2_{win}'][:] < 3.500))
 
     ax = axarr[1, i]
     ax.hist(idp[idp_key][1:,:][qual].flatten(), range=(0,3), bins=100,

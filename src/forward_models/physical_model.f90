@@ -1,6 +1,6 @@
 module physical_model_mod
 
-  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES
+  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
   use instruments, only: generic_instrument
   use oco2_mod
   use logger_mod, only: logger => master_logger
@@ -141,37 +141,31 @@ contains
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
-    !! Get the necesary MET data profiles. This probably needs expanding for
-    !! other instrument types / file structures. (will Geocarb be different?)
-    dset_name = "/Meteorology/vector_pressure_levels_met"
-    call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
-    call logger%trivia(fname, "Finished reading in pressure levels.")
 
-    dset_name = "/Meteorology/temperature_profile_met"
-    call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
-    call logger%trivia(fname, "Finished reading in temperature profiles.")
-
-    dset_name = "/Meteorology/specific_humidity_profile_met"
-    call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
-    call logger%trivia(fname, "Finished reading in specific humidity profiles.")
-
-    dset_name = "/Meteorology/surface_pressure_met"
-    call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
-    call logger%trivia(fname, "Finished reading in surface pressure.")
-
-    dset_name = "/SoundingGeometry/sounding_land_fraction"
-    call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
-    call logger%trivia(fname, "Finished reading in land fraction.")
-
-    do i=1, size(met_P_levels, 1)
-       write(*,*) i, met_P_levels(i,1,1), met_T_profiles(i,1,1), met_SH_profiles(i,1,1)
-    end do
-    write(*,*) "Psurf: ", met_psurf(1,1)
-
-
-    ! Read-in of dispersion and noise coefficients (THIS IS INSTRUMENT SPECIFIC!)
     select type(my_instrument)
     type is (oco2_instrument)
+
+       !! Get the necesary MET data profiles. This probably needs expanding for
+       !! other instrument types / file structures. (will Geocarb be different?)
+       dset_name = "/Meteorology/vector_pressure_levels_met"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
+       call logger%trivia(fname, "Finished reading in pressure levels.")
+
+       dset_name = "/Meteorology/temperature_profile_met"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
+       call logger%trivia(fname, "Finished reading in temperature profiles.")
+
+       dset_name = "/Meteorology/specific_humidity_profile_met"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
+       call logger%trivia(fname, "Finished reading in specific humidity profiles.")
+
+       dset_name = "/Meteorology/surface_pressure_met"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
+       call logger%trivia(fname, "Finished reading in surface pressure.")
+
+       dset_name = "/SoundingGeometry/sounding_land_fraction"
+       call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
+       call logger%trivia(fname, "Finished reading in land fraction.")
 
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
@@ -308,47 +302,23 @@ contains
     end do
     call logger%debug(fname, "Done re-gridding ILS.")
 
-    do i_win=1, 1
+
+    ! Create the HDF group in which all the results go in the end
+    call h5gcreate_f(output_file_id, "physical_retrieval_results", &
+         result_gid, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
+
+
+    do i_win=1, MAX_WINDOWS
+
+       ! Just skip unused windows
+       if (.not. MCS%window(i_win)%used) cycle
 
        ! At the beginning, we check which gases were defined for this window,
        ! and see if a gas with the corresponding name has been defined.
+       call MCS_find_gases(MCS%window, MCS%gas, i_win)
 
-       ! Checking for gases is done only if we have gases in this window
-       if (allocated(MCS%window(i_win)%gases)) then
-
-          do i=1, size(MCS%window(i_win)%gases)
-             ! Loop over all gases specified in the retrieval window
-
-             ! Skip unused retrieval windows
-             if (.not. MCS%window(i_win)%used) cycle
-
-             gas_found = .false.
-             do j=1, MAX_GASES
-                if (MCS%window(i_win)%gases(i) == MCS%gas(j)%name) then
-                   gas_found = .true.
-                   write(tmp_str, '(A, A, A, G0.1, A)')  "Gas found: ",  &
-                        MCS%window(i_win)%gases(i)%chars(), " (gas-", j, ")"
-                   call logger%trivia(fname, trim(tmp_str))
-                   ! And also store which gas section corresponds to this particular gas
-                   ! in the window gas definition.
-                   MCS%window(i_win)%gas_index(i) = j
-                   exit
-                end if
-             end do
-
-             ! If this specific gas was not found, kill the program immediately. There's no use-case
-             ! for a gas being specified in a retrieval window, and that gas then not being defined
-             ! in a 'gas'-section.
-
-             if (.not. gas_found) then
-                write(tmp_str, '(A, A, A, G0.1)') "Sorry - gas '", MCS%window(i_win)%gases(i)%chars(), &
-                     "' was not found in window-", dble(i_win)
-                call logger%fatal(fname, trim(tmp_str))
-                stop 1
-             end if
-
-          end do
-
+       if (MCS%window(i_win)%num_gases > 0) then
           ! Read in the spectroscopy data, depending on the type
           do i=1, size(MCS%window(i_win)%gases)
              ! Which gas are we reading in? As in 'index of MCS%gases'
@@ -361,7 +331,6 @@ contains
                 call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type // " not implemented!")
                 stop 1
              end if
-
           end do
 
           ! Read the atmosphere file (if present) and populate the initial_atm structure
@@ -376,55 +345,28 @@ contains
 
        end if
 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !!!!!! Set up state vector structure here
 
        ! We can do this once for every window, and simply clear the contents
        ! of the state vectors inside the loop later on. Might not save an awful
-       !  lot, but every little helps, I guess..
+       ! lot, but every little helps, I guess..
 
        ! At the moment, we can do following state vectors:
        !
        ! Lambertian surface albedo, arbitrary (?) polynomial order
        ! Zero-level offset / SIF (constant)
        ! Instrument disperison
+       ! Surface pressure
 
-       ! TODO: read in state vector stuff from config file
-
-       if (MCS%window(i_win)%albedo_order /= -9999) then
-          num_albedo_parameters = MCS%window(i_win)%albedo_order
-          if (num_albedo_parameters < 0) then
-             call logger%fatal(fname, "Sorry, need positive value for albedo order.")
-             stop 1
-          end if
-       else
-          num_albedo_parameters = 0
-       end if
-
-       if (MCS%window(i_win)%dispersion_order /= -9999) then
-          num_dispersion_parameters = MCS%window(i_win)%dispersion_order
-
-          if (num_dispersion_parameters < 0) then
-             call logger%fatal(fname, "Sorry, need positive value for dispersion order.")
-             stop 1
-          end if
-
-          if (num_dispersion_parameters > size(dispersion_coefs, 1)) then
-             call logger%fatal(fname, "Sorry, cannot have more dispersion parameters " &
-                  // "than present in the L1b file (for now).")
-             stop 1
-          end if
-       else
-          num_dispersion_parameters = 0
-       end if
-
-       num_sif_parameters = 1
-
-       call initialize_statevector(SV, &
-            num_albedo_parameters, &
-            num_sif_parameters, &
-            num_dispersion_parameters, &
-            1) ! surface pressure
+       ! Parsing the statevector string, that was passed in the window
+       ! section and initialize the state vector SV accordingly. This subroutine
+       ! needs to access plenty of things in the MCS, so we only pass the
+       ! window index, and the routine takes care of arranging the rest.
+       call parse_and_initialize_SV(i_win, SV)
+       call logger%info(fname, "Initialised SV structure")
 
        retr_count = 0
        mean_duration = 0.0d0
@@ -443,20 +385,22 @@ contains
              retr_count = retr_count + 1
              !mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count)
 
-             !if (mod(retr_count, 100) == 0) then
+             if (mod(retr_count, 100) == 0) then
                 !mean_duration = (cpu_time_stop - cpu_time_start)
-             write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
-                  "Frame/FP: ", i_fr, "/", i_fp, " - ", cpu_time_stop-cpu_time_start, ' - ', this_converged
+                write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
+                     "Frame/FP: ", i_fr, "/", i_fp, " - ", cpu_time_stop-cpu_time_start, ' - ', this_converged
                 call logger%debug(fname, trim(tmp_str))
-             !read(*,*)
-             !end if
+                !read(*,*)
+             end if
           end do
        end do
 
-       ! And also create the result group in the output file
-       call h5gcreate_f(output_file_id, "physical_retrieval_results", &
-            result_gid, hdferr)
-       call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
+       ! Clear and deallocate the SV structure to be ready for the next window.
+       ! We really shouldn't need to check if this is deallocated already or not,
+       ! since parse_and_initialize_SV should have successfully allocated
+       ! all fields in SV.
+       call clear_SV(SV)
+       call logger%info(fname, "Clearing up SV structure")
 
        out_dims2d = shape(chi2)
        write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_chi2_" // MCS%window(i_win)%name
@@ -560,7 +504,7 @@ contains
     double precision, allocatable :: albedo(:)
 
     !! Surface pressure
-    double precision :: psurf
+    double precision :: psurf, this_psurf
 
     double precision :: continuum
 
@@ -589,6 +533,7 @@ contains
     integer :: i, j
     integer :: funit
     double precision :: cpu_start, cpu_end
+    logical :: ILS_success
 
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
@@ -597,9 +542,7 @@ contains
 
     if (allocated(MCS%window(i_win)%gases)) then
        num_gases = MCS%window(i_win)%num_gases
-       write(*,*) "Number of gases: ", num_gases
     else
-       write(*,*) "No gases"
        num_gases = 0
     end if
 
@@ -645,8 +588,8 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
        ! For OCO-2 roughly 1nm (0.001um)
-       high_res_wl_min = MCS%window(i_win)%wl_min - 0.001
-       high_res_wl_max = MCS%window(i_win)%wl_max + 0.001
+       high_res_wl_min = MCS%window(i_win)%wl_min - 0.005
+       high_res_wl_max = MCS%window(i_win)%wl_max + 0.005
     end select
 
     do i=1, size(solar_spectrum, 1)
@@ -800,7 +743,10 @@ contains
           ! surface pressure lies. We use the initial surface pressure coming from MET.
           !this_atm = regrid_atmosphere(initial_atm, met_psurf(i_fp, i_fr))
           if (num_gases > 0) then
+
+             this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
+             num_levels = size(this_atm%p)
 
              ! And get the T and SH profiles onto our new atmosphere grid
              !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
@@ -813,6 +759,13 @@ contains
              call pwl_value_1d(size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
                   size(this_atm%p), log(this_atm%p), this_atm%sh)
+
+             do j=1, num_levels
+                if (this_psurf > this_atm%p(j)) then
+                   num_active_levels = j+1
+                end if
+             end do
+
              !this_atm%sh = 0.0d0
           end if
        else
@@ -831,7 +784,9 @@ contains
           ! next layer.
 
           if (SV%num_psurf == 1) then
-             if (SV%svsv(SV%idx_psurf(1)) < this_atm%p(size(this_atm%p) - 1)) then
+             this_psurf = SV%svsv(SV%idx_psurf(1))
+
+             if (this_psurf < this_atm%p(size(this_atm%p) - 1)) then
                 !call logger%debug(fname, "Re-gridding atmosphere!")
                 !this_atm = regrid_atmosphere(this_atm, SV%svsv(SV%idx_psurf(1)))
                 ! And get the T and SH profiles onto our new atmosphere grid
@@ -846,24 +801,24 @@ contains
                 !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
                 !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
              end if
+
+             if (this_psurf > this_atm%p(size(this_atm%p))) then
+                write(*,*) "Psurf: ", SV%svsv(SV%idx_psurf(1))
+                write(*,*) "Lowest p: ", this_atm%p(size(this_atm%p))
+                return
+             end if
+
+             ! The number of active levels has to be inferred for every
+             ! iteration if we are retrieving surface pressure 
+             do j=1, num_levels
+                if (this_psurf > this_atm%p(j)) then
+                   num_active_levels = j+1
+                end if
+             end do
+
           end if
        endif
 
-       if (num_gases > 0) then
-          num_levels = size(this_atm%p)
-
-          if (SV%svsv(SV%idx_psurf(1)) > this_atm%p(size(this_atm%p))) then
-             write(*,*) "Psurf: ", SV%svsv(SV%idx_psurf(1))
-             write(*,*) "Lowest p: ", this_atm%p(size(this_atm%p))
-             return
-          end if
-
-          do j=1, num_levels
-             if (SV%svsv(SV%idx_psurf(1)) > this_atm%p(j)) then
-                num_active_levels = j+1
-             end if
-          end do
-       end if
 
        !this_atm%sh = 1d-5
        !this_atm%T = 220.0d0
@@ -1062,7 +1017,10 @@ contains
           call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
                ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-               this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work)
+               this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
+               ILS_success)
+
+          if (.not. ILS_success) return
 
           do i=1, N_sv
              do j=1, SV%num_dispersion
@@ -1079,7 +1037,11 @@ contains
              call oco_type_convolution(this_solar(:,1), K_hi(:,i), &
                   ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i))
+                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
+                  ILS_success)
+
+             if (.not. ILS_success) return
+
           end do
        end select
 
@@ -1088,7 +1050,7 @@ contains
           do i=1, SV%num_dispersion
 
              ! Set prior inverse covariance (again all diagonal for now)
-             Sa_inv(SV%idx_dispersion(i), SV%idx_dispersion(i)) = 1.0d0 / MCS%window(i_win)%dispersion_cov(i)
+             ! Sa_inv(SV%idx_dispersion(i), SV%idx_dispersion(i)) = 1.0d0 / MCS%window(i_win)%dispersion_cov(i)
 
              ! Perturb dispersion coefficient by user-supplied value
              this_dispersion_coefs_pert(:) = this_dispersion_coefs(:)
@@ -1122,7 +1084,10 @@ contains
                 call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
                      ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                     this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work)
+                     this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
+                     ILS_success)
+
+                if (.not. ILS_success) return
 
                 ! Compute and store the Jacobian into the right place in the matrix
                 K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
@@ -1180,7 +1145,7 @@ contains
 !!$       open(file="l1b_spec.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i), K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
+!!$               noise_work(i) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
 !!$       end do
 !!$       close(funit)
 
@@ -1213,8 +1178,8 @@ contains
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  chi2(i_fp, i_fr)
-          call logger%debug(fname, trim(tmp_str))
+          !write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  chi2(i_fp, i_fr)
+          !call logger%debug(fname, trim(tmp_str))
 
           converged = .true.
 
@@ -1224,7 +1189,7 @@ contains
 !!$               noise_work(i), K(i, SV%idx_psurf(1))
 !!$       end do
 !!$       close(funit)
-          
+
           !if (i_fr == 51) then
           ! end if
           !read(*,*)
@@ -1566,7 +1531,6 @@ contains
     call linear_upsample(atm%p, p, sh, atm%sh)
 
   end subroutine resample_atmosphere
-
 
 
 

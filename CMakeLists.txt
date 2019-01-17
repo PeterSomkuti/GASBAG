@@ -59,9 +59,9 @@ else()
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} ${warnings}")
+set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
-set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg ${warnings}")
+set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
@@ -81,14 +81,19 @@ file(GLOB_RECURSE third-party third-party/*.?90)
 # Add generated files to the list
 file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 
-# Now we want warnings, but not for third-party libraries,
-# we sort of trust those to be working. So just disable warnings for
-# all files in the third-party directory. Also, most third party stuff has not
-# been written to the latest standard, or best practices..
+# Third-party libraries are assumed to work fine, so compile with optimisation
 set_source_files_properties(
   ${third-party}
   PROPERTIES
   COMPILE_FLAGS "-w -O3"
+)
+
+# Our code is definitely in the need of having warnings
+# show up!
+set_source_files_properties(
+  ${sources}
+  PROPERTIES
+  COMPILE_FLAGS "${warnings}"
 )
 
 # Define the executable

@@ -41,19 +41,24 @@ module control_mod
 
     type, private :: CS_window
        logical :: used ! Is this CS_window structure used?
-       type(string) :: name
-       double precision :: wl_min
+       type(string) :: name ! The name will be used in the output file
+       double precision :: wl_min ! Window wavelength start and end
        double precision :: wl_max
+       ! SV_string contains the space-separated state vector which will
+       ! determine the state vector structure for the retrieval.
+       type(string) :: SV_string
        type(string) :: basisfunction_file
        ! How many parameters of various state vector elements do we want to
        ! retrieve (physical retrieval only)
        integer :: albedo_order, dispersion_order
        double precision, allocatable :: dispersion_pert(:), dispersion_cov(:)
        type(string), allocatable :: gases(:)
-       integer :: num_gases
        ! This gas_index variable holds the information about which gas-section (CS_gas)
        ! index corresponds to the gas that is stored in 'gases'
        integer, allocatable :: gas_index(:)
+       integer :: num_gases
+       ! Location of the atmosphere file which must contain the gases mentioned
+       ! in the 'gases' line
        type(string) :: atmosphere_file
     end type CS_window
 
@@ -346,6 +351,9 @@ contains
                 call fini_extract(fini, tmp_str, 'wl_max', .true., fini_val)
                 MCS%window(window_nr)%wl_max = fini_val
 
+                call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
+                MCS%window(window_nr)%SV_string = fini_char
+
                 ! The rest is potentially optional. Whether a certain option is
                 ! required for a given retrieval setting, will be checked later
                 ! on in the code, usually when it's needed the first time
@@ -367,7 +375,7 @@ contains
                     end do
                     deallocate(fini_val_array)
                 end if
-                
+ 
                 call fini_extract(fini, tmp_str, 'dispersion_covariance', .false., fini_val_array)
                 if (allocated(fini_val_array)) then
                     allocate(MCS%window(window_nr)%dispersion_cov(size(fini_val_array)))
@@ -430,6 +438,55 @@ contains
 
     end subroutine
 
+    subroutine MCS_find_gases(window, gas, i_win)
+      implicit none
+      type(CS_window), intent(inout) :: window(:)
+      type(CS_gas), intent(inout) :: gas(:)
+      integer, intent(in) :: i_win
+
+      integer :: i, j
+      logical :: gas_found
+      character(len=*), parameter :: fname = "MCS_find_gases"
+      character(len=999) :: tmp_str
+
+      if (window(i_win)%num_gases == 0) return
+
+      do i=1, size(window(i_win)%gases)
+         ! Loop over all gases specified in the retrieval window
+
+         ! Skip unused retrieval windows
+         if (.not. window(i_win)%used) cycle
+
+         gas_found = .false.
+         do j=1, MAX_GASES
+            if (window(i_win)%gases(i) == gas(j)%name) then
+               gas_found = .true.
+               write(tmp_str, '(A, A, A, G0.1, A)')  "Gas found: ",  &
+                    window(i_win)%gases(i)%chars(), " (gas-", j, ")"
+               call logger%trivia(fname, trim(tmp_str))
+               ! And also store which gas section corresponds to this particular gas
+               ! in the window gas definition.
+               window(i_win)%gas_index(i) = j
+               ! Gas was found, step out of loop
+               exit
+            end if
+         end do
+
+         ! If this specific gas was not found, kill the program immediately. There's no use-case
+         ! for a gas being specified in a retrieval window, and that gas then not being defined
+         ! in a 'gas'-section.
+         if (.not. gas_found) then
+            write(tmp_str, '(A, A, A, G0.1)') "Sorry - gas '", window(i_win)%gases(i)%chars(), &
+                 "' was not found in window-", dble(i_win)
+            call logger%fatal(fname, trim(tmp_str))
+            stop 1
+         end if
+
+      end do ! Finish first loop to find/match gases with window gases
+
+
+
+    end subroutine MCS_find_gases
 
 
 

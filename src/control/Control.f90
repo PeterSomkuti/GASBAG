@@ -57,6 +57,7 @@ module control_mod
        ! index corresponds to the gas that is stored in 'gases'
        integer, allocatable :: gas_index(:)
        integer :: num_gases
+       double precision :: dsigma_scale ! Convergence scaling factor
        ! Location of the atmosphere file which must contain the gases mentioned
        ! in the 'gases' line
        type(string) :: atmosphere_file
@@ -156,9 +157,9 @@ contains
         MCS%algorithm%using_GK_SIF = .false.
         MCS%algorithm%using_physical = .false.
 
-        MCS%window%name = ""
-        MCS%window%wl_min = 0.0d0
-        MCS%window%wl_max = 0.0d0
+        MCS%window(:)%name = ""
+        MCS%window(:)%wl_min = 0.0d0
+        MCS%window(:)%wl_max = 0.0d0
 
         ! ----------------------------------------------------------------------
         ! Check which algoirthms the user wants
@@ -357,6 +358,9 @@ contains
                 ! The rest is potentially optional. Whether a certain option is
                 ! required for a given retrieval setting, will be checked later
                 ! on in the code, usually when it's needed the first time
+
+                call fini_extract(fini, tmp_str, 'dsigma_scale', .false., fini_val)
+                MCS%window(window_nr)%dsigma_scale = fini_val
 
                 call fini_extract(fini, tmp_str, 'basisfunctions', .false., fini_char)
                 MCS%window(window_nr)%basisfunction_file = trim(fini_char)

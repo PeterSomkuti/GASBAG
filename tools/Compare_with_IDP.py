@@ -34,8 +34,10 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
                                         #f'{retr_type}/retrieved_sif_abs_757nm')]):
                                         #('DOASFluorescence/fluorescence_offset_relative_771nm_idp',
                                         # f'{retr_type}/retrieved_sif_rel_771nm')]):
-                                        ('/RetrievalResults/fluorescence_757nm/RetrievedStateVector/state_vector',
-                                         f'{retr_type}/retrieved_sif_rel_757nm')]):
+        ('/RetrievalResults/fluorescence_757nm/RetrievedStateVector/state_vector',
+         f'{retr_type}/retrieved_sif_rel_757nm'),
+        ('/RetrievalResults/fluorescence_771nm/RetrievedStateVector/state_vector',
+         f'{retr_type}/retrieved_sif_rel_771nm')]):
 
 
     if (i==0):
@@ -51,17 +53,17 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
 
     if (i == 0):
         mask = qual & (np.abs(idp[idp_key][:-1,:,4]) < maxval)
-        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,4], mask=~mask), axis=1)[num_frames > 0].compressed()
+        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,4], mask=~mask), axis=1).compressed()
     elif (i==1):
         mask = qual & (np.abs(idp[idp_key][:-1,:,5]) < maxval)
-        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1)[num_frames > 0].compressed()
+        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1).compressed()
 
     mask = mask & (np.abs(new[new_key][:]) < maxval)
     num_frames = np.sum(mask, axis=1)
 
     # We want to average over an entire frame here.
-    y = new[f'{retr_type}/retrieved_sif_abs_757nm'][:] / idp['RetrievalResults/fluorescence_757nm/Ancillary/continuumLevelRadiance'][:-1,:]
-    y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1)[num_frames > 0].compressed()
+    y = new[f'{retr_type}/retrieved_sif_abs_{win}'][:] / idp[f'RetrievalResults/fluorescence_{win}/Ancillary/continuumLevelRadiance'][:-1,:]
+    y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1).compressed()
     #y = np.nanmean(np.ma.masked_array(new[f'{retr_type}/retrieved_sif_rel_771nm'][:], mask=~mask), axis=1)[num_frames > 3].compressed()
 
 
@@ -99,15 +101,17 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     ax.grid()
 
     if (i == 0):
-        ax.set_ylabel("GeoCARB SIF (abs)")
+        ax.set_ylabel("GeoCARB SIF (rel)")
         ax.set_title('757 nm')
     elif (i == 1):
-        ax.set_title('757 nm')
-    ax.set_xlabel("IDP SIF (abs)")
-    ax.legend(fontsize=6)
+        ax.set_title('771 nm')
+    ax.set_xlabel("IDP SIF (rel)")
+    ax.legend(fontsize=6, loc='upper left')
 
 for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_757nm/SpectralParameters/residual_reduced_chi2',
-                                         f'{retr_type}/retrieved_chi2_757nm')]):
+                                         f'{retr_type}/retrieved_chi2_757nm'),
+                                        ('/RetrievalResults/fluorescence_771nm/SpectralParameters/residual_reduced_chi2',
+                                         f'{retr_type}/retrieved_chi2_771nm')]):
                                         #('DOASFluorescence/residual_reduced_chi2_fluorescence_771nm_idp',
                                         # f'{retr_type}/retrieved_chi2_771nm')]):
 
@@ -129,6 +133,6 @@ for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_757nm/S
     ax.legend()
 
 plt.tight_layout(h_pad=2.5, w_pad=2.0)
-plt.savefig('idp_comparison_771_2.pdf', bbox_inches='tight')
+plt.savefig('idp_comparison_both.pdf', bbox_inches='tight')
 
 embed()

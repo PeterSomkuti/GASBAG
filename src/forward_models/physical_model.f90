@@ -87,7 +87,6 @@ module physical_model_mod
   double precision :: solar_grid_spacing, hires_spacing
   integer :: N_solar
 
-
   ! Final SIF value in physical radiance units, chi2
   double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, &
        retrieved_SIF_rel, chi2, &
@@ -124,9 +123,6 @@ contains
     integer :: i_fp, i_fr, i_pix, i_win, band
     integer :: i, j, retr_count
     logical :: this_converged
-
-    !! State vector setup
-    integer :: num_albedo_parameters, num_dispersion_parameters, num_sif_parameters
 
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
@@ -201,107 +197,8 @@ contains
 
     end select
 
-
-    allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames))
-    allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames))
-    allocate(num_iterations(my_instrument%num_fp, num_frames))
-    allocate(chi2(my_instrument%num_fp, num_frames))
-
-    allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
-    allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
-    allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
-
-    final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-
     ! Main loop over all soundings to perform actual retrieval
     ! footprint, frame, microwindow #, band
-
-
-    ! Read in the solar model - we do this for every band, the reason being
-    ! the following. Since the re-gridding procedure is fairly costly, we want
-    ! to keep the solar spectrum data as small as possible. Hence we call all of this
-    if (MCS%algorithm%solar_type == "toon") then
-       call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
-            solar_spectrum, &
-            MCS%window(1)%wl_min - 0.01, &
-            MCS%window(1)%wl_max + 0.01)
-
-       N_solar = size(solar_spectrum, 1)
-    else
-       call logger%fatal(fname, "Sorry, solar model type " &
-            // MCS%algorithm%solar_type%chars() &
-            // " is not known.")
-    end if
-
-    ! To make life easier, we want to keep the solar model on a regular,
-    ! evenly-spaced grid in wavelength space. So we are going to interpolate
-    ! it onto a slightly changed wavelength grid.
-
-    allocate(solar_spectrum_regular(N_solar, 2))
-    ! Simple choice, just take the start and end-point, and divide by the
-    ! number of elements to get even spacing
-    solar_grid_spacing = (solar_spectrum(N_solar,1) - solar_spectrum(1,1)) &
-         / dble(N_solar)
-    write(tmp_str, "(A, E8.3, A)") "New solar spectrum grid: ", solar_grid_spacing, " um"
-    call logger%debug(fname, trim(tmp_str))
-
-    do i=1, N_solar
-       solar_spectrum_regular(i,1) = (dble(i-1)) * solar_grid_spacing + solar_spectrum(1,1)
-    end do
-
-    call logger%debug(fname, "Re-gridding solar spectrum")
-    call linear_upsample(solar_spectrum_regular(:,1), solar_spectrum(:,1), &
-         solar_spectrum(:,2), solar_spectrum_regular(:,2))
-    call logger%debug(fname, "Finished re-gridding solar spectrum.")
-    ! Note that at this point, the solar spectrum is still normalised
-
-    ! To make the convolution operation faster, we will here interpolate the
-    ! ILS's to higher resolution for all pixels on the very first occassion,
-    ! and then we won't have to do it again for every retrieval and every
-    ! detector pixel. This obviously only works for a regular solar grid, and
-    ! the new hires ILS will be sitting on a regular grid with the same spacing.
-
-    ! Of course every pixel has a different delta_lambda range, so we are going
-    ! to create the new ILS grid in such a way that it fits the one ILS with the
-    ! largest range.
-
-    band = 1
-    ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
-    ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
-    num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / solar_grid_spacing)
-
-    allocate(ils_hires_grid(num_ils_hires))
-    allocate(ils_hires_delta_lambda(num_ils_hires, &
-         size(ils_delta_lambda, 2), &
-         size(ils_delta_lambda, 3), &
-         size(ils_delta_lambda, 4)))
-    allocate(ils_hires_relative_response, mold=ils_hires_delta_lambda)
-
-    ! We need to ensure that the hi-res grid and the hi-res ILS grid line
-    ! up fully, so ils_hires_min_wl needs to be shifted to the closest multiple
-    ! of solar_grid_spacing.
-
-    ils_hires_min_wl = solar_grid_spacing * ceiling(ils_hires_min_wl / solar_grid_spacing)
-
-    do i=1, num_ils_hires
-       ils_hires_grid(i) = ils_hires_min_wl + (i-1) * solar_grid_spacing
-    end do
-
-    call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
-    do i_fp=1, my_instrument%num_fp
-       do i_pix=1, size(dispersion, 1)
-
-          ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
-          call linear_upsample(ils_hires_grid, ils_delta_lambda(:, i_pix, i_fp, band) , &
-               ils_relative_response(:, i_pix, i_fp, band), &
-               ils_hires_relative_response(:, i_pix, i_fp, band))
-
-       end do
-    end do
-    call logger%debug(fname, "Done re-gridding ILS.")
-
 
     ! Create the HDF group in which all the results go in the end
     call h5gcreate_f(output_file_id, "physical_retrieval_results", &
@@ -345,10 +242,105 @@ contains
 
        end if
 
+       ! Read in the solar model - we do this for every band, the reason being
+       ! the following. Since the re-gridding procedure is fairly costly, we want
+       ! to keep the solar spectrum data as small as possible. Hence we call all of this
+       if (MCS%algorithm%solar_type == "toon") then
+          call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+               solar_spectrum, &
+               MCS%window(i_win)%wl_min - 0.01, &
+               MCS%window(i_win)%wl_max + 0.01)
+
+          N_solar = size(solar_spectrum, 1)
+       else
+          call logger%fatal(fname, "Sorry, solar model type " &
+               // MCS%algorithm%solar_type%chars() &
+               // " is not known.")
+       end if
+
+       ! To make life easier, we want to keep the solar model on a regular,
+       ! evenly-spaced grid in wavelength space. So we are going to interpolate
+       ! it onto a slightly changed wavelength grid.
+
+       allocate(solar_spectrum_regular(N_solar, 2))
+       ! Simple choice, just take the start and end-point, and divide by the
+       ! number of elements to get even spacing
+       solar_grid_spacing = (solar_spectrum(N_solar,1) - solar_spectrum(1,1)) &
+            / dble(N_solar)
+       write(tmp_str, "(A, E8.3, A)") "New solar spectrum grid: ", solar_grid_spacing, " um"
+       call logger%debug(fname, trim(tmp_str))
+
+       do i=1, N_solar
+          solar_spectrum_regular(i,1) = (dble(i-1)) * solar_grid_spacing + solar_spectrum(1,1)
+       end do
+
+       call logger%debug(fname, "Re-gridding solar spectrum")
+       call linear_upsample(solar_spectrum_regular(:,1), solar_spectrum(:,1), &
+            solar_spectrum(:,2), solar_spectrum_regular(:,2))
+       call logger%debug(fname, "Finished re-gridding solar spectrum.")
+       ! Note that at this point, the solar spectrum is still normalised
+
+       ! To make the convolution operation faster, we will here interpolate the
+       ! ILS's to higher resolution for all pixels on the very first occassion,
+       ! and then we won't have to do it again for every retrieval and every
+       ! detector pixel. This obviously only works for a regular solar grid, and
+       ! the new hires ILS will be sitting on a regular grid with the same spacing.
+
+       ! Of course every pixel has a different delta_lambda range, so we are going
+       ! to create the new ILS grid in such a way that it fits the one ILS with the
+       ! largest range.
+
+       band = 1
+       ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
+       ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
+       num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / solar_grid_spacing)
+
+       allocate(ils_hires_grid(num_ils_hires))
+       allocate(ils_hires_delta_lambda(num_ils_hires, &
+            size(ils_delta_lambda, 2), &
+            size(ils_delta_lambda, 3), &
+            size(ils_delta_lambda, 4)))
+       allocate(ils_hires_relative_response, mold=ils_hires_delta_lambda)
+
+       ! We need to ensure that the hi-res grid and the hi-res ILS grid line
+       ! up fully, so ils_hires_min_wl needs to be shifted to the closest multiple
+       ! of solar_grid_spacing.
+
+       ils_hires_min_wl = solar_grid_spacing * ceiling(ils_hires_min_wl / solar_grid_spacing)
+
+       do i=1, num_ils_hires
+          ils_hires_grid(i) = ils_hires_min_wl + (i-1) * solar_grid_spacing
+       end do
+
+       call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
+       do i_fp=1, my_instrument%num_fp
+          do i_pix=1, size(dispersion, 1)
+
+             ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
+             call linear_upsample(ils_hires_grid, ils_delta_lambda(:, i_pix, i_fp, band) , &
+                  ils_relative_response(:, i_pix, i_fp, band), &
+                  ils_hires_relative_response(:, i_pix, i_fp, band))
+
+          end do
+       end do
+       call logger%debug(fname, "Done re-gridding ILS.")
+
+       ! Allocate containers to hold the retrieval results
+       allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames))
+       allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames))
+       allocate(num_iterations(my_instrument%num_fp, num_frames))
+       allocate(chi2(my_instrument%num_fp, num_frames))
+
+       allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
+       allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
+       allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
+
+       final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
 
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-!!!!!! Set up state vector structure here
+       ! Set up state vector structure here
 
        ! We can do this once for every window, and simply clear the contents
        ! of the state vectors inside the loop later on. Might not save an awful
@@ -395,12 +387,9 @@ contains
           end do
        end do
 
-       ! Clear and deallocate the SV structure to be ready for the next window.
-       ! We really shouldn't need to check if this is deallocated already or not,
-       ! since parse_and_initialize_SV should have successfully allocated
-       ! all fields in SV.
-       call clear_SV(SV)
-       call logger%info(fname, "Clearing up SV structure")
+       deallocate(solar_spectrum_regular, solar_spectrum, ils_hires_grid, &
+            ils_hires_delta_lambda, ils_hires_relative_response)
+
 
        out_dims2d = shape(chi2)
        write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_chi2_" // MCS%window(i_win)%name
@@ -408,23 +397,25 @@ contains
             trim(tmp_str), &
             chi2, out_dims2d, -9999.99d0)
 
-       out_dims2d = shape(retrieved_sif_abs)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_abs_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            retrieved_sif_abs, out_dims2d, -9999.99d0)
-
-       out_dims2d = shape(retrieved_sif_rel)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_rel_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            retrieved_sif_rel, out_dims2d, -9999.99d0)
-
        out_dims2d = shape(num_iterations)
        write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_num_iterations_" // MCS%window(i_win)%name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             num_iterations, out_dims2d, -9999.99d0)
+
+       if (SV%num_sif == 1) then
+          out_dims2d = shape(retrieved_sif_abs)
+          write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_abs_" // MCS%window(i_win)%name
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               retrieved_sif_abs, out_dims2d, -9999.99d0)
+
+          out_dims2d = shape(retrieved_sif_rel)
+          write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_rel_" // MCS%window(i_win)%name
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               retrieved_sif_rel, out_dims2d, -9999.99d0)
+       end if
 
        out_dims3d = shape(final_radiance)
        write(tmp_str, '(A,A)') "/physical_retrieval_results/modelled_radiance_" // MCS%window(i_win)%name
@@ -443,6 +434,24 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             noise_radiance, out_dims3d)
+
+       ! Clear and deallocate the SV structure to be ready for the next window.
+       ! We really shouldn't need to check if this is deallocated already or not,
+       ! since parse_and_initialize_SV should have successfully allocated
+       ! all fields in SV.
+       call clear_SV(SV)
+       call logger%info(fname, "Clearing up SV structure")
+
+       ! Also deallocate containers holding the retrieval results
+       deallocate(retrieved_SIF_abs)
+       deallocate(retrieved_SIF_rel)
+       deallocate(num_iterations)
+       deallocate(chi2)
+
+       deallocate(final_radiance)
+       deallocate(measured_radiance)
+       deallocate(noise_radiance)
+
 
 
     end do
@@ -509,6 +518,7 @@ contains
     double precision :: continuum
 
     !! Retrieval quantities
+    double precision :: dsigma_scale
     double precision, allocatable :: K_hi(:,:), K(:,:) ! Jacobian matrices
     ! Noise covariance, prior covariance (and its inverse)
     double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
@@ -554,6 +564,10 @@ contains
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0
 
 
+    ! Use user-supplied value for convergence critertion
+    dsigma_scale = MCS%window(i_win)%dsigma_scale
+    if (dsigma_scale < 0.0d0) dsigma_scale = 1.0d0
+
     !write(*,*) "Isoformat: ", date%isoformat()
     !write(*,*) "Day of the year: ", doy_dp
 
@@ -588,8 +602,8 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
        ! For OCO-2 roughly 1nm (0.001um)
-       high_res_wl_min = MCS%window(i_win)%wl_min - 0.005
-       high_res_wl_max = MCS%window(i_win)%wl_max + 0.005
+       high_res_wl_min = MCS%window(i_win)%wl_min - 0.001
+       high_res_wl_max = MCS%window(i_win)%wl_max + 0.001
     end select
 
     do i=1, size(solar_spectrum, 1)
@@ -871,18 +885,18 @@ contains
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j))
 
-             call calculate_gas_tau( &
-                  this_solar(:,1), &
-                  this_atm%gas_vmr(:,j), &
-                  psurf - PSURF_PERTURB, &
-                  this_atm%p(:), &
-                  this_atm%T(:), &
-                  this_atm%sh(:), &
-                  MCS%gas(j), &
-                  9, &
-                  .true., &
-                  gas_tau_pert(:,:,j), &
-                  gas_tau_dpsurf2(:,:,j))
+!!$             call calculate_gas_tau( &
+!!$                  this_solar(:,1), &
+!!$                  this_atm%gas_vmr(:,j), &
+!!$                  psurf - PSURF_PERTURB, &
+!!$                  this_atm%p(:), &
+!!$                  this_atm%T(:), &
+!!$                  this_atm%sh(:), &
+!!$                  MCS%gas(j), &
+!!$                  9, &
+!!$                  .true., &
+!!$                  gas_tau_pert(:,:,j), &
+!!$                  gas_tau_dpsurf2(:,:,j))
           end do
           call cpu_time(cpu_end)
 
@@ -925,17 +939,17 @@ contains
 
        ! Surface pressure Jacobian
        if (SV%num_psurf == 1) then
-!!$          K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - SV%svsv(SV%idx_sif(1))) &
-!!$               * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-!!$               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
-
-          call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
-               VZA(i_fp, i_fr), albedo, gas_tau_pert, &
-               radiance_tmp_work_hi)
-
-          radiance_tmp_work_hi = radiance_tmp_work_hi * this_solar(:,2) + SV%svsv(SV%idx_sif(1))
-
-          K_hi(:, SV%idx_psurf(1)) = -(radiance_tmp_work_hi(:) - radiance_calc_work_hi(:)) / PSURF_PERTURB
+          K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - SV%svsv(SV%idx_sif(1))) &
+               * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
+!!$
+!!$          call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
+!!$               VZA(i_fp, i_fr), albedo, gas_tau_pert, &
+!!$               radiance_tmp_work_hi)
+!!$
+!!$          radiance_tmp_work_hi = radiance_tmp_work_hi * this_solar(:,2) + SV%svsv(SV%idx_sif(1))
+!!$
+!!$          K_hi(:, SV%idx_psurf(1)) = -(radiance_tmp_work_hi(:) - radiance_calc_work_hi(:)) / PSURF_PERTURB
 !!$
 !!$          open(newunit=funit, file='psurf_jac.dat')
 !!$          do j=1, size(radiance_calc_work_hi)
@@ -1020,7 +1034,10 @@ contains
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
                ILS_success)
 
-          if (.not. ILS_success) return
+          if (.not. ILS_success) then
+             call logger%error(fname, "ILS convolution error.")
+             return
+          end if
 
           do i=1, N_sv
              do j=1, SV%num_dispersion
@@ -1040,7 +1057,10 @@ contains
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
                   ILS_success)
 
-             if (.not. ILS_success) return
+             if (.not. ILS_success) then
+                call logger%error(fname, "ILS convolution error.")
+                return
+             end if
 
           end do
        end select
@@ -1087,7 +1107,10 @@ contains
                      this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
                      ILS_success)
 
-                if (.not. ILS_success) return
+                if (.not. ILS_success) then
+                   call logger%error(fname, "ILS convolution error.")
+                   return
+                end if
 
                 ! Compute and store the Jacobian into the right place in the matrix
                 K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
@@ -1124,7 +1147,7 @@ contains
        end if
 
        ! Check delta sigma square for this iteration
-       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv)) * 0.5d0
+       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
 
        do i=1, N_sv
           SV%sver(i) = sqrt(Shat(i,i))
@@ -1158,7 +1181,7 @@ contains
 !!$       end do
 !!$       close(funit)
 
-       if (dsigma_sq < dble(N_sv)) then
+       if (dsigma_sq < dble(N_sv) * dsigma_scale) then
           keep_iterating = .false.
           !write(*,*) "Converged!"
           !write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)

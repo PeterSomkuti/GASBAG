@@ -60,6 +60,7 @@ module physical_model_mod
   double precision :: ils_hires_min_wl, ils_hires_max_wl, ils_hires_spacing
   double precision, allocatable :: ils_hires_grid(:)
   integer :: num_ils_hires
+  double precision :: ils_norm_factor
 
   double precision, allocatable :: dispersion_coefs(:,:,:)
   double precision, allocatable :: snr_coefs(:,:,:,:)
@@ -323,6 +324,20 @@ contains
              call linear_upsample(ils_hires_grid, ils_delta_lambda(:, i_pix, i_fp, band) , &
                   ils_relative_response(:, i_pix, i_fp, band), &
                   ils_hires_relative_response(:, i_pix, i_fp, band))
+
+             ! Since we have resample the ILS, it also needs re-normalising, a simple
+             ! trapezoidal integration should do..
+             ils_norm_factor = 0.0d0
+             do i=1, size(ils_hires_relative_response, 1)-1
+                ils_norm_factor = ils_norm_factor + &
+                     (ils_hires_relative_response(i, i_pix, i_fp, band) + &
+                     ils_hires_relative_response(i+1, i_pix, i_fp, band)) * &
+                     (ils_hires_delta_lambda(i+1, i_pix, i_fp, band) - &
+                     ils_hires_delta_lambda(i, i_pix, i_fp, band)) / 2.0d0
+             end do
+
+             ils_hires_relative_response(:, i_pix, i_fp, band) = &
+                  ils_hires_relative_response(:, i_pix, i_fp, band) / ils_norm_factor
 
           end do
        end do
@@ -1049,6 +1064,10 @@ contains
                ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
                ILS_success)
+
+          call fft_convolution(radiance_calc_work_hi, ils_hires_relative_response(:,1,1,band), &
+               solar_grid_spacing, this_dispersion, radiance_calc_work)
+
 
           if (.not. ILS_success) then
              call logger%error(fname, "ILS convolution error.")

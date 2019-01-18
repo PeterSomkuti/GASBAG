@@ -22,11 +22,16 @@ contains
     double precision, intent(in) :: input(:), kernel(:), wl_spacing, wl_output(:)
     double precision, intent(inout) :: output(:)
 
-    integer :: N_input, N_kernel, N_input_fft, N_kernel_fft
+    integer :: power
+    integer :: N_input, N_kernel, N_fft
+    integer :: input_shift, kernel_shift
     integer(4) :: lensav, lenwrk
     integer :: fft_err
     double precision, allocatable :: wsave(:), work(:)
     double precision, allocatable :: input_fft(:), kernel_fft(:)
+
+    integer :: i, funit
+    logical :: found_power
 
 
     ! FFT-type convolution using FFTPACK5.1, which is most efficient and
@@ -36,8 +41,8 @@ contains
     ! of the FFT method.
 
     ! Simple procedure:
-    ! a) shift the ILS kernel such that the center is at index 1 and wraps
-    !    around the array
+    ! a) shift the input and ILS kernel such that the center is at
+    !    the first quarter of the respective array
     ! b) Perform forward FFT of both input and kernel
     ! c) Multiply the result and back-transform
     ! d) Sample the convolved output at the low-resultion
@@ -46,29 +51,90 @@ contains
     N_input = size(input)
     N_kernel = size(kernel)
 
+    ! Need to find closest power of two that's at least
+    ! twice as large as the input. 
+    found_power = .false.
+    power = 1
+    do while (.not. found_power)
+       if ((2 * N_input) < (2 ** power)) found_power = .true.
+       power = power + 1
+    end do
+
+    N_fft = 2 ** power
+
     ! Look up the rfft1i function - it recommends this size for he
     ! wsave array
-    lensav = N_input + int(log(dble(N_input)) / log(2.0d0)) + 4
+    lensav = N_fft + int(log(dble(N_fft)) / log(2.0d0)) + 4
+    lenwrk = N_fft
 
-    allocate(work(N_input))
-    allocate(wsave(lensav))
+    allocate(work(N_fft))
+    allocate(wsave(lenwrk))
 
     ! Initialise the FFT solver
-    call rfft1i(N_input, wsave, lensav, fft_err)
+    call rfft1i(N_fft, wsave, lensav, fft_err)
 
     ! Transform the input (radiances)
-    N_input_fft = N_input
-    allocate(input_fft(N_input_fft))
+    allocate(input_fft(N_fft))
+    allocate(kernel_fft(N_fft))
+
+    input_fft(:) = 0.0d0
+    kernel_fft(:) = 0.0d0
+
     input_fft(1:N_input) = input(:)
-    call rfft1f(N_input, 1, input_fft, N_input_fft, lensav, work, fft_err)
+    kernel_fft(1:N_kernel) = kernel(:)
+    !kernel_fft = kernel_fft / sum(kernel_fft(1:N_kernel))
+
+    input_shift = N_fft/4 - N_input/2
+    kernel_shift = N_kernel/2
+
+    input_fft = cshift(input_fft, -input_shift)
+    ! The kernel has to be shifted to the center, such
+    ! that it's max value is essentially at 1.
+    kernel_fft = cshift(kernel_fft, kernel_shift)
+
+
+    open(newunit=funit, file='fft_input_before.dat')
+    do i=1, N_fft
+       write(funit, *) input_fft(i), kernel_fft(i)
+    end do
+    close(funit)
+
+    call rfft1f(N_fft, 1, input_fft, N_fft, wsave, &
+         lensav, work, lenwrk, fft_err)
 
     ! Transform the ILS kernel
-    N_kernel_fft = N_kernel
-    allocate(kernel_fft(N_kernel_fft))
-    kernel_fft(1:N_kernel) = kernel(:)
-    call rfft1f(N_kernel, 1, kernel_fft, N_kernel_fft, lensav, work, fft_err)
+    call rfft1f(N_fft, 1, kernel_fft, N_fft, wsave, &
+         lensav, work, lenwrk, fft_err)
 
-    read(*,*)
+    open(newunit=funit, file='fft_input.dat')
+    do i=1, N_fft
+       write(funit, *) input_fft(i), kernel_fft(i)
+    end do
+    close(funit)
+
+    do i=1, N_fft
+       input_fft(i) = input_fft(i) * kernel_fft(i)
+    end do
+
+    open(newunit=funit, file='fft_mult.dat')
+    do i=1, N_fft
+       write(funit, *) input_fft(i)
+    end do
+    close(funit)
+
+
+    call rfft1b(N_fft, 1, input_fft, N_fft, wsave, &
+         lensav, work, lenwrk, fft_err)
+
+    input_fft = input_fft / sqrt(dble(N_input + N_kernel))
+    !input_fft = cshift(input_fft, input_shift) * wl_spacing
+
+    open(newunit=funit, file='fft_back.dat')
+    do i=1, N_fft
+       write(funit, *) input_fft(i)
+    end do
+
+    stop 1
 
 
   end subroutine fft_convolution

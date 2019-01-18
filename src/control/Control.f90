@@ -58,6 +58,9 @@ module control_mod
        integer, allocatable :: gas_index(:)
        integer :: num_gases
        double precision :: dsigma_scale ! Convergence scaling factor
+       ! Do we use the less-accurate, but faster FFT convolution with an
+       ! averaged ILS kernel?
+       logical :: fft_convolution 
        ! Location of the atmosphere file which must contain the gases mentioned
        ! in the 'gases' line
        type(string) :: atmosphere_file
@@ -359,6 +362,22 @@ contains
                 ! required for a given retrieval setting, will be checked later
                 ! on in the code, usually when it's needed the first time
 
+                call fini_extract(fini, tmp_str, 'fft_convolution', .false., fini_char)
+                fini_string = fini_char
+                if (fini_string == "") then
+                   ! If not supplied, default state is "no"
+                   MCS%window(window_nr)%fft_convolution = .false.
+                else
+                   if (fini_string%lower() == "true") then
+                      MCS%window(window_nr)%fft_convolution = .true.
+                   else if (fini_string%lower() == "false") then
+                      MCS%window(window_nr)%fft_convolution = .false.
+                   else
+                      call logger%fatal(fname, "Sorry, -fft_convolution- option accepts " &
+                           // "only T/true or F/false.")
+                      stop 1
+                   end if
+                end if
                 call fini_extract(fini, tmp_str, 'dsigma_scale', .false., fini_val)
                 MCS%window(window_nr)%dsigma_scale = fini_val
 

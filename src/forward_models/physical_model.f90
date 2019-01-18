@@ -69,6 +69,7 @@ module physical_model_mod
   ! For OCO-2: bad sample list. Bad samples should not be counted towards
   ! fitting results (noise inflation)
   integer, allocatable :: bad_sample_list(:,:,:)
+  integer, allocatable :: spike_list(:,:,:)
 
   ! We grab the full MET profiles from the MET data file, for quick access
   double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
@@ -194,6 +195,8 @@ contains
 
        ! Read in bad sample list
        call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
+       ! Read in Spike filter data
+       call my_instrument%read_spike_filter(l1b_file_id, spike_list, 1)
 
     end select
 
@@ -366,9 +369,9 @@ contains
        do i_fr=1, num_frames
           do i_fp=1, my_instrument%num_fp
 
-             if (land_fraction(i_fp, i_fr) < 0.95) then
-                cycle
-             end if
+             !if (land_fraction(i_fp, i_fr) < 0.95) then
+             !   cycle
+             !end if
 
              call cpu_time(cpu_time_start)
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, 1)
@@ -452,7 +455,8 @@ contains
        deallocate(measured_radiance)
        deallocate(noise_radiance)
 
-
+       !deallocate(bad_sample_list)
+       !deallocate(spike_list)
 
     end do
 
@@ -628,7 +632,7 @@ contains
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
 
     ! solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
-    solar_doppler = (relative_solar_velocity(i_fp, i_fr) + earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+    solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
     !solar_doppler = (relative_solar_velocity(i_fp, i_fr)) / SPEED_OF_LIGHT
     ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
     ! According to the Doppler shift
@@ -1007,6 +1011,18 @@ contains
                snr_coefs, radiance_meas_work, &
                noise_work, i_fp, band, &
                l1b_wl_idx_min, l1b_wl_idx_max)
+
+          ! Pixels flagged with a spike need noise inflation, so
+          ! that they are not considered in the fit. This should
+          ! save otherwise good spectra with just a few distorted
+          ! radiance values.
+
+          do i=1, N_spec
+             if (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) then
+                noise_work(i) = noise_work(i) * 10000.0d0
+             end if
+          end do
+
        end select
 
        allocate(Se_inv(N_spec, N_spec))
@@ -1218,9 +1234,11 @@ contains
           !read(*,*)
        end if
 
-       if (iteration == 15) then
+       if (iteration == 5) then
           call logger%warning(fname, "Not converged!")
           keep_iterating = .false.
+
+          return
 
           ! Print out SV for visual inspection!
 

@@ -62,7 +62,7 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     num_frames = np.sum(mask, axis=1)
 
     # We want to average over an entire frame here.
-    y = new[f'{retr_type}/retrieved_sif_abs_{win}'][:] / idp[f'RetrievalResults/fluorescence_{win}/Ancillary/continuumLevelRadiance'][:-1,:]
+    y = new[f'{retr_type}/retrieved_sif_abs_{win}'][:] / (idp[f'RetrievalResults/fluorescence_{win}/Ancillary/continuumLevelRadiance'][:-1,:] - new[f'{retr_type}/retrieved_sif_abs_{win}'][:])
     y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1).compressed()
     #y = np.nanmean(np.ma.masked_array(new[f'{retr_type}/retrieved_sif_rel_771nm'][:], mask=~mask), axis=1)[num_frames > 3].compressed()
 

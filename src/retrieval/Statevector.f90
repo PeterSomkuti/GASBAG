@@ -144,7 +144,7 @@ contains
                 stop 1
              end if
 
-             if (num_dispersion_parameters >= size(MCS%window(i_win)%dispersion_pert)) then
+             if (num_dispersion_parameters > size(MCS%window(i_win)%dispersion_pert)) then
                 call logger%fatal(fname, "Not enough disperison perturbation values!")
                 stop 1
              end if

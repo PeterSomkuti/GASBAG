@@ -88,6 +88,7 @@ contains
                 valid_options(this_idx,12) = "atmosphere"
                 valid_options(this_idx,13) = "algorithms"
                 valid_options(this_idx,14) = "dsigma_scale"
+                valid_options(this_idx,15) = "fft_convolution"
         end do
 
         ! Section for gases

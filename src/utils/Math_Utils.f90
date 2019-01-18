@@ -13,19 +13,20 @@ module math_utils_mod
     double precision, parameter :: DRY_AIR_MASS = 0.02897d0
     double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
 
-    public PI, DEG2RAD, RAD2DEG, combsort, percentile, invert_matrix, &
-           single_convolve
-
-
-
 contains
 
 
-  subroutine fft_convolution(input, kernel, output)
+  subroutine fft_convolution(input, kernel, wl_spacing, wl_output, output)
 
     implicit none
-    double precision, intent(in) :: input(:), kernel(:)
+    double precision, intent(in) :: input(:), kernel(:), wl_spacing, wl_output(:)
     double precision, intent(inout) :: output(:)
+
+    integer :: N_input, N_kernel, N_input_fft, N_kernel_fft
+    integer(4) :: lensav, lenwrk
+    integer :: fft_err
+    double precision, allocatable :: wsave(:), work(:)
+    double precision, allocatable :: input_fft(:), kernel_fft(:)
 
 
     ! FFT-type convolution using FFTPACK5.1, which is most efficient and
@@ -34,7 +35,40 @@ contains
     ! number of prime factors), and b) to mitigate the wrap-around problem
     ! of the FFT method.
 
+    ! Simple procedure:
+    ! a) shift the ILS kernel such that the center is at index 1 and wraps
+    !    around the array
+    ! b) Perform forward FFT of both input and kernel
+    ! c) Multiply the result and back-transform
+    ! d) Sample the convolved output at the low-resultion
+    !    wavelengths (usually given by the dispersion)
 
+    N_input = size(input)
+    N_kernel = size(kernel)
+
+    ! Look up the rfft1i function - it recommends this size for he
+    ! wsave array
+    lensav = N_input + int(log(dble(N_input)) / log(2.0d0)) + 4
+
+    allocate(work(N_input))
+    allocate(wsave(lensav))
+
+    ! Initialise the FFT solver
+    call rfft1i(N_input, wsave, lensav, fft_err)
+
+    ! Transform the input (radiances)
+    N_input_fft = N_input
+    allocate(input_fft(N_input_fft))
+    input_fft(1:N_input) = input(:)
+    call rfft1f(N_input, 1, input_fft, N_input_fft, lensav, work, fft_err)
+
+    ! Transform the ILS kernel
+    N_kernel_fft = N_kernel
+    allocate(kernel_fft(N_kernel_fft))
+    kernel_fft(1:N_kernel) = kernel(:)
+    call rfft1f(N_kernel, 1, kernel_fft, N_kernel_fft, lensav, work, fft_err)
+
+    read(*,*)
 
 
   end subroutine fft_convolution

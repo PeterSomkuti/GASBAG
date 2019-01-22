@@ -69,7 +69,7 @@ find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran HL)
 find_package(NETCDF REQUIRED COMPONENTS Fortran)
-find_package(Gperftools)
+# find_package(Gperftools)
 
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
@@ -103,9 +103,9 @@ message(STATUS "HDF5-HL Libraries at -- " ${HDF5_Fortran_HL_LIBRARIES})
 message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
 # HDF5 needs to be included at compile time already
-target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS} ${GPERFTOOLS_INCLUDE_DIRS})
-target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES} ${GPERFTOOLS_PROFILER})
+target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS})
+target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES} ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES})
 
 # This is needed for Gperfmonitor (or the profiler portion of it) to work
 # properly on Mac's as the have some memory address randomization going on..
-set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)
+#set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)

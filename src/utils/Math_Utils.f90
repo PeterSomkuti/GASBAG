@@ -16,10 +16,10 @@ module math_utils_mod
 contains
 
 
-  subroutine fft_convolution(input, kernel, wl_spacing, wl_output, output)
+  subroutine fft_convolution(input, kernel, wl_input, wl_output, output)
 
     implicit none
-    double precision, intent(in) :: input(:), kernel(:), wl_spacing, wl_output(:)
+    double precision, intent(in) :: input(:), kernel(:), wl_input(:), wl_output(:)
     double precision, intent(inout) :: output(:)
 
     integer :: power
@@ -85,19 +85,20 @@ contains
     !kernel_fft = kernel_fft / sum(kernel_fft(1:N_kernel))
 
     input_shift = N_fft/4 - N_input/2
-    kernel_shift = N_kernel/2
+    kernel_shift = maxloc(kernel, dim=1) !N_kernel/2
 
     input_fft = cshift(input_fft, -input_shift)
     ! The kernel has to be shifted to the center, such
     ! that it's max value is essentially at 1.
     kernel_fft = cshift(kernel_fft, kernel_shift)
 
+    !kernel_fft = kernel_fft / sum(kernel_fft)
 
-    open(newunit=funit, file='fft_input_before.dat')
-    do i=1, N_fft
-       write(funit, *) input_fft(i), kernel_fft(i)
-    end do
-    close(funit)
+!!$    open(newunit=funit, file='fft_input_before.dat')
+!!$    do i=1, N_fft
+!!$       write(funit, *) input_fft(i), kernel_fft(i)
+!!$    end do
+!!$    close(funit)
 
     call rfft1f(N_fft, 1, input_fft, N_fft, wsave, &
          lensav, work, lenwrk, fft_err)
@@ -106,35 +107,50 @@ contains
     call rfft1f(N_fft, 1, kernel_fft, N_fft, wsave, &
          lensav, work, lenwrk, fft_err)
 
-    open(newunit=funit, file='fft_input.dat')
-    do i=1, N_fft
-       write(funit, *) input_fft(i), kernel_fft(i)
-    end do
-    close(funit)
+!!$    open(newunit=funit, file='fft_input.dat')
+!!$    do i=1, N_fft
+!!$       write(funit, *) input_fft(i), kernel_fft(i)
+!!$    end do
+!!$    close(funit)
 
     do i=1, N_fft
        input_fft(i) = input_fft(i) * kernel_fft(i)
     end do
 
-    open(newunit=funit, file='fft_mult.dat')
-    do i=1, N_fft
-       write(funit, *) input_fft(i)
-    end do
-    close(funit)
-
+!!$    open(newunit=funit, file='fft_mult.dat')
+!!$    do i=1, N_fft
+!!$       write(funit, *) input_fft(i)
+!!$    end do
+!!$    close(funit)
 
     call rfft1b(N_fft, 1, input_fft, N_fft, wsave, &
          lensav, work, lenwrk, fft_err)
 
-    input_fft = input_fft / sqrt(dble(N_input + N_kernel))
-    !input_fft = cshift(input_fft, input_shift) * wl_spacing
+    ! Scale the iFFT result and shift it back
+    input_fft = input_fft / sqrt(dble(N_fft) / 5.0d0)
+    input_fft = cshift(input_fft, input_shift)
 
-    open(newunit=funit, file='fft_back.dat')
-    do i=1, N_fft
-       write(funit, *) input_fft(i)
-    end do
+    ! Interpolate the values at the wavelengths given by
+    ! the dispersion relation.
 
-    stop 1
+    call pwl_value_1d(N_input, &
+         wl_input(:), input_fft(1:N_input), &
+         size(output), &
+         wl_output(:), output(:))
+
+!!$    open(newunit=funit, file='fft_back_hires.dat')
+!!$    do i=1, N_input
+!!$       write(funit, *) wl_input(i), input_fft(i)
+!!$    end do
+!!$    close(funit)
+!!$
+!!$    open(newunit=funit, file='fft_back.dat')
+!!$    do i=1, size(output)
+!!$       write(funit, *) wl_output(i), output(i)
+!!$    end do
+!!$    close(funit)
+!!$
+!!$    stop 1
 
 
   end subroutine fft_convolution

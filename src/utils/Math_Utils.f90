@@ -56,19 +56,22 @@ contains
     found_power = .false.
     power = 1
     do while (.not. found_power)
-       if ((2 * N_input) < (2 ** power)) found_power = .true.
+       if ((2 * N_input) < (2 ** power)) then
+          found_power = .true.
+          exit
+       end if
        power = power + 1
     end do
 
     N_fft = 2 ** power
 
     ! Look up the rfft1i function - it recommends this size for he
-    ! wsave array
+    ! wsave and work arrays
     lensav = N_fft + int(log(dble(N_fft)) / log(2.0d0)) + 4
     lenwrk = N_fft
 
-    allocate(work(N_fft))
-    allocate(wsave(lenwrk))
+    allocate(work(lenwrk))
+    allocate(wsave(lensav))
 
     ! Initialise the FFT solver
     call rfft1i(N_fft, wsave, lensav, fft_err)

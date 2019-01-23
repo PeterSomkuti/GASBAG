@@ -44,6 +44,7 @@ module control_mod
        type(string) :: name ! The name will be used in the output file
        double precision :: wl_min ! Window wavelength start and end
        double precision :: wl_max
+       double precision :: wl_spacing ! The high-resolution wavelength grid spacing
        ! SV_string contains the space-separated state vector which will
        ! determine the state vector structure for the retrieval.
        type(string) :: SV_string
@@ -354,6 +355,10 @@ contains
 
                 call fini_extract(fini, tmp_str, 'wl_max', .true., fini_val)
                 MCS%window(window_nr)%wl_max = fini_val
+
+                call fini_extract(fini, tmp_str, 'wl_spacing', .true., fini_val)
+                MCS%window(window_nr)%wl_spacing = fini_val
+
 
                 call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
                 MCS%window(window_nr)%SV_string = fini_char

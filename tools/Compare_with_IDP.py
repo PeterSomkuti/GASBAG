@@ -21,7 +21,7 @@ new = h5py.File(new_fname, 'r')
 retr_type = "physical_retrieval_results"
 
 # extent
-maxval = 0.1
+maxval = 0.035
 #maxval = 5e18
 extent = [-maxval, maxval, -maxval, maxval]
 
@@ -48,9 +48,10 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     print(i, idp_key, new_key)
 
     # we want to filter out those that are flagged bad in IDP
-    qual = ((new[f'{retr_type}/retrieved_chi2_{win}'][:] > 0.001) &
-            (new[f'physical_retrieval_results/retrieved_chi2_{win}'][:] < 2.00) &
-            (new[f'physical_retrieval_results/retrieved_num_iterations_{win}'][:] < 5))
+    qual = (np.isfinite(new[f'{retr_type}/retrieved_chi2_{win}'][:]))
+    qual = (qual &
+            (new[f'physical_retrieval_results/retrieved_chi2_{win}'][:] < 3.00) &
+            (new[f'physical_retrieval_results/retrieved_num_iterations_{win}'][:] < 4))
 
     if (i == 0):
         mask = qual & (np.abs(idp[idp_key][:-1,:,4]) < maxval)
@@ -82,12 +83,14 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
 
     ax = axarr[0, i]
     ax.set_aspect(1)
-    ax.hexbin(x, y, extent=extent, #extent=[x.min(), x.max(), y.min(), y.max()],
-              linewidths=0, mincnt=1, gridsize=100, cmap='plasma')
-    ax.set_xlim(x.min(), x.max())
-    ax.set_ylim(y.min(), y.max())
+    ex_min = min(x.min(), y.min())
+    ex_max = max(x.max(), y.max())
+    ax.hexbin(x, y, extent=[ex_min, ex_max, ex_min, ex_max], #extent=[x.min(), x.max(), y.min(), y.max()],
+              linewidths=0, mincnt=1, gridsize=50, cmap='plasma')
+    ax.set_xlim(ex_min, ex_max)
+    ax.set_ylim(ex_min, ex_max)
 
-    x_ = np.array([-maxval, maxval])
+    x_ = np.array([ex_min, ex_max])
 
     icept = ransac.estimator_.intercept_[0]
     slope = ransac.estimator_.coef_[0][0]
@@ -130,6 +133,9 @@ for i, (idp_key, new_key) in enumerate([('/RetrievalResults/fluorescence_757nm/S
             alpha=0.5, label='IDP')
     ax.hist(new[new_key][:][qual].flatten(), range=(0,3), bins=100,
             alpha=0.5, label='GeoCARB')
+
+    if (i==0):
+        ax.set_ylabel('Fit quality')
 
     ax.set_xlabel('$\chi^2$')
     ax.legend()

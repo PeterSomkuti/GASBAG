@@ -37,7 +37,9 @@ module physical_model_mod
   end type atmosphere
 
 
-
+  double precision :: hires_spacing, hires_pad
+  double precision, allocatable :: hires_grid(:)
+  integer :: N_hires
   ! Dispersion/wavelength array
   double precision, allocatable :: dispersion(:,:,:)
   ! Sounding_ids
@@ -88,7 +90,6 @@ module physical_model_mod
 
   ! The solar spectrum (wavelength, transmission)
   double precision, allocatable :: solar_spectrum(:,:), solar_spectrum_regular(:,:)
-  double precision :: solar_grid_spacing, hires_spacing
   integer :: N_solar
 
   ! Final SIF value in physical radiance units, chi2
@@ -201,6 +202,10 @@ contains
        ! Read in Spike filter data
        call my_instrument%read_spike_filter(l1b_file_id, spike_list, 1)
 
+       ! By how much do we have to pad the microwindow to account for the
+       ! width of the ILS? (in microns)
+       hires_pad = 0.001
+
     end select
 
     ! Main loop over all soundings to perform actual retrieval
@@ -248,14 +253,26 @@ contains
 
        end if
 
+       ! Grab the desired high-resolution wavelength grid spacing
+       hires_spacing = MCS%window(i_win)%wl_spacing
+
+       ! .. and construct the high-resolution grid from the supplied
+       ! microwindow range.
+       N_hires = ceiling((MCS%window(i_win)%wl_max - MCS%window(i_win)%wl_min + 2*hires_pad) / hires_spacing)
+       allocate(hires_grid(N_hires))
+       do i=1, N_hires
+          hires_grid(i) = MCS%window(i_win)%wl_min - hires_pad + dble(i-1) * hires_spacing
+       end do
+
+
        ! Read in the solar model - we do this for every band, the reason being
        ! the following. Since the re-gridding procedure is fairly costly, we want
        ! to keep the solar spectrum data as small as possible. Hence we call all of this
        if (MCS%algorithm%solar_type == "toon") then
           call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
                solar_spectrum, &
-               MCS%window(i_win)%wl_min - 0.01, &
-               MCS%window(i_win)%wl_max + 0.01)
+               MCS%window(i_win)%wl_min - hires_pad, &
+               MCS%window(i_win)%wl_max + hires_pad)
 
           N_solar = size(solar_spectrum, 1)
        else
@@ -267,22 +284,14 @@ contains
        ! To make life easier, we want to keep the solar model on a regular,
        ! evenly-spaced grid in wavelength space. So we are going to interpolate
        ! it onto a slightly changed wavelength grid.
-
-       allocate(solar_spectrum_regular(N_solar, 2))
-       ! Simple choice, just take the start and end-point, and divide by the
-       ! number of elements to get even spacing
-       solar_grid_spacing = (solar_spectrum(N_solar,1) - solar_spectrum(1,1)) &
-            / dble(N_solar)
-       write(tmp_str, "(A, E8.3, A)") "New solar spectrum grid: ", solar_grid_spacing, " um"
-       call logger%debug(fname, trim(tmp_str))
-
-       do i=1, N_solar
-          solar_spectrum_regular(i,1) = (dble(i-1)) * solar_grid_spacing + solar_spectrum(1,1)
-       end do
+       allocate(solar_spectrum_regular(N_hires, 2))
+       solar_spectrum_regular(:,1) = hires_grid
 
        call logger%debug(fname, "Re-gridding solar spectrum")
-       call linear_upsample(solar_spectrum_regular(:,1), solar_spectrum(:,1), &
-            solar_spectrum(:,2), solar_spectrum_regular(:,2))
+       call pwl_value_1d(size(solar_spectrum, 1), &
+            solar_spectrum(:,1), solar_spectrum(:,2), &
+            N_hires, &
+            solar_spectrum_regular(:,1), solar_spectrum_regular(:,2))
        call logger%debug(fname, "Finished re-gridding solar spectrum.")
        ! Note that at this point, the solar spectrum is still normalised
 
@@ -299,7 +308,7 @@ contains
        band = 1
        ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
        ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
-       num_ils_hires = floor((ils_hires_max_wl - ils_hires_min_wl) / solar_grid_spacing)
+       num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / hires_spacing)
 
        allocate(ils_hires_grid(num_ils_hires))
        allocate(ils_hires_delta_lambda(num_ils_hires, &
@@ -319,19 +328,21 @@ contains
        ! We need to ensure that the hi-res grid and the hi-res ILS grid line
        ! up fully, so ils_hires_min_wl needs to be shifted to the closest multiple
        ! of solar_grid_spacing.
-       ils_hires_min_wl = solar_grid_spacing * ceiling(ils_hires_min_wl / solar_grid_spacing)
+       ils_hires_min_wl = hires_spacing * ceiling(ils_hires_min_wl / hires_spacing)
 
        ! And construct the ILS hires grid using the solar grid spacing
        do i=1, num_ils_hires
-          ils_hires_grid(i) = ils_hires_min_wl + dble(i-1) * solar_grid_spacing
+          ils_hires_grid(i) = ils_hires_min_wl + dble(i-1) * hires_spacing
        end do
 
        call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
+
        do i_fp=1, my_instrument%num_fp
           do i_pix=1, size(dispersion, 1)
 
              ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
 
+             ! Interpolate the ILS onto the high-resolution grid
              call pwl_value_1d(&
                   size(ils_delta_lambda, 1), &
                   ils_delta_lambda(:, i_pix, i_fp, band), &
@@ -339,7 +350,7 @@ contains
                   num_ils_hires, &
                   ils_hires_grid, ils_hires_relative_response(:, i_pix, i_fp, band) )
 
-             ! Since we have resample the ILS, it also needs re-normalising, a simple
+             ! Since we have resampled the ILS, it also needs re-normalising, a simple
              ! trapezoidal integration should do.
 
              ils_norm_factor = 0.0d0
@@ -364,13 +375,11 @@ contains
              ! pixels for a given footprint and band.
 
              ! Dimensions: (delta lambda, fp, band)
-!!$             do i=1, size(ils_hires_relative_response, 1)
-!!$                ils_hires_avg_relative_response(i, i_fp, band) = &
-!!$                     sum(ils_hires_relative_response(i, :, i_fp, band)) / &
-!!$                     size(ils_hires_relative_response, 2)
-!!$             end do
-
-             ils_hires_avg_relative_response(:, i_fp, band) = ils_hires_relative_response(:, 1, i_fp, band)
+             do i=1, size(ils_hires_relative_response, 1)
+                ils_hires_avg_relative_response(i, i_fp, band) = &
+                     sum(ils_hires_relative_response(i, :, i_fp, band)) / &
+                     size(ils_hires_relative_response, 2)
+             end do
 
           end if
 
@@ -387,9 +396,16 @@ contains
        allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
        allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
 
+       num_iterations = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       retrieved_SIF_abs = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       retrieved_SIF_rel = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
+
 
 
        ! Set up state vector structure here
@@ -415,7 +431,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=3000, 3200 !num_frames
+       do i_fr=1, num_frames
           do i_fp=1, my_instrument%num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -439,7 +455,7 @@ contains
           end do
        end do
 
-       deallocate(solar_spectrum_regular, solar_spectrum, ils_hires_grid, &
+       deallocate(solar_spectrum_regular, solar_spectrum, hires_grid, ils_hires_grid, &
             ils_hires_delta_lambda, ils_hires_relative_response)
 
        if (MCS%window(i_win)%fft_convolution) deallocate(ils_hires_avg_relative_response)
@@ -646,35 +662,9 @@ contains
     allocate(this_dispersion_coefs(size(dispersion_coefs, 1)))
     allocate(this_dispersion_coefs_pert(size(dispersion_coefs, 1)))
 
-    ! This here grabs the boundaries of the high-resolution solar spectrum.
-    ! Depending on the instrument, we have to add some extra space to
-    ! the user-defined microwindow, such that we can peform the convolution
-    ! to the pixels at the edge of microwindow.
-
-    solar_idx_min = 0
-    solar_idx_max = 0
-
-    select type(my_instrument)
-    type is (oco2_instrument)
-       ! For OCO-2 roughly 1nm (0.001um)
-       high_res_wl_min = MCS%window(i_win)%wl_min - 0.001
-       high_res_wl_max = MCS%window(i_win)%wl_max + 0.001
-    end select
-
-    do i=1, size(solar_spectrum, 1)
-       if (solar_spectrum_regular(i,1) < high_res_wl_min) then
-          solar_idx_min = i
-       end if
-       if (solar_spectrum_regular(i,1) < high_res_wl_max) then
-          solar_idx_max = i
-       end if
-       if (solar_spectrum_regular(i,1) > high_res_wl_max) then
-          exit
-       end if
-    end do
 
     ! Allocate the micro-window bounded solar and radiance arrays
-    allocate(this_solar(solar_idx_max - solar_idx_min + 1, 2))
+    allocate(this_solar(N_hires, 2))
     ! If solar doppler-shift is needed, calculate the distance and relative
     ! velocity between point of measurement and the (fixed) sun
 
@@ -687,7 +677,7 @@ contains
     !solar_doppler = (relative_solar_velocity(i_fp, i_fr)) / SPEED_OF_LIGHT
     ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
     ! According to the Doppler shift
-    this_solar(:,1) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 1) / (1.0d0 - solar_doppler)
+    this_solar(:,1) = solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
 
     ! Since we now have the solar distance, we can calculate the proper solar
     ! continuum for the given day of the year.
@@ -695,7 +685,7 @@ contains
     call calculate_solar_planck_function(6500.d0, solar_dist * 1000.d0, &
          this_solar(:,1), solar_irrad)
     ! And multiply to get the solar irradiance in physical units
-    this_solar(:,2) = solar_spectrum_regular(solar_idx_min:solar_idx_max, 2) * solar_irrad(:)
+    this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
 
     ! Correct for instrument doppler shift
     instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
@@ -1004,7 +994,6 @@ contains
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:)
        K_hi(:,:) = K_hi(:,:)
 
-
        ! Dispersion
        this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
        ! If required, replace L1b dispersion coefficients by state vector
@@ -1026,7 +1015,6 @@ contains
        ! Grab a copy of the dispersion relation that's shifted according to
        ! spacecraft velocity.
        this_dispersion = this_dispersion / (1.0d0 - instrument_doppler)
-
 
        ! Here we grab the index limits for the radiances for
        ! the choice of our microwindow and the given dispersion relation
@@ -1199,6 +1187,9 @@ contains
           end do
        end if
 
+
+
+
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
        !tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
        tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
@@ -1232,6 +1223,14 @@ contains
           SV%sver(i) = sqrt(Shat(i,i))
        end do
 
+
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
+!!$       end do
+!!$       close(funit)
+
 !!$       do j=1, num_active_levels
 !!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
 !!$       end do
@@ -1244,12 +1243,7 @@ contains
 !!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 !!$       write(*,*) "Dsigma2: ", dsigma_sq
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i) , K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
-!!$       end do
-!!$       close(funit)
+
 !!$
 
        if (dsigma_sq < dble(N_sv) * dsigma_scale) then
@@ -1496,7 +1490,7 @@ contains
           allocate(atm%sh(level_count))
 
           allocate(this_gas_index(num_gases))
-          write(*,*) size(gas_strings)
+ 
           ! But we also want to know what gas index to use for storage
           do i=1, size(gas_strings)
              this_gas_index(i) = -1

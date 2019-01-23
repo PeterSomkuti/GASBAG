@@ -211,7 +211,7 @@ contains
     N_pix = size(wl_output)
     N_ils_pix = size(wl_kernels, 1)
 
-    ILS_wl_spacing =  wl_kernels(2, idx_pix) -  wl_kernels(1, idx_pix)
+    ILS_wl_spacing = wl_input(2) - wl_input(1)
 
     if (N_pix /= size(wl_kernels, 2)) then
        call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
@@ -228,8 +228,6 @@ contains
     ! make sure that you only pass arrays here that in wavelength (detector pixel)
     ! space are at the same positions as the output wavelengths wl_output.
 
-
-
     do idx_pix=1, N_pix
 
        ! Note the ILS boundary in wavelength space. wl_kernels spans usually
@@ -240,28 +238,25 @@ contains
        ! Again, we need to make sure that these wavelengths here ILS_delta_* are
        ! multiples of the hires grid
        ILS_delta_min = ILS_wl_spacing * ceiling(ILS_delta_min / ILS_wl_spacing)
-       ILS_delta_max = ILS_wl_spacing * ceiling(ILS_delta_max / ILS_wl_spacing)
+       !ILS_delta_max = ILS_wl_spacing * ceiling(ILS_delta_max / ILS_wl_spacing)
 
        ! Find out, which index of the high-res input is closest to the
        ! detector pixel, and also which is the center pixel
 
        idx_hires_ILS_min = -1
-       idx_hires_ILS_max = -1
+       !idx_hires_ILS_max = -1
 
-       wl_diff = 9999
        do i=1, size(wl_input)-1
           ! The ILS should be on a high-resolution grid at the same spacing as the
           ! input radiances, so we only need to find the index at which they are
           ! essentially the same wavelength
-          if (abs(ILS_delta_min - wl_input(i)) < wl_diff) then
-             wl_diff = abs(ILS_delta_min - wl_input(i))
+          if (abs(ILS_delta_min - wl_input(i)) < (0.01d0 * ILS_wl_spacing)) then
              idx_hires_ILS_min = i
-             !exit
+             exit
           end if
        end do
 
-       !write(*,*) "found ils_delta_min, and the difference is:", &
-       !     (ILS_delta_min - wl_input(idx_hires_ILS_min)), wl_diff, ILS_wl_spacing
+       idx_hires_ILS_min = minloc(abs(ILS_delta_min - wl_input(:)), dim=1)
 
        if (idx_hires_ILS_min == -1) then
           success = .false.
@@ -270,39 +265,14 @@ contains
 
        idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
 
-!!$       write(*,*) ILS_delta_min, wl_input(idx_hires_ILS_min)
-!!$
-!!$       write(*,*) wl_input(idx_hires_ILS_min) - wl_input(idx_hires_ILS_min-1)
-!!$       write(*,*) wl_kernels(23, idx_pix) - wl_kernels(22, idx_pix)
-!!$
-!!$       write(*,*) wl_input(idx_hires_ILS_max)
-!!$       write(*,*) ILS_delta_max
-!!$
-!!$       do i=idx_hires_ILS_max-10, idx_hires_ILS_max+10
-!!$          write(*,*) i, wl_input(i) - ILS_delta_max
-!!$       end do
-!!$
-!!$       read(*,*)
-
        if (idx_hires_ILS_max > size(input)) then
           success = .false.
           return
        end if
 
-!!$       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
-!!$          write(*,*) "dimension issue in oco_convolution routine"
-!!$          write(*,*) ILS_delta_min, ILS_delta_max
-!!$          write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, size(input)
-!!$          write(*,*) wl_input(1), wl_input(size(wl_input)), ILS_delta_min, wl_output(idx_pix)
-!!$          !stop 1
-!!$       end if
-
-
        output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
             / sum(kernels(:, idx_pix))
 
-       !deallocate(ILS_upsampled)
-       !end if
     end do
 
     success = .true.

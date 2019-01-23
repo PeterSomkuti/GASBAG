@@ -299,7 +299,7 @@ contains
        band = 1
        ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
        ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
-       num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / solar_grid_spacing)
+       num_ils_hires = floor((ils_hires_max_wl - ils_hires_min_wl) / solar_grid_spacing)
 
        allocate(ils_hires_grid(num_ils_hires))
        allocate(ils_hires_delta_lambda(num_ils_hires, &
@@ -312,17 +312,18 @@ contains
           allocate(ils_hires_avg_relative_response(num_ils_hires, &
                size(ils_relative_response, 3), &
                size(ils_relative_response, 4)))
+
        end if
 
 
        ! We need to ensure that the hi-res grid and the hi-res ILS grid line
        ! up fully, so ils_hires_min_wl needs to be shifted to the closest multiple
        ! of solar_grid_spacing.
-
        ils_hires_min_wl = solar_grid_spacing * ceiling(ils_hires_min_wl / solar_grid_spacing)
 
+       ! And construct the ILS hires grid using the solar grid spacing
        do i=1, num_ils_hires
-          ils_hires_grid(i) = ils_hires_min_wl + (i-1) * solar_grid_spacing
+          ils_hires_grid(i) = ils_hires_min_wl + dble(i-1) * solar_grid_spacing
        end do
 
        call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
@@ -330,9 +331,13 @@ contains
           do i_pix=1, size(dispersion, 1)
 
              ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
-             call linear_upsample(ils_hires_grid, ils_delta_lambda(:, i_pix, i_fp, band) , &
+
+             call pwl_value_1d(&
+                  size(ils_delta_lambda, 1), &
+                  ils_delta_lambda(:, i_pix, i_fp, band), &
                   ils_relative_response(:, i_pix, i_fp, band), &
-                  ils_hires_relative_response(:, i_pix, i_fp, band))
+                  num_ils_hires, &
+                  ils_hires_grid, ils_hires_relative_response(:, i_pix, i_fp, band) )
 
              ! Since we have resample the ILS, it also needs re-normalising, a simple
              ! trapezoidal integration should do.
@@ -356,14 +361,16 @@ contains
           if (MCS%window(i_win)%fft_convolution) then
 
              ! The easiest approach is to simply average the ILS over all
-             ! pixels..
+             ! pixels for a given footprint and band.
 
              ! Dimensions: (delta lambda, fp, band)
-             do i=1, size(ils_hires_relative_response, 1)
-                ils_hires_avg_relative_response(i, i_fp, band) = &
-                     sum(ils_hires_relative_response(i, :, i_fp, band)) / &
-                     size(ils_hires_relative_response, 2)
-             end do
+!!$             do i=1, size(ils_hires_relative_response, 1)
+!!$                ils_hires_avg_relative_response(i, i_fp, band) = &
+!!$                     sum(ils_hires_relative_response(i, :, i_fp, band)) / &
+!!$                     size(ils_hires_relative_response, 2)
+!!$             end do
+
+             ils_hires_avg_relative_response(:, i_fp, band) = ils_hires_relative_response(:, 1, i_fp, band)
 
           end if
 
@@ -408,7 +415,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
+       do i_fr=3000, 3200 !num_frames
           do i_fp=1, my_instrument%num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -434,6 +441,8 @@ contains
 
        deallocate(solar_spectrum_regular, solar_spectrum, ils_hires_grid, &
             ils_hires_delta_lambda, ils_hires_relative_response)
+
+       if (MCS%window(i_win)%fft_convolution) deallocate(ils_hires_avg_relative_response)
 
 
        out_dims2d = shape(chi2)
@@ -809,13 +818,11 @@ contains
              num_levels = size(this_atm%p)
 
              ! And get the T and SH profiles onto our new atmosphere grid
-             !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-             !     met_T_profiles(:,i_fp, i_fr), this_atm%T)
+
              call pwl_value_1d(size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
                   size(this_atm%p), log(this_atm%p), this_atm%T)
-             !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-             !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
+
              call pwl_value_1d(size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
                   size(this_atm%p), log(this_atm%p), this_atm%sh)
@@ -847,19 +854,12 @@ contains
              this_psurf = SV%svsv(SV%idx_psurf(1))
 
              if (this_psurf < this_atm%p(size(this_atm%p) - 1)) then
-                !call logger%debug(fname, "Re-gridding atmosphere!")
-                !this_atm = regrid_atmosphere(this_atm, SV%svsv(SV%idx_psurf(1)))
-                ! And get the T and SH profiles onto our new atmosphere grid
-                !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-                !     met_T_profiles(:,i_fp, i_fr), this_atm%T)
                 call pwl_value_1d(size(met_P_levels, 1), &
                      log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
                      size(this_atm%p), log(this_atm%p), this_atm%T)
                 call pwl_value_1d(size(met_P_levels, 1), &
                      log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
                      size(this_atm%p), log(this_atm%p), this_atm%sh)
-                !call linear_upsample(this_atm%p, met_P_levels(:,i_fp,i_fr), &
-                !     met_SH_profiles(:,i_fp,i_fr), this_atm%sh)
              end if
 
              if (this_psurf > this_atm%p(size(this_atm%p))) then
@@ -902,6 +902,9 @@ contains
           allocate(gas_tau_dpsurf2(size(this_solar, 1), num_levels-1, num_gases))
           allocate(gas_tau_pert(size(this_solar, 1), num_levels-1, num_gases))
 
+          ! If we retrieve surface pressure, grab it from the state vector,
+          ! otherwise, grab it from the MET data.
+
           if (SV%num_psurf == 1) then
              psurf = SV%svsv(SV%idx_psurf(1))
           else
@@ -909,13 +912,9 @@ contains
           end if
 
           if (psurf < 0) then
-             write(*,*) "Psurf negative!"
+             call logger%error(fname, "Psurf negative!")
              return
           end if
-
-          !write(*,*) "My surface pressure is :", psurf
-
-          call cpu_time(cpu_start)
 
           do j=1, num_gases
              call calculate_gas_tau( &
@@ -944,9 +943,6 @@ contains
 !!$                  gas_tau_pert(:,:,j), &
 !!$                  gas_tau_dpsurf2(:,:,j))
           end do
-          call cpu_time(cpu_end)
-
-          !write(*,*) "GAS OD time: ", cpu_end - cpu_start
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
 !!$          open(newunit=funit, file=trim(tmp_str))
@@ -1251,18 +1247,10 @@ contains
 !!$       open(file="l1b_spec.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
+!!$               noise_work(i) , K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
 !!$       end do
 !!$       close(funit)
-
 !!$
-!!$       write(tmp_str, '(A, G0.1, A)') "l1b_spec_iter_", iteration-1, ".dat"
-!!$       open(file=trim(tmp_str), newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)
-!!$       end do
-!!$       close(funit)
 
        if (dsigma_sq < dble(N_sv) * dsigma_scale) then
           keep_iterating = .false.
@@ -1337,7 +1325,6 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-       !read(*,*)
 
     end do
 

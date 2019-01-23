@@ -8,7 +8,7 @@ The code is currently maintained by Peter Somkuti at CSU/CIRA (peter.somkuti@col
 
 ## Installation instructions
 
-As of now, the code requires a Fortran 2018 compliant compiler, ideally as gfortran 8.0 and higher. The CMake script has not been updated to work with the Intel Fortran compiler, however that is on the TODO list. Following software is required for a successful compilation:
+As of now, the code requires a Fortran 2018 compliant compiler, ideally gfortran 8.0 and higher. The CMake script has not been updated to work with the Intel Fortran compiler, however that is on the TODO list. Following software is required for a successful compilation:
 
 * HDF Fortran libraries
 * CMake >= 3.5
@@ -26,7 +26,7 @@ well as suppresses any compiler warnings.
 ## Code strategy and structure
 
 This code is only intended for single-band retrievals (implementing multi-band retrievals would be a bit tough to do), and simple code structure. The 
-goal is to have all retrieval settings to be processed on a per-window basis, meaning that for a single execution of the program, N single-band retrievals (called 'window') for the entire L1B file can be processed, with each of the windows having their own exclusive settings. This should make it fairly easy to set up processing pipeline. The software is driven by one single configuration that uses sections and options via a text-based Apache-style file. Example:
+goal is to have all retrieval settings to be processed on a per-window basis, meaning that for a single execution of the program, N single-band retrievals (called 'window') for the entire L1B file can be processed, with each of the windows having their own exclusive settings. This should make it fairly easy to set up a processing pipeline. The software is driven by one single configuration that uses sections and options via a text-based Apache-style file. Example:
 
 ```
 [logger]
@@ -65,28 +65,44 @@ output_file = output.h5
 [window-2]
 # Every window defines a single-band retrieval, hence the retrieval settings
 # have to be defined for every window separately. This will be extended further
-# by the full state vector, and output options etc.
+# by the full state vector, and output options etc. The window number merely
+# decides the order of execution.
+
 name = 757nm
-wl_min = 0.758
-wl_max = 0.7593
-;0.7593
-albedo_order = 3
-dispersion_order = 2
-dispersion_perturbation = 1d-6 1d-8 1d-14
-dispersion_covariance = 1d-4 1d-6 1d-8
-#gases = O2
-#atmosphere = /Users/petersomkuti/Work/geocarbsif/work/o2_atmosphere.dat
+wl_min = 0.75819
+wl_max = 0.75922
+
+albedo_order = 4
+
+dispersion_order = 1
+dispersion_perturbation = 1d-6 5d-9 1d-14
+
+;gases = O2
+;atmosphere = /Users/petersomkuti/Work/geocarbsif/work/o2_atmosphere.dat
+
+statevector = albedo sif dispersion
+dsigma_scale = 5.0
+
+fft_convolution = False
 
 [window-1]
 name = 771nm
-wl_min = 0.768
-wl_max = 0.7715
-albedo_order = 3
-dispersion_order = 2
-dispersion_perturbation = 1d-6 1d-8 1d-10
-dispersion_covariance = 1d-4 1d-6 1d-8
+
+wl_min = 0.76963
+wl_max = 0.77030
+
+albedo_order = 2
+
+dispersion_order = 1
+dispersion_perturbation = 1d-6 5d-9 1d-11
+
 gases = O2
 atmosphere = /Users/petersomkuti/Work/geocarbsif/work/o2_atmosphere.dat
+
+statevector = albedo sif psurf dispersion
+dsigma_scale = 3.0
+
+fft_convolution = True
 
 [gas-1]
 # If a retrieval window contains gases, the gasses (cross-referenced by the name) have
@@ -98,4 +114,10 @@ spectroscopy_type = absco
 spectroscopy_file = /Users/petersomkuti/Work/absco/o2_v151005_cia_mlawer_v151005r1_narrow.h5
 
 ```
+
+Logging is done through a third-party library (logging by Christopher MacMackin), which lets one assign each log entry an urgency value (debug=10, trivia=20, info=30, warning=40, error=50, fatal=60). Using the config file, one can choose to suppress any log lower than the log-level.
+
+Results are stored in an HDF file where each window-name is used to identify the results in the file.
+
+
 

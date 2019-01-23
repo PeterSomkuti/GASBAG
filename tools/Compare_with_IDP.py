@@ -21,7 +21,7 @@ new = h5py.File(new_fname, 'r')
 retr_type = "physical_retrieval_results"
 
 # extent
-maxval = 0.035
+maxval = 0.1
 #maxval = 5e18
 extent = [-maxval, maxval, -maxval, maxval]
 
@@ -49,23 +49,25 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
 
     # we want to filter out those that are flagged bad in IDP
     qual = ((new[f'{retr_type}/retrieved_chi2_{win}'][:] > 0.001) &
-            (new[f'physical_retrieval_results/retrieved_chi2_{win}'][:] < 3.500))
+            (new[f'physical_retrieval_results/retrieved_chi2_{win}'][:] < 2.00) &
+            (new[f'physical_retrieval_results/retrieved_num_iterations_{win}'][:] < 5))
 
     if (i == 0):
         mask = qual & (np.abs(idp[idp_key][:-1,:,4]) < maxval)
-        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,4], mask=~mask), axis=1).compressed()
+        x = idp[idp_key][:-1,:,4][mask]
     elif (i==1):
         mask = qual & (np.abs(idp[idp_key][:-1,:,5]) < maxval)
-        x = np.nanmean(np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask), axis=1).compressed()
+        x = idp[idp_key][:-1,:,5][mask]
 
-    mask = mask & (np.abs(new[new_key][:]) < maxval)
-    num_frames = np.sum(mask, axis=1)
+    #mask = mask & (np.abs(new[new_key][:]) < maxval)
+    #num_frames = np.sum(mask, axis=1)
 
     # We want to average over an entire frame here.
-    y = new[f'{retr_type}/retrieved_sif_abs_{win}'][:] / (idp[f'RetrievalResults/fluorescence_{win}/Ancillary/continuumLevelRadiance'][:-1,:] - new[f'{retr_type}/retrieved_sif_abs_{win}'][:])
-    y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1).compressed()
+    y = new[f'{retr_type}/retrieved_sif_abs_{win}'][:] / (
+        idp[f'RetrievalResults/fluorescence_{win}/Ancillary/continuumLevelRadiance'][:-1,:] - new[f'{retr_type}/retrieved_sif_abs_{win}'][:])
+    #y = np.nanmean(np.ma.masked_array(y, mask=~mask), axis=1).compressed()
+    y = y[mask]
     #y = np.nanmean(np.ma.masked_array(new[f'{retr_type}/retrieved_sif_rel_771nm'][:], mask=~mask), axis=1)[num_frames > 3].compressed()
-
 
     #x = np.ma.masked_array(idp[idp_key][:-1,:,5], mask=~mask).compressed()
     #y = np.ma.masked_array(new[new_key][:], mask=~mask).compressed()  #[num_frames > 4].compressed() * 1.8

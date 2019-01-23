@@ -24,11 +24,11 @@ contains
 
     integer :: power
     integer :: N_input, N_kernel, N_fft
-    integer :: input_shift, kernel_shift
+    integer :: input_shift, kernel_shift, pad_space
     integer(4) :: lensav, lenwrk
     integer :: fft_err
     double precision, allocatable :: wsave(:), work(:)
-    double precision, allocatable :: input_fft(:), kernel_fft(:)
+    complex(8), allocatable :: input_fft(:), kernel_fft(:), ifft(:)
 
     integer :: i, funit
     logical :: found_power
@@ -51,12 +51,13 @@ contains
     N_input = size(input)
     N_kernel = size(kernel)
 
-    ! Need to find closest power of two that's at least
-    ! twice as large as the input. 
+    ! For most efficient FFT, choose closest
+    ! power of two for input array.
+
     found_power = .false.
     power = 1
     do while (.not. found_power)
-       if ((2 * N_input) < (2 ** power)) then
+       if ((dble(N_input)) < (2 ** power)) then
           found_power = .true.
           exit
        end if
@@ -65,29 +66,41 @@ contains
 
     N_fft = 2 ** power
 
+    !pad_space = 1000
+    !N_fft = 2 * N_input + pad_space
+
     ! Look up the rfft1i function - it recommends this size for he
     ! wsave and work arrays
-    lensav = N_fft + int(log(dble(N_fft)) / log(2.0d0)) + 4
-    lenwrk = N_fft
+    !lensav = N_fft + int(log(dble(N_fft)) / log(2.0d0)) + 4
+    lensav = 2 * N_fft + power + 4
+    lenwrk = 2 * N_fft
 
     allocate(work(lenwrk))
     allocate(wsave(lensav))
 
     ! Initialise the FFT solver
-    call rfft1i(N_fft, wsave, lensav, fft_err)
+    call cfft1i(N_fft, wsave, lensav, fft_err)
 
     ! Transform the input (radiances)
     allocate(input_fft(N_fft))
     allocate(kernel_fft(N_fft))
 
-    input_fft(:) = 0.0d0
-    kernel_fft(:) = 0.0d0
+    input_fft(:) = (0.0d0, 0.0d0)
+    kernel_fft(:) = (0.0d0, 0.0d0)
 
-    input_fft(1:N_input) = input(:)
-    kernel_fft(1:N_kernel) = kernel(:)
-    !kernel_fft = kernel_fft / sum(kernel_fft(1:N_kernel))
+    ! Copy over input data and kernel to complex array
+    ! and convert to complex data type with zero imaginary part
+    do i=1, N_input
+       input_fft(i) = cmplx(input(i), 0.0d0)
+    end do
 
-    input_shift = N_fft/4 - N_input/2
+    do i=1, N_kernel
+       kernel_fft(i) = cmplx(kernel(i), 0.0d0)
+    end do
+
+    input_shift = (N_fft - N_input)/2
+    input_shift = -N_input/2
+    !kernel_shift = N_kernel / 2
     kernel_shift = maxloc(kernel, dim=1) !N_kernel/2
 
     input_fft = cshift(input_fft, -input_shift)
@@ -95,19 +108,19 @@ contains
     ! that it's max value is essentially at 1.
     kernel_fft = cshift(kernel_fft, kernel_shift)
 
-    !kernel_fft = kernel_fft / sum(kernel_fft)
+    kernel_fft = kernel_fft / sum(kernel_fft)
 
 !!$    open(newunit=funit, file='fft_input_before.dat')
-!!$    do i=1, N_fft
-!!$       write(funit, *) input_fft(i), kernel_fft(i)
+!!$    do i=1, N_input
+!!$       write(funit, *) wl_input(i), input(i)
 !!$    end do
 !!$    close(funit)
 
-    call rfft1f(N_fft, 1, input_fft, N_fft, wsave, &
+    call cfft1f(N_fft, 1, input_fft, N_fft, wsave, &
          lensav, work, lenwrk, fft_err)
 
     ! Transform the ILS kernel
-    call rfft1f(N_fft, 1, kernel_fft, N_fft, wsave, &
+    call cfft1f(N_fft, 1, kernel_fft, N_fft, wsave, &
          lensav, work, lenwrk, fft_err)
 
 !!$    open(newunit=funit, file='fft_input.dat')
@@ -116,9 +129,7 @@ contains
 !!$    end do
 !!$    close(funit)
 
-    do i=1, N_fft
-       input_fft(i) = input_fft(i) * kernel_fft(i)
-    end do
+    input_fft(:) = input_fft(:) * kernel_fft(:)
 
 !!$    open(newunit=funit, file='fft_mult.dat')
 !!$    do i=1, N_fft
@@ -126,24 +137,36 @@ contains
 !!$    end do
 !!$    close(funit)
 
-    call rfft1b(N_fft, 1, input_fft, N_fft, wsave, &
+    !call cfft1i(N_fft, wsave, lensav, fft_err)
+    call cfft1b(N_fft, 1, input_fft, N_fft, wsave, &
          lensav, work, lenwrk, fft_err)
 
+!!$    open(newunit=funit, file='fft_back_raw.dat')
+!!$    do i=1, N_fft
+!!$       write(funit, *) abs(input_fft(i))
+!!$    end do
+!!$    close(funit)
+
     ! Scale the iFFT result and shift it back
-    input_fft = input_fft / sqrt(dble(N_fft) / 5.0d0)
-    input_fft = cshift(input_fft, input_shift)
+    !input_fft = input_fft / sqrt(dble(N_fft) / 5.0d0)
+    !input_fft = cshift(input_fft, input_shift)
+
+    input_fft = cshift(input_fft * dble(N_fft), input_shift)
 
     ! Interpolate the values at the wavelengths given by
-    ! the dispersion relation.
+    ! the dispersion relation. Note that we are only
+    ! using the REAL part of the iFFT result. In Fortran,
+    ! dble/real of a complex type returns the real part,
+    ! rather than the absolute value.
 
     call pwl_value_1d(N_input, &
-         wl_input(:), input_fft(1:N_input), &
+         wl_input(:), dble(input_fft(1:N_input)), &
          size(output), &
          wl_output(:), output(:))
 
 !!$    open(newunit=funit, file='fft_back_hires.dat')
 !!$    do i=1, N_input
-!!$       write(funit, *) wl_input(i), input_fft(i)
+!!$       write(funit, *) wl_input(i), abs(input_fft(i))
 !!$    end do
 !!$    close(funit)
 !!$
@@ -178,7 +201,8 @@ contains
     integer :: N_pix, N_ils_pix
     integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
     double precision :: ILS_delta_min, ILS_delta_max
-    double precision :: wl_diff, wl_diff_old
+    double precision :: ILS_wl_spacing
+    double precision :: wl_diff
 
     double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
     double precision :: time_start, time_stop
@@ -186,6 +210,8 @@ contains
 
     N_pix = size(wl_output)
     N_ils_pix = size(wl_kernels, 1)
+
+    ILS_wl_spacing =  wl_kernels(2, idx_pix) -  wl_kernels(1, idx_pix)
 
     if (N_pix /= size(wl_kernels, 2)) then
        call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
@@ -197,85 +223,89 @@ contains
        stop 1
     end if
 
-    ! Main loop over all (instrument) output pixels
+    ! Main loop over all (instrument) output pixels. Note that idx_pix is
+    ! RELATIVE to the array that is supplied here, which means you need to
+    ! make sure that you only pass arrays here that in wavelength (detector pixel)
+    ! space are at the same positions as the output wavelengths wl_output.
+
+
+
     do idx_pix=1, N_pix
 
-       ! Note the ILS boundary in wavelength space
+       ! Note the ILS boundary in wavelength space. wl_kernels spans usually
+       ! some range from -lambda to +lambda.
        ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
        ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
 
+       ! Again, we need to make sure that these wavelengths here ILS_delta_* are
+       ! multiples of the hires grid
+       ILS_delta_min = ILS_wl_spacing * ceiling(ILS_delta_min / ILS_wl_spacing)
+       ILS_delta_max = ILS_wl_spacing * ceiling(ILS_delta_max / ILS_wl_spacing)
+
        ! Find out, which index of the high-res input is closest to the
        ! detector pixel, and also which is the center pixel
-       !idx_hires_closest = -1
+
        idx_hires_ILS_min = -1
        idx_hires_ILS_max = -1
 
-
-       !idx_hires_ILS_min = minloc(abs(wl_input - ILS_delta_min), dim=1)
+       wl_diff = 9999
        do i=1, size(wl_input)-1
-          if ((ILS_delta_min >= wl_input(i)) .and. (ILS_delta_min <= wl_input(i+1))) then
+          ! The ILS should be on a high-resolution grid at the same spacing as the
+          ! input radiances, so we only need to find the index at which they are
+          ! essentially the same wavelength
+          if (abs(ILS_delta_min - wl_input(i)) < wl_diff) then
+             wl_diff = abs(ILS_delta_min - wl_input(i))
              idx_hires_ILS_min = i
-             exit
+             !exit
           end if
        end do
+
+       !write(*,*) "found ils_delta_min, and the difference is:", &
+       !     (ILS_delta_min - wl_input(idx_hires_ILS_min)), wl_diff, ILS_wl_spacing
 
        if (idx_hires_ILS_min == -1) then
           success = .false.
           return
        end if
 
-       !idx_hires_closest = find_closest_index_DP(wl_input, wl_output(idx_pix))
-       !idx_hires_ILS_min = find_closest_index_DP(wl_input, ILS_delta_min)
        idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
+
+!!$       write(*,*) ILS_delta_min, wl_input(idx_hires_ILS_min)
+!!$
+!!$       write(*,*) wl_input(idx_hires_ILS_min) - wl_input(idx_hires_ILS_min-1)
+!!$       write(*,*) wl_kernels(23, idx_pix) - wl_kernels(22, idx_pix)
+!!$
+!!$       write(*,*) wl_input(idx_hires_ILS_max)
+!!$       write(*,*) ILS_delta_max
+!!$
+!!$       do i=idx_hires_ILS_max-10, idx_hires_ILS_max+10
+!!$          write(*,*) i, wl_input(i) - ILS_delta_max
+!!$       end do
+!!$
+!!$       read(*,*)
 
        if (idx_hires_ILS_max > size(input)) then
           success = .false.
           return
        end if
 
-       !if (idx_hires_ILS_max > size(input)) idx_hires_ILS_max = size(input)
-       !call find_closest_index_DP(wl_input, ILS_delta_max, idx_hires_ILS_max)
-
-       ! Now we have to either interpolate the ILS data onto the high-res grid,
-       ! or, if the ILS data is higher resolution, do the other way round.
-       !if (N_ils_pix > (idx_hires_ILS_max - idx_hires_ILS_min + 1)) then
-       ! ILS is higher resolution than hires radiances
-       !    write(*,*) N_ils_pix
-       !    write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max - idx_hires_ILS_min
-       !    call logger%fatal(fname, "Oops - not implemented yet! Call Peter.")
-       !    stop 1
-       !else
-       ! ILS is lower resolution than hires radiances
-       !allocate(ILS_upsampled(idx_hires_ILS_max - idx_hires_ILS_min + 1))
-
-       ! This is a fairly expensive call! 0.3ms - but we do it 1016 times..
-       ! Upsample the ILS to the hires wavelength grid
-       !call linear_upsample(wl_input(idx_hires_ILS_min:idx_hires_ILS_max), &
-       !                     wl_output(idx_pix) + wl_kernels(:, idx_pix), &
-       !                     kernels(:, idx_pix), &
-       !                     ILS_upsampled)
-       ! And do the 'convolution'
-       !write(*,*) '--------------'
-       !write(*,*) shape(kernels)
-       !write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, idx_hires_ILS_max-idx_hires_ILS_min
-
-       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
-          write(*,*) "dimension issue in oco_convolution routine"
-          write(*,*) ILS_delta_min, ILS_delta_max
-          write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, size(input)
-          write(*,*) wl_input(1), wl_input(size(wl_input)), ILS_delta_min, wl_output(idx_pix)
-          !stop 1
-       end if
+!!$       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_max > size(input))) then
+!!$          write(*,*) "dimension issue in oco_convolution routine"
+!!$          write(*,*) ILS_delta_min, ILS_delta_max
+!!$          write(*,*) idx_hires_ILS_min, idx_hires_ILS_max, size(input)
+!!$          write(*,*) wl_input(1), wl_input(size(wl_input)), ILS_delta_min, wl_output(idx_pix)
+!!$          !stop 1
+!!$       end if
 
 
        output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
             / sum(kernels(:, idx_pix))
 
-       success = .true.
-
        !deallocate(ILS_upsampled)
        !end if
     end do
+
+    success = .true.
 
   end subroutine oco_type_convolution
 

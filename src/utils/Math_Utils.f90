@@ -246,17 +246,23 @@ contains
        idx_hires_ILS_min = -1
        !idx_hires_ILS_max = -1
 
+       if (wl_input(1) > ILS_delta_min) then
+         call logger%warning(fname, "ILS produdes out of lower wavelength range!")
+         return
+       end if
+
+
        do i=1, size(wl_input)-1
           ! The ILS should be on a high-resolution grid at the same spacing as the
           ! input radiances, so we only need to find the index at which they are
           ! essentially the same wavelength
-          if (abs(ILS_delta_min - wl_input(i)) < (0.01d0 * ILS_wl_spacing)) then
+          if (abs(ILS_delta_min - wl_input(i)) < (0.1d0 * ILS_wl_spacing)) then
              idx_hires_ILS_min = i
              exit
           end if
        end do
 
-       idx_hires_ILS_min = minloc(abs(ILS_delta_min - wl_input(:)), dim=1)
+       !idx_hires_ILS_min = minloc(abs(ILS_delta_min - wl_input(:)), dim=1)
 
        if (idx_hires_ILS_min == -1) then
           success = .false.

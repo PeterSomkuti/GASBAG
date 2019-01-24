@@ -9,7 +9,7 @@ contains
 
 
   subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, &
-       gas, N_sub, need_psurf_jac, gas_tau, gas_tau_dpsurf)
+       gas, N_sub, need_psurf_jac, need_gas_jac, gas_tau, gas_tau_dpsurf, gas_tau_dvmr)
 
     implicit none
     double precision, intent(in) :: wl(:) ! Wavelength array
@@ -18,12 +18,15 @@ contains
     double precision, intent(in) :: p(:), T(:), H2O(:) ! Pressure, temperature and water vapor profiles
     type(CS_gas), intent(in) :: gas ! Gas structure which contains the cross sections
     integer, intent(in) :: N_sub ! How many sublayers for more accurate calculation?
-    logical, intent(in) :: need_psurf_jac
+    logical, intent(in) :: need_psurf_jac, need_gas_jac
 
     ! Gas optical depth - wavelength, layer
     double precision, intent(inout) :: gas_tau(:,:)
     ! Gas optical depth after psurf pert. - wavelength, layer
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
+    ! dtau / dvmr
+    double precision, intent(inout) :: gas_tau_dvmr(:,:)
+
 
     logical :: log_scaling
     double precision :: p_lower, p_higher, T_lower, T_higher, H2O_lower, H2O_higher
@@ -32,6 +35,7 @@ contains
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
          H2O_lower_pert, VMR_lower_pert, this_VMR_pert, this_M_pert, &
          this_T_pert, this_H2O_pert
+    double precision, allocatable :: gas_tmp(:)
     double precision :: CS_value_grid(size(wl))
     integer :: wl_left_indices(size(wl))
 
@@ -59,6 +63,8 @@ contains
     end do
 
     log_scaling = .false.
+
+    allocate(gas_tmp(N_wl))
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
@@ -162,7 +168,6 @@ contains
 
        ! Should the perturbed surface pressure actually fall onto the next-higher level, we need to make
        ! a small adjustment, otherwise, we end up dividing by zero later on.
-
        if (need_psurf_jac) then
           if (abs(p_lower_pert - p_higher) < 1d-3) p_lower_pert = p_lower_pert + PSURF_PERTURB/10.0d0
        end if
@@ -225,10 +230,16 @@ contains
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
           this_M = 1d3 * (((1 - this_H2O) * DRY_AIR_MASS) + (H2Om * this_H2O))
 
-          gas_tau(:,l-1) = gas_tau(:,l-1) + GK_weights_f(k) * (&
-                  get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:)) &
-                  * this_VMR * (1.0d0 - this_H2O) &
-                  / (9.81 * this_M) * NA * 0.1d0)
+          gas_tmp(:) = GK_weights_f(k) * (&
+               get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:)) &
+               * this_VMR * (1.0d0 - this_H2O) &
+               / (9.81 * this_M) * NA * 0.1d0)
+
+          gas_tau(:,l-1) = gas_tau(:,l-1) + gas_tmp(:)
+
+          if (need_gas_jac) then
+             gas_tau_dvmr(:,l-1) = gas_tau_dvmr(:,l-1) + gas_tmp(:) / this_VMR
+          end if
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer

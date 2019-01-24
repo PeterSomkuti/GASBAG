@@ -26,8 +26,8 @@ contains
 
         if (allocated(tau)) then
            ! Have gas absorbers in the atmosphere?
-           radiance(:) = radiance(:) * exp(-1.0d0/mu0 * sum(SUM(tau, dim=2), dim=2))
-           radiance(:) = radiance(:) * exp(-1.0d0/mu * sum(SUM(tau, dim=2), dim=2))
+           radiance(:) = radiance(:) * exp(-1.0d0/mu0 * sum(sum(tau, dim=3), dim=2))
+           radiance(:) = radiance(:) * exp(-1.0d0/mu * sum(sum(tau, dim=3), dim=2))
         endif
 
     end subroutine

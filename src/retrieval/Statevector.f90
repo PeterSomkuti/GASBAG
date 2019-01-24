@@ -6,8 +6,9 @@ module statevector_mod
 
     type statevector
         ! Number of state vector elements per type
-        integer :: num_albedo, num_sif, num_dispersion, num_psurf
-        integer, dimension(:), allocatable :: idx_albedo, idx_sif, idx_dispersion, idx_psurf
+        integer :: num_albedo, num_sif, num_dispersion, num_psurf, num_gas
+        integer, dimension(:), allocatable :: idx_albedo, idx_sif, &
+             idx_dispersion, idx_psurf, idx_gas, gas_idx_lookup
         ! State vector (current), state vector a priori
         double precision, dimension(:), allocatable :: svsv, svap, sver
         double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
@@ -39,6 +40,7 @@ contains
     SV%num_sif = -1
     SV%num_dispersion = -1
     SV%num_psurf = -1
+    SV%num_gas = -1
 
   end subroutine clear_SV
 
@@ -119,6 +121,7 @@ contains
     num_sif_parameters = 0
     num_psurf_parameters = 0
 
+    MCS%window(i_win)%gas_retrieved(:) = .false.
 
     do i=1, size(split_string)
 
@@ -191,10 +194,17 @@ contains
           if ((split_string(i) == known_SV(j)) .and. (is_gas_SV(j))) then
              ! Yes, it is - now we look which particular gas this is, and set the
              ! retrieved-flag accordingly.
-             do k=1, MAX_GASES
-                if (.not. MCS%gas(k)%used) cycle
-
-
+             do k=1, MCS%window(i_win)%num_gases
+                gas_index = MCS%window(i_win)%gas_index(k)
+                ! If this gas is not used in this window, skip!
+                if (.not. MCS%gas(gas_index)%used) cycle
+                ! Otherwise, loop through the gases we have in the window
+                ! and set them as 'retrieved'
+                if (MCS%window(i_win)%gases(k) == split_string(i)) then
+                   MCS%window(i_win)%gas_retrieved(k) = .true.
+                   call logger%info(fname, "We are retrieving gas: " &
+                        // MCS%window(i_win)%gases(k)%chars())
+                end if
              end do
           end if
        end do
@@ -205,6 +215,7 @@ contains
     ! number of elements for each type.
 
     call initialize_statevector( &
+         i_win, &
          SV, &
          num_albedo_parameters, &
          num_sif_parameters, &
@@ -216,23 +227,27 @@ contains
 
 
 
-  subroutine initialize_statevector(sv, count_albedo, count_sif, &
+  subroutine initialize_statevector(i_win, sv, count_albedo, count_sif, &
        count_dispersion, count_psurf)
 
     implicit none
+    integer, intent(in) :: i_win
     type(statevector), intent(inout) :: sv
-    integer, intent(in) :: count_albedo, count_sif, count_dispersion, count_psurf
+    integer, intent(in) :: count_albedo, count_sif, &
+         count_dispersion, count_psurf
 
+    integer :: count_gas
     character(len=*), parameter :: fname = "initialize_statevector"
     character(len=999) :: tmp_str
     integer :: sv_count
-    integer :: i
+    integer :: i, cnt
 
     ! Set The Number of Statevector parameters
     sv%num_albedo = count_albedo
     sv%num_sif = count_sif
     sv%num_dispersion = count_dispersion
     sv%num_psurf = count_psurf
+    sv%num_gas = 0
 
     sv_count = 0
     ! And determine the position (indices) of the state vecto elements within
@@ -294,7 +309,6 @@ contains
        sv%idx_dispersion(1) = -1
     end if
 
-
     ! Surface pressure
     if (sv%num_psurf == 1) then
        write(tmp_str, '(A)') "Number of surface pressure SV elements: 1"
@@ -302,6 +316,47 @@ contains
        allocate(sv%idx_psurf(1))
        sv_count = sv_count + 1
        sv%idx_psurf = sv_count
+    end if
+
+
+    ! Gases
+    ! In order to find out which gases are retrieved, we acces the MCS
+    ! rather than have it passed into this function. For the time being, we are
+    ! retrieving a scale factor?
+
+
+    count_gas = count(MCS%window(i_win)%gas_retrieved(:) .eqv. .true.)
+    sv%num_gas = count_gas
+    
+    if (count_gas > 0) then
+       allocate(sv%idx_gas(count_gas))
+       allocate(sv%gas_idx_lookup(count_gas))
+
+       write(*,*) (MCS%window(i_win)%gases(i)%chars(), i=1, MCS%window(i_win)%num_gases)
+       write(*,*) MCS%window(i_win)%gas_retrieved(:)
+       write(*,*) count_gas
+
+       
+       sv%idx_gas(:) = -1
+       sv%gas_idx_lookup(:) = -1
+
+       if (count_gas > 0) then
+          write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", count_gas
+          call logger%info(fname, trim(tmp_str))
+
+          cnt = 1
+          do i=1, MCS%window(i_win)%num_gases
+             if (MCS%window(i_win)%gas_retrieved(i)) then
+                sv_count = sv_count + 1
+                sv%idx_gas(cnt) = sv_count
+                ! This is vitally needed to make sure we can match the
+                ! gas state vector element with the position in the
+                ! gas optical depth arrays.
+                sv%gas_idx_lookup(cnt) = i
+                cnt = cnt + 1
+             end if
+          end do
+       end if
     end if
 
     write(tmp_str, '(A, G0.1, A)') "We have ", sv_count, " SV elements."

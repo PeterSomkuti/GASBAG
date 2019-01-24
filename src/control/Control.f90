@@ -45,6 +45,7 @@ module control_mod
        double precision :: wl_min ! Window wavelength start and end
        double precision :: wl_max
        double precision :: wl_spacing ! The high-resolution wavelength grid spacing
+       integer :: band ! Which satellite instrument band are we using? 
        ! SV_string contains the space-separated state vector which will
        ! determine the state vector structure for the retrieval.
        type(string) :: SV_string
@@ -57,6 +58,8 @@ module control_mod
        ! This gas_index variable holds the information about which gas-section (CS_gas)
        ! index corresponds to the gas that is stored in 'gases'
        integer, allocatable :: gas_index(:)
+       ! Is this gas being retrieved?
+       logical, allocatable :: gas_retrieved(:)
        integer :: num_gases
        double precision :: dsigma_scale ! Convergence scaling factor
        ! Do we use the less-accurate, but faster FFT convolution with an
@@ -98,7 +101,6 @@ module control_mod
        double precision, allocatable :: wavelength(:)
        ! The temperature, pressure and water vapour dimensions of the cross sections
        double precision, allocatable :: T(:,:), p(:), H2O(:)
-
     end type CS_gas
 
 
@@ -359,6 +361,8 @@ contains
                 call fini_extract(fini, tmp_str, 'wl_spacing', .true., fini_val)
                 MCS%window(window_nr)%wl_spacing = fini_val
 
+                call fini_extract(fini, tmp_str, 'band', .false., fini_int)
+                MCS%window(window_nr)%band = fini_int
 
                 call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
                 MCS%window(window_nr)%SV_string = fini_char
@@ -403,7 +407,7 @@ contains
                     end do
                     deallocate(fini_val_array)
                 end if
- 
+
                 call fini_extract(fini, tmp_str, 'dispersion_covariance', .false., fini_val_array)
                 if (allocated(fini_val_array)) then
                     allocate(MCS%window(window_nr)%dispersion_cov(size(fini_val_array)))
@@ -416,8 +420,9 @@ contains
                  MCS%window(window_nr)%num_gases = 0
                  call fini_extract(fini, tmp_str, 'gases', .false., fini_string_array)
                  if (allocated(fini_string_array)) then
+
                     allocate(MCS%window(window_nr)%gases(size(fini_string_array)))
-                    ! Also allocate the gas_index variable for this window
+                    allocate(MCS%window(window_nr)%gas_retrieved(size(fini_string_array)))
                     allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
 
                     do i=1, size(fini_string_array)

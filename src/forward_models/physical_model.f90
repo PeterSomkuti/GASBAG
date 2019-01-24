@@ -305,7 +305,8 @@ contains
        ! to create the new ILS grid in such a way that it fits the one ILS with the
        ! largest range.
 
-       band = 1
+       band = MCS%window(i_win)%band
+
        ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
        ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
        num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / hires_spacing)
@@ -439,7 +440,7 @@ contains
              !end if
 
              call cpu_time(cpu_time_start)
-             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, 1)
+             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
              call cpu_time(cpu_time_stop)
 
              retr_count = retr_count + 1
@@ -569,6 +570,8 @@ contains
          this_dispersion_coefs, &
          this_dispersion_coefs_pert
 
+    logical :: skip_jacobian
+
     !! Solar stuff
     double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
     double precision, dimension(:,:), allocatable :: this_solar
@@ -585,6 +588,7 @@ contains
 
     !! Surface pressure
     double precision :: psurf, this_psurf
+
 
     double precision :: continuum
 
@@ -877,10 +881,6 @@ contains
        old_sv = SV%svsv
 
 
-
-
-
-
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
@@ -914,7 +914,7 @@ contains
                   this_atm%p(:), &
                   this_atm%T(:), &
                   this_atm%sh(:), &
-                  MCS%gas(j), &
+                  MCS%gas(MCS%window(i_win)%gas_index(j)), &
                   9, &
                   .true., &
                   gas_tau(:,:,j), &
@@ -952,15 +952,15 @@ contains
 
        ! And multiply with the solar spectrum for physical units
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
-       ! Add SIF contributions
-       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + SV%svsv(SV%idx_sif(1))
 
-       ! Plug in the Jacobians (SIF is easy)
        if (SV%num_sif > 0) then
-          K_hi(:, SV%idx_sif(1)) = 1.0d0
+          ! Add SIF contributions
+          radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + SV%svsv(SV%idx_sif(1))
+          ! Plug in the Jacobians (SIF is easy)
+          K(:, SV%idx_sif(1)) = 1.0d0
        end if
 
-       ! this probably should go into the radiance module
+       ! this probably should go into the radiance module?
        if (SV%num_albedo > 0) then
           do i=1, SV%num_albedo
              K_hi(:, SV%idx_albedo(i)) = this_solar(:,2) / PI * &
@@ -998,6 +998,8 @@ contains
        this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
        ! If required, replace L1b dispersion coefficients by state vector
        ! elements from the retrieval process
+
+       write(*,*) "Dispersion coefficients: ", this_dispersion_coefs
 
        if (SV%num_dispersion > 0) then
           do i=1, SV%num_dispersion
@@ -1066,6 +1068,19 @@ contains
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
 
+       !
+       !
+       open(file="hires_spec.dat", newunit=funit)
+       do i=1, size(this_solar, 1)
+          write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
+               solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
+       end do
+       close(funit)
+       ! ! !
+       !read(*,*)
+       
+
+
        select type(my_instrument)
        type is (oco2_instrument)
 
@@ -1088,14 +1103,22 @@ contains
           end if
 
           do i=1, N_sv
+
+             skip_jacobian = .false.
+
              do j=1, SV%num_dispersion
                 ! This is a dispersion jacobian! Maybe there's a way of doing
                 ! this analytically, but for now we just perform finite
                 ! differencing in a separate loop. So skip this Jacobian.
                 if (i == SV%idx_dispersion(j)) then
-                   cycle
+                   skip_jacobian = .true.
                 end if
              end do
+
+             ! SIF does not need convolution
+             if (i == SV%idx_sif(1)) skip_jacobian = .true.
+
+             if (skip_jacobian) cycle
 
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
@@ -1141,19 +1164,6 @@ contains
                      this_dispersion_tmp(:), band, i_fp)
 
                 this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
-
-                !call calculate_dispersion_limits(this_dispersion_tmp, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
-
-                ! Here's a good fudge. Sometimes, a change in disperison can alter the size of the
-                ! radiance array, which would make the following operations unusable. A quick fix
-                ! is to simply trim the new radiance array to the size of the old one.
-                !N_spec_tmp = l1b_wl_idx_max - l1b_wl_idx_min 
-
-                !if (N_spec_tmp /= N_spec) then
-                !   call logger%debug(fname, "Uh-oh, we need to fudge the radiance array size!")
-                !   write(*,*) N_spec, N_spec_tmp
-                !   l1b_wl_idx_max = l1b_wl_idx_max - (N_spec_tmp - N_spec)
-                !end if
 
                 ! Convolve the perturbed TOA radiance
 
@@ -1224,24 +1234,24 @@ contains
        end do
 
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
-!!$       end do
-!!$       close(funit)
-
-!!$       do j=1, num_active_levels
-!!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
-!!$       end do
-
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$       write(*,*) "Iteration: ", iteration-1
-!!$       do i=1, N_sv
-!!$          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
+       end do
+       close(funit)
+!!$
+       do j=1, num_active_levels
+          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j)
+       end do
+!!$
+       write(*,*) "old, current and delta state vector, and errors"
+       write(*,*) "Iteration: ", iteration-1
+       do i=1, N_sv
+          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq
 
 
 !!$
@@ -1319,23 +1329,14 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-
+       read(*,*)
     end do
 
 
 
 
 
-    !
-    !
-    ! open(file="hires_spec.dat", newunit=funit)
-    ! do i=1, size(this_solar, 1)
-    !     write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
-    !                    solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
-    ! end do
-    ! close(funit)
-    ! ! !
-    !read(*,*)
+
 
   end function physical_FM
 

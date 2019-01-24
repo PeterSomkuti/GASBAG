@@ -86,7 +86,7 @@ for i, (idp_key, new_key) in enumerate([#('DOASFluorescence/fluorescence_radianc
     ex_min = min(x.min(), y.min())
     ex_max = max(x.max(), y.max())
     ax.hexbin(x, y, extent=[ex_min, ex_max, ex_min, ex_max], #extent=[x.min(), x.max(), y.min(), y.max()],
-              linewidths=0, mincnt=1, gridsize=50, cmap='plasma')
+              linewidths=0, mincnt=2, gridsize=50, cmap='plasma')
     ax.set_xlim(ex_min, ex_max)
     ax.set_ylim(ex_min, ex_max)
 

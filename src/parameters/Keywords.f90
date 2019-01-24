@@ -90,6 +90,7 @@ contains
                 valid_options(this_idx,14) = "dsigma_scale"
                 valid_options(this_idx,15) = "fft_convolution"
                 valid_options(this_idx,16) = "wl_spacing"
+                valid_options(this_idx,17) = "band"
         end do
 
         ! Section for gases

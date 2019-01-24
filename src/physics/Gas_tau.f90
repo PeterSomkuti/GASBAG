@@ -93,11 +93,18 @@ contains
 
        ! Take a rough first guess as to where the wavelength fits in
        gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
+       ! Now this first guess really only works if the spectroscopy file
+       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
+       ! where both windows are saved in one file.
+
+       ! If our guess is bad, start at the beginning
+       if (gas_idx_fg > size(gas%wavelength)) gas_idx_fg = 1
+
        do while (wl(j) < gas%wavelength(gas_idx_fg))
           gas_idx_fg = gas_idx_fg - 1
        end do
 
-       do k=gas_idx_fg, size(gas%wavelength)-1
+       do k=gas_idx_fg, size(gas%wavelength, 1)-1
           if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
              wl_left_indices(j) = k
              exit
@@ -152,6 +159,14 @@ contains
        T_higher = T(l-1)
        H2O_higher = H2O(l-1)
        VMR_higher = gas_vmr(l-1)
+
+       ! Should the perturbed surface pressure actually fall onto the next-higher level, we need to make
+       ! a small adjustment, otherwise, we end up dividing by zero later on.
+
+       if (need_psurf_jac) then
+          if (abs(p_lower_pert - p_higher) < 1d-3) p_lower_pert = p_lower_pert + PSURF_PERTURB/10.0d0
+       end if
+
 
        ! Map the GK abscissae and weights from [0,1] to symmetric [-1,1] by mirroring. This section
        ! seems a bit excessive - maybe a shorter way of doing it?
@@ -225,6 +240,7 @@ contains
              else
                 this_p_fac_pert = ((this_p_pert - p_higher) / (p_lower_pert - p_higher))
              end if
+
              this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
              this_H2O_pert = (1.0d0 - this_p_fac_pert) * H2O_lower_pert + this_p_fac_pert * H2O_higher
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
@@ -339,10 +355,10 @@ contains
    if (gas%has_H2O) then
       if (H2O <= gas%H2O(1)) then
          idx_l_H2O = 1
-      else if (H2O >= gas%H2O(size(gas%H2O))) then
-         idx_l_H2O = size(gas%H2O) - 1
+      else if (H2O >= gas%H2O(size(gas%H2O, 1))) then
+         idx_l_H2O = size(gas%H2O, 1) - 1
       else
-         do i=1, size(gas%H2O)-1
+         do i=1, size(gas%H2O) - 1
             if ((H2O > gas%H2O(i)) .and. (H2O <= gas%H2O(i+1))) then
                idx_l_H2O = i
                exit

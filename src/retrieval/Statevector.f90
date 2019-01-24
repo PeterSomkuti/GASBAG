@@ -1,7 +1,7 @@
 module statevector_mod
 
   use logger_mod, only: logger => master_logger
-  use control_mod, only: MCS
+  use control_mod, only: MCS, MAX_GASES
   use stringifor, only: string
 
     type statevector
@@ -54,12 +54,16 @@ contains
 
     ! Which are the SV elements known by the code, and which one's are used?
     type(string) :: known_SV(99)
+    logical :: is_gas_SV(99)
 
-    integer :: num_SV, i, j
+    integer :: num_SV, i, j, k, gas_index
     logical :: SV_found
 
-    integer :: num_albedo_parameters, num_dispersion_parameters, num_sif_parameters, &
-         num_psurf_parameters
+    integer :: num_albedo_parameters, num_dispersion_parameters, &
+         num_sif_parameters, num_psurf_parameters
+
+    known_SV(:) = ""
+    is_gas_SV(:) = .false.
 
     ! These are the known state vector elements - only these will be properly
     ! parsed. The order in which they are defined is not significant.
@@ -68,7 +72,15 @@ contains
     known_SV(3) = "sif"
     known_SV(4) = "psurf"
 
-    known_SV(5:size(known_SV)) = ""
+    ! Add gases as 'known' state vector elements. CAUTION! There is
+    ! obviously a danger if someone decides to name their gas "psurf".
+    ! Maybe I should add a list of protected names that can't be used.
+    do i=1, MCS%window(i_win)%num_gases
+       known_SV(4+i) = MCS%window(i_win)%gases(i)
+       ! This flags the known SV as one of a gas type
+       is_gas_SV(4+i) = .true.
+    end do
+
 
     ! Split the state vector string from the config file
     call MCS%window(i_win)%SV_string%split(tokens=split_string, sep=' ')
@@ -80,7 +92,7 @@ contains
        ! one is not found.
        do j=1, size(known_SV)
           if (known_SV(j) /= "") then
-             if (split_string(i)%lower() == known_SV(j)) then
+             if (split_string(i)%lower() == known_SV(j)%lower()) then
                 SV_found = .true.
                 exit
              end if
@@ -134,7 +146,8 @@ contains
                   // "needs to be > 0. Check if you've supplied a sensible value (or at all).")
              stop 1
           else
-             ! Dispersion order 1 means shift, 2 is stretch etc.
+             ! Dispersion order 1 means shift, 2 is stretch etc., this is not quite
+             ! consistent with the albedo order notation, but whatever.
              num_dispersion_parameters = MCS%window(i_win)%dispersion_order
 
              ! We MUST have at least the same number of dispersion perturbation
@@ -169,6 +182,22 @@ contains
              num_psurf_parameters = 1
           end if
        end if
+
+
+       ! Now check for the gases
+       do j=1, size(known_SV)
+          ! These are case-sensitive (not sure why?)
+          ! Is this SV element a gas-type state vector?
+          if ((split_string(i) == known_SV(j)) .and. (is_gas_SV(j))) then
+             ! Yes, it is - now we look which particular gas this is, and set the
+             ! retrieved-flag accordingly.
+             do k=1, MAX_GASES
+                if (.not. MCS%gas(k)%used) cycle
+
+
+             end do
+          end if
+       end do
 
     end do
 

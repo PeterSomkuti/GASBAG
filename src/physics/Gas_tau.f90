@@ -104,7 +104,10 @@ contains
        ! where both windows are saved in one file.
 
        ! If our guess is bad, start at the beginning
-       if (gas_idx_fg > size(gas%wavelength)) gas_idx_fg = 1
+       if (gas_idx_fg > size(gas%wavelength)) then
+          gas_idx_fg = 1
+          write(*,*) "GAS_IDX_FG reset to 1"
+       end if
 
        do while (wl(j) < gas%wavelength(gas_idx_fg))
           gas_idx_fg = gas_idx_fg - 1

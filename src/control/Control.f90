@@ -60,6 +60,8 @@ module control_mod
        integer, allocatable :: gas_index(:)
        ! Is this gas being retrieved?
        logical, allocatable :: gas_retrieved(:)
+       ! What type of gas retrieval is used here?
+       logical, allocatable :: gas_retrieve_profile(:), gas_retrieve_scale(:)
        integer :: num_gases
        double precision :: dsigma_scale ! Convergence scaling factor
        ! Do we use the less-accurate, but faster FFT convolution with an
@@ -423,6 +425,8 @@ contains
 
                     allocate(MCS%window(window_nr)%gases(size(fini_string_array)))
                     allocate(MCS%window(window_nr)%gas_retrieved(size(fini_string_array)))
+                    allocate(MCS%window(window_nr)%gas_retrieve_profile(size(fini_string_array)))
+                    allocate(MCS%window(window_nr)%gas_retrieve_scale(size(fini_string_array)))
                     allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
 
                     do i=1, size(fini_string_array)

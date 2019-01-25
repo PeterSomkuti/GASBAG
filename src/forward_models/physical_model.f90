@@ -431,13 +431,17 @@ contains
        ! section and initialize the state vector SV accordingly. This subroutine
        ! needs to access plenty of things in the MCS, so we only pass the
        ! window index, and the routine takes care of arranging the rest.
-       call parse_and_initialize_SV(i_win, SV)
+
+       ! For the beginning, we start by initialising it with the number of levels
+       ! as obtained from the initial_atm
+
+       call parse_and_initialize_SV(i_win, size(initial_atm%p), SV)
        call logger%info(fname, "Initialised SV structure")
 
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
+       do i_fr=1, 2 !num_frames
           do i_fp=1, my_instrument%num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -451,7 +455,7 @@ contains
              retr_count = retr_count + 1
              !mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count)
 
-             if (mod(retr_count, 100) == 0) then
+             if (mod(retr_count, 1) == 0) then
                 !mean_duration = (cpu_time_stop - cpu_time_start)
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " - ", cpu_time_stop-cpu_time_start, ' - ', this_converged
@@ -748,7 +752,7 @@ contains
        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
        ! take that into account for the incoming solar irradiance
 
-       albedo_apriori = 0.75 * PI * maxval(radiance_l1b) / &
+       albedo_apriori = PI * maxval(radiance_l1b) / &
             (1.0d0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
     end select
@@ -787,11 +791,17 @@ contains
        SV%svap(SV%idx_psurf(1)) = met_psurf(i_fp, i_fr)
     end if
 
-    ! Gas scaling factors
+    ! Gases
     if (SV%num_gas > 0) then
        do i=1, SV%num_gas
-          SV%svap(SV%idx_gas(i)) = 1.0d0
-          write(*,*) "Setting gas SV index at ", i
+
+          if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+             SV%svap(SV%idx_gas(i,1)) = 1.0d0
+          end if
+          if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
+             SV%svap(SV%idx_gas(i,:)) = initial_atm%gas_vmr(:, sv%gas_idx_lookup(i))
+          end if
+
        end do
     end if
 
@@ -900,6 +910,12 @@ contains
        ! Save the old state vector (iteration - 1'th state vector)
        old_sv = SV%svsv
 
+       if (SV%num_sif > 0) then
+          this_sif_radiance = SV%svsv(SV%idx_sif(1))
+       else
+          this_sif_radiance = 0.0d0
+       end if
+
 
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
        ! and their VMRs. This branch of the code will only be entered if we have at least
@@ -930,16 +946,21 @@ contains
           do j=1, num_gases
 
              if (SV%num_gas > 0) then
+
+                gas_scaling_factor = 1.0d0
+
                 ! We need to 'reverse-lookup' to see which SV index belongs to this
                 ! gas to grab the right scaling factor.
                 do i=1, SV%num_gas
-                   if (SV%gas_idx_lookup(i) == j) gas_scaling_factor = SV%svsv(SV%idx_gas(j))
+                   if (SV%gas_idx_lookup(i) == j) then
+                      if (MCS%window(i_win)%gas_retrieve_scale(j)) then
+                         gas_scaling_factor = SV%svsv(SV%idx_gas(j,1))
+                      end if
+                   end if
                 end do
-             else
-                gas_scaling_factor = 1.0d0
              end if
 
-             write(*,*) "Gas scaling factor for gas ", j, " is:", gas_scaling_factor
+             !write(*,*) "Gas scaling factor for gas ", j, " is:", gas_scaling_factor
 
              call calculate_gas_tau( &
                   this_solar(:,1), &
@@ -949,9 +970,9 @@ contains
                   this_atm%T(:), &
                   this_atm%sh(:), &
                   MCS%gas(MCS%window(i_win)%gas_index(j)), &
-                  9, &
+                  3, &
                   (SV%num_psurf == 1), &
-                  .false., & ! In case we ever want per-layer gas jacobians
+                  .true., & ! In case we ever want per-layer gas jacobians
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j), &
                   gas_tau_dvmr(:,:,j))
@@ -970,19 +991,19 @@ contains
 !!$                  gas_tau_dpsurf2(:,:,j))
           end do
 
-          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
-          open(newunit=funit, file=trim(tmp_str))
-          do j=1, size(gas_tau, 1)
-             write(funit, *) (gas_tau(j,num_active_levels-1,i), i=1,size(gas_tau,3))
-          end do
-          close(funit)
-
-          write(tmp_str,'(A,G0.1,A)') "gas_dvmr_iter", iteration, ".dat"
-          open(newunit=funit, file=trim(tmp_str))
-          do j=1, size(gas_tau, 1)
-             write(funit, *) (gas_tau_dvmr(j,num_active_levels-1,i), i=1,size(gas_tau_dvmr,3))
-          end do
-          close(funit)
+!!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
+!!$          open(newunit=funit, file=trim(tmp_str))
+!!$          do j=1, size(gas_tau, 1)
+!!$             write(funit, *) (gas_tau(j,num_active_levels-1,i), i=1,size(gas_tau,3))
+!!$          end do
+!!$          close(funit)
+!!$
+!!$          write(tmp_str,'(A,G0.1,A)') "gas_dvmr_iter", iteration, ".dat"
+!!$          open(newunit=funit, file=trim(tmp_str))
+!!$          do j=1, size(gas_tau, 1)
+!!$             write(funit, *) (gas_tau_dvmr(j,num_active_levels-1,i), i=1,size(gas_tau_dvmr,3))
+!!$          end do
+!!$          close(funit)
 
        end if
 
@@ -1000,8 +1021,7 @@ contains
        ! this probably should go into the radiance module?
        if (SV%num_albedo > 0) then
           do i=1, SV%num_albedo
-             K_hi(:, SV%idx_albedo(i)) = this_solar(:,2) / PI * &
-                  cos(DEG2RAD * SZA(i_fp, i_fr)) * &
+             K_hi(:, SV%idx_albedo(i)) = (radiance_calc_work_hi(:) - this_sif_radiance) / albedo * &
                   ((this_solar(:,1) - this_solar(1,1)) ** (dble(i-1)))
           end do
        end if
@@ -1016,14 +1036,33 @@ contains
        end if
 
 
-       ! Gas scaling factor jacobians
+       ! Gas jacobians
        if (SV%num_gas > 0) then
-          write(*,*) SV%gas_idx_lookup
+          !write(*,*) SV%gas_idx_lookup
 
           do i=1, SV%num_gas
-             K_hi(:, SV%idx_gas(i)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
-                  * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-                  * sum(gas_tau(:,:,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i)) * 1.0d0
+
+             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+                ! This is a scale-type jacobian
+
+                K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+                     * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+                     * sum(gas_tau(:,:,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
+
+             end if
+
+             if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
+
+                do j=1, num_active_levels-1
+
+                   K_hi(:, SV%idx_gas(i,j)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+                        * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+                        * gas_tau_dvmr(:,j,SV%gas_idx_lookup(i)) 
+
+                end do
+
+             end if
+
           end do
        end if
 
@@ -1071,12 +1110,8 @@ contains
 
        ! We add the SIF jacobian AFTER the K matrix is allocated
        if (SV%num_sif > 0) then
-          ! Add SIF contributions
-          this_sif_radiance = SV%svsv(SV%idx_sif(1))
           ! Plug in the Jacobians (SIF is easy)
           K(:, SV%idx_sif(1)) = 1.0d0
-       else
-          this_sif_radiance = 0.0d0
        end if
 
 
@@ -1116,19 +1151,23 @@ contains
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
 
-       !
-       !
-       open(file="hires_spec.dat", newunit=funit)
-       do i=1, size(this_solar, 1)
-          write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
-               solar_spectrum_regular(i,2), radiance_calc_work_hi(i), K_hi(i, SV%idx_gas(1)), K_hi(i, SV%idx_gas(2))
-       end do
-       close(funit)
+!!$       open(file="hires_jacs.dat", newunit=funit)
+!!$       do i=1, size(this_solar, 1)
+!!$          write(funit,*) (K_hi(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
+!!$
+!!$       open(file="hires_spec.dat", newunit=funit)
+!!$       do i=1, size(this_solar, 1)
+!!$          write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
+!!$               solar_spectrum_regular(i,2), radiance_calc_work_hi(i) !, K_hi(i, SV%idx_gas(1)), K_hi(i, SV%idx_gas(2))
+!!$       end do
+!!$       close(funit)
        ! ! !
 
-       do j=1, num_active_levels
-          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), this_atm%gas_vmr(j,1), this_atm%gas_vmr(j,2)
-       end do
+!!$       do j=1, num_active_levels
+!!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), this_atm%gas_vmr(j,1), this_atm%gas_vmr(j,2)
+!!$       end do
 
        select type(my_instrument)
        type is (oco2_instrument)
@@ -1177,7 +1216,7 @@ contains
                      this_solar(:,1), this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i))
 
              else
-                write(*,*) "Convolving jacobian number ", i
+
                 call oco_type_convolution(this_solar(:,1), K_hi(:,i), &
                      ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
@@ -1284,23 +1323,22 @@ contains
        end do
 
 
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i), K(i, SV%idx_gas(1)), K(i, SV%idx_gas(2)) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
-       end do
-       close(funit)
-!!$
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i) !, K(i, SV%idx_gas(1)), K(i, SV%idx_gas(2)) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
+!!$       end do
+!!$       close(funit)
 
 !!$
-       write(*,*) "old, current and delta state vector, and errors"
-       write(*,*) "Iteration: ", iteration-1
-       do i=1, N_sv
-          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq
 
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$       write(*,*) "Iteration: ", iteration-1
+!!$       do i=1, N_sv
+!!$          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq
 
 !!$
 
@@ -1326,8 +1364,8 @@ contains
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          !write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  chi2(i_fp, i_fr)
-          !call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  chi2(i_fp, i_fr)
+          call logger%debug(fname, trim(tmp_str))
 
           converged = .true.
 
@@ -1343,7 +1381,7 @@ contains
           !read(*,*)
        end if
 
-       if (iteration == 15) then
+       if (iteration == 5) then
           call logger%warning(fname, "Not converged!")
           keep_iterating = .false.
 
@@ -1380,7 +1418,7 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-       read(*,*)
+       !read(*,*)
     end do
 
 

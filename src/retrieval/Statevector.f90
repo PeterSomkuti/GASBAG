@@ -8,7 +8,8 @@ module statevector_mod
         ! Number of state vector elements per type
         integer :: num_albedo, num_sif, num_dispersion, num_psurf, num_gas
         integer, dimension(:), allocatable :: idx_albedo, idx_sif, &
-             idx_dispersion, idx_psurf, idx_gas, gas_idx_lookup
+             idx_dispersion, idx_psurf, gas_idx_lookup
+        integer, allocatable :: idx_gas(:,:)
         ! State vector (current), state vector a priori
         double precision, dimension(:), allocatable :: svsv, svap, sver
         double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
@@ -45,20 +46,22 @@ contains
   end subroutine clear_SV
 
 
-  subroutine parse_and_initialize_SV(i_win, SV)
+  subroutine parse_and_initialize_SV(i_win, num_levels, SV)
 
     implicit none
-    integer, intent(in) :: i_win
+    integer, intent(in) :: i_win, num_levels
     type(statevector), intent(inout) :: SV
 
     character(len=*), parameter :: fname = "parse_and_initialize_statevector"
-    type(string), allocatable :: split_string(:)
+    type(string), allocatable :: split_string(:), split_gas_string(:)
+    type(string) :: check_gas_name, check_gas_retr_type
+    character(len=999) :: tmp_str
 
     ! Which are the SV elements known by the code, and which one's are used?
     type(string) :: known_SV(99)
     logical :: is_gas_SV(99)
 
-    integer :: num_SV, i, j, k, gas_index
+    integer :: num_SV, i, j, k, gas_index, known_SV_max
     logical :: SV_found
 
     integer :: num_albedo_parameters, num_dispersion_parameters, &
@@ -83,6 +86,9 @@ contains
        is_gas_SV(4+i) = .true.
     end do
 
+    ! We really only need to look for this many items in the list
+    ! of known SV's
+    known_SV_max = 4+i
 
     ! Split the state vector string from the config file
     call MCS%window(i_win)%SV_string%split(tokens=split_string, sep=' ')
@@ -92,13 +98,31 @@ contains
 
        ! Loop through the known SV elements, and exit if any requested
        ! one is not found.
-       do j=1, size(known_SV)
-          if (known_SV(j) /= "") then
-             if (split_string(i)%lower() == known_SV(j)%lower()) then
+       do j=1, known_SV_max
+          if (known_SV(j) == "") cycle
+
+          if (split_string(i)%lower() == known_SV(j)%lower()) then
+             ! Found a regular, non-gas state vector element
+             SV_found = .true.
+             exit
+          end if
+
+          ! If there is a (one) '-' in the state vector name, we might
+          ! have a gas candidate.
+          if (split_string(i)%count('-') == 1) then
+
+             ! Split that string, so we can grab the gas bit before the
+             ! dash, and check that one against the list of known SVs
+             call split_string(i)%split(tokens=split_gas_string, sep='-')
+             if (split_gas_string(1)%lower() == known_SV(j)%lower()) then
                 SV_found = .true.
+                deallocate(split_gas_string)
                 exit
              end if
+
+             deallocate(split_gas_string)
           end if
+
        end do
 
        if (.not. SV_found) then
@@ -122,6 +146,8 @@ contains
     num_psurf_parameters = 0
 
     MCS%window(i_win)%gas_retrieved(:) = .false.
+    MCS%window(i_win)%gas_retrieve_profile(:) = .false.
+    MCS%window(i_win)%gas_retrieve_scale(:) = .false.
 
     do i=1, size(split_string)
 
@@ -188,10 +214,23 @@ contains
 
 
        ! Now check for the gases
-       do j=1, size(known_SV)
+       do j=1, known_SV_max
           ! These are case-sensitive (not sure why?)
+
+          ! We tell the algorithm to retrieve either a scaling factor,
+          ! or a full profile by attaching a "-scale" or "-profile". So when
+          ! checking for gases, we must drop that part of the string.
+          if (split_string(i)%count("-") == 1) then
+             call split_string(i)%split(tokens=split_gas_string, sep='-')
+             check_gas_name = split_gas_string(1)
+             check_gas_retr_type = split_gas_string(2)
+          else
+             check_gas_name = split_string(i)
+             check_gas_retr_type = ""
+          end if
+
           ! Is this SV element a gas-type state vector?
-          if ((split_string(i) == known_SV(j)) .and. (is_gas_SV(j))) then
+          if ((check_gas_name == known_SV(j)) .and. (is_gas_SV(j))) then
              ! Yes, it is - now we look which particular gas this is, and set the
              ! retrieved-flag accordingly.
              do k=1, MCS%window(i_win)%num_gases
@@ -200,13 +239,32 @@ contains
                 if (.not. MCS%gas(gas_index)%used) cycle
                 ! Otherwise, loop through the gases we have in the window
                 ! and set them as 'retrieved'
-                if (MCS%window(i_win)%gases(k) == split_string(i)) then
+                if (MCS%window(i_win)%gases(k) == check_gas_name) then
                    MCS%window(i_win)%gas_retrieved(k) = .true.
-                   call logger%info(fname, "We are retrieving gas: " &
-                        // MCS%window(i_win)%gases(k)%chars())
+
+                   ! Depending on the type, we must set the profile/scale retrieval
+                   ! flags accordingly. The default setting is a profile retrieval.
+                   if ((check_gas_retr_type == "profile") .or. (check_gas_retr_type == "")) then
+                      write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_gas_name%chars(), &
+                           " as a full profile."
+                      MCS%window(i_win)%gas_retrieve_profile(k) = .true.
+                   else if (check_gas_retr_type == "scale") then
+                      write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_gas_name%chars(), &
+                           " as a scale factor."
+                      MCS%window(i_win)%gas_retrieve_scale(k) = .true.
+                   else
+                      call logger%fatal(fname, "Gas state vector needs to be stated as " &
+                           // "[gas]-profile or [gas]-scale.")
+                      call logger%fatal(fname, " .. instead I got: " // split_string(i)%chars())
+                      stop 1
+                   end if
+                   call logger%info(fname, trim(tmp_str))
+
                 end if
              end do
           end if
+
+          if (allocated(split_gas_string)) deallocate(split_gas_string)
        end do
 
     end do
@@ -216,6 +274,7 @@ contains
 
     call initialize_statevector( &
          i_win, &
+         num_levels, &
          SV, &
          num_albedo_parameters, &
          num_sif_parameters, &
@@ -227,11 +286,11 @@ contains
 
 
 
-  subroutine initialize_statevector(i_win, sv, count_albedo, count_sif, &
-       count_dispersion, count_psurf)
+  subroutine initialize_statevector(i_win, num_levels, sv, &
+       count_albedo, count_sif, count_dispersion, count_psurf)
 
     implicit none
-    integer, intent(in) :: i_win
+    integer, intent(in) :: i_win, num_levels
     type(statevector), intent(inout) :: sv
     integer, intent(in) :: count_albedo, count_sif, &
          count_dispersion, count_psurf
@@ -240,7 +299,7 @@ contains
     character(len=*), parameter :: fname = "initialize_statevector"
     character(len=999) :: tmp_str
     integer :: sv_count
-    integer :: i, cnt
+    integer :: i, j, cnt
 
     ! Set The Number of Statevector parameters
     sv%num_albedo = count_albedo
@@ -320,43 +379,55 @@ contains
 
 
     ! Gases
-    ! In order to find out which gases are retrieved, we acces the MCS
-    ! rather than have it passed into this function. For the time being, we are
-    ! retrieving a scale factor?
 
+    ! In order to find out which gases are retrieved, we access the MCS
+    ! rather than have it passed into this function. We also have to find out
+    ! how many leves the atmosphere currently has, if we run profile
+    ! retrievals.
 
-    count_gas = count(MCS%window(i_win)%gas_retrieved(:) .eqv. .true.)
+    ! Simply just count the number of gases and add either 1
+    ! or the number of levels, depending on retrieval type.
+
+    count_gas = 0 ! This gives us the number of retrieved gases
+    do i=1, MCS%window(i_win)%num_gases
+       if (.not. MCS%window(i_win)%gas_retrieved(i)) cycle
+       count_gas = count_gas + 1
+    end do
+
     sv%num_gas = count_gas
-    
+
     if (count_gas > 0) then
-       allocate(sv%idx_gas(count_gas))
+       allocate(sv%idx_gas(count_gas, num_levels))
        allocate(sv%gas_idx_lookup(count_gas))
 
-       write(*,*) (MCS%window(i_win)%gases(i)%chars(), i=1, MCS%window(i_win)%num_gases)
-       write(*,*) MCS%window(i_win)%gas_retrieved(:)
-       write(*,*) count_gas
-
-       
-       sv%idx_gas(:) = -1
+       sv%idx_gas(:,:) = -1
        sv%gas_idx_lookup(:) = -1
 
-       if (count_gas > 0) then
-          write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", count_gas
-          call logger%info(fname, trim(tmp_str))
+       write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", cnt
+       call logger%info(fname, trim(tmp_str))
 
-          cnt = 1
-          do i=1, MCS%window(i_win)%num_gases
-             if (MCS%window(i_win)%gas_retrieved(i)) then
-                sv_count = sv_count + 1
-                sv%idx_gas(cnt) = sv_count
-                ! This is vitally needed to make sure we can match the
-                ! gas state vector element with the position in the
-                ! gas optical depth arrays.
-                sv%gas_idx_lookup(cnt) = i
-                cnt = cnt + 1
+       cnt = 1
+       do i=1, MCS%window(i_win)%num_gases
+          if (MCS%window(i_win)%gas_retrieved(i)) then
+
+             if (MCS%window(i_win)%gas_retrieve_profile(i)) then
+                do j=1, num_levels
+                   sv_count = sv_count + 1
+                   sv%idx_gas(cnt, j) = sv_count
+                end do
              end if
-          end do
-       end if
+
+             if (MCS%window(i_win)%gas_retrieve_scale(i)) then
+                sv_count = sv_count + 1
+                sv%idx_gas(cnt, :) = -1
+                sv%idx_gas(cnt, 1) = sv_count
+             end if
+
+             sv%gas_idx_lookup(cnt) = i
+             cnt = cnt + 1
+          end if
+       end do
+
     end if
 
     write(tmp_str, '(A, G0.1, A)') "We have ", sv_count, " SV elements."

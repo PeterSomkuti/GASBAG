@@ -63,8 +63,8 @@ contains
             idx_min = -1
             idx_max = -1
 
-            idx_min = find_closest_index_DP(solar_spectrum(:,1), wl_min)
-            idx_max = find_closest_index_DP(solar_spectrum(:,1), wl_max)
+            idx_min = minloc(abs(solar_spectrum(:,1) - wl_min), dim=1)
+            idx_max = minloc(abs(solar_spectrum(:,1) - wl_max), dim=1)
 
             allocate(tmp_array(idx_max - idx_min + 1, 2))
             tmp_array(:,:) = solar_spectrum(idx_min:idx_max, :)

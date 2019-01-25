@@ -63,6 +63,7 @@ module control_mod
        ! What type of gas retrieval is used here?
        logical, allocatable :: gas_retrieve_profile(:), gas_retrieve_scale(:)
        integer :: num_gases
+       integer :: N_sublayers
        double precision :: dsigma_scale ! Convergence scaling factor
        ! Do we use the less-accurate, but faster FFT convolution with an
        ! averaged ILS kernel?
@@ -389,6 +390,17 @@ contains
                       stop 1
                    end if
                 end if
+
+                call fini_extract(fini, tmp_str, 'sublayers', .false., fini_int)
+                ! We round the number of sublayers to the next odd value > 2
+                if (fini_int < 2) then
+                   MCS%window(window_nr)%N_sublayers = 3
+                else if (mod(fini_int, 2) == 0) then
+                   MCS%window(window_nr)%N_sublayers = fini_int + 1
+                else
+                   MCS%window(window_nr)%N_sublayers = fini_int
+                end if
+
                 call fini_extract(fini, tmp_str, 'dsigma_scale', .false., fini_val)
                 MCS%window(window_nr)%dsigma_scale = fini_val
 

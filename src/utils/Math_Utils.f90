@@ -16,6 +16,48 @@ module math_utils_mod
 contains
 
 
+  pure function searchsorted_dp(x, val, left) result(idx)
+    implicit none
+    double precision, intent(in) :: x(:), val
+    logical, intent(in), optional :: left
+    integer :: idx
+
+    logical :: from_left
+    integer :: i, L, R, m
+
+    ! Insert to the left of value is the standard
+    if (.not. present(left)) then
+       from_left = .true.
+    else
+       from_left = left
+    end if
+
+    L = 1
+    R = size(x)
+    idx = -1
+
+    do while (L <= R)
+       ! We want floor here! That's exactly what Fortran
+       ! integer division does by default.
+       m = (L + R) / 2
+
+       if ((x(m) < val) .and. (x(m+1) > val)) then
+          ! Found!
+          idx = m
+          if (.not. from_left) idx = m+1
+          return
+       else if (x(m) < val) then
+          L = m + 1
+       else if (x(m) > val) then
+          R = m - 1
+       else
+          idx = m
+       end if
+    end do
+
+  end function searchsorted_dp
+
+
   subroutine fft_convolution(input, kernel, wl_input, wl_output, output)
 
     implicit none
@@ -198,8 +240,9 @@ contains
     logical, intent(out) :: success
 
     character(len=*), parameter :: fname = "oco_type_convolution"
-    integer :: N_pix, N_ils_pix
+    integer :: N_pix, N_ils_pix, N_wl
     integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
+    integer :: kernel_idx_min, kernel_idx_max
     double precision :: ILS_delta_min, ILS_delta_max
     double precision :: ILS_wl_spacing
     double precision :: wl_diff
@@ -208,6 +251,7 @@ contains
     double precision :: time_start, time_stop
     integer :: i, funit
 
+    N_wl = size(wl_input)
     N_pix = size(wl_output)
     N_ils_pix = size(wl_kernels, 1)
 
@@ -247,37 +291,52 @@ contains
        !idx_hires_ILS_max = -1
 
        if (wl_input(1) > ILS_delta_min) then
-         call logger%warning(fname, "ILS produdes out of lower wavelength range!")
-         return
+          call logger%warning(fname, "ILS produdes out of lower wavelength range!")
+          kernel_idx_min = searchsorted_dp(wl_kernels(:, idx_pix) + wl_output(idx_pix), wl_input(1))
+          kernel_idx_max = N_ils_pix
+          idx_hires_ILS_min = 1
+          idx_hires_ILS_max = 1 + kernel_idx_max - kernel_idx_min
+       else if (wl_input(N_wl) < ILS_delta_max) then
+          call logger%warning(fname, "ILS produdes out of higher wavelength range!")
+          kernel_idx_max = searchsorted_dp(wl_kernels(:, idx_pix) + wl_output(idx_pix), wl_input(N_wl))
+          kernel_idx_min = 1
+          idx_hires_ILS_min = N_wl - (kernel_idx_max - kernel_idx_min) - 1
+          idx_hires_ILS_max = N_wl
+       else
+          ! Normal, ILS bounds are within high-res wavelength array
+          idx_hires_ILS_min = searchsorted_dp(wl_input(:), ILS_delta_min)
+          idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
+          kernel_idx_min = 1
+          kernel_idx_max = N_ils_pix
        end if
 
+!!$       do i=1, size(wl_input)-1
+!!$          ! The ILS should be on a high-resolution grid at the same spacing as the
+!!$          ! input radiances, so we only need to find the index at which they are
+!!$          ! essentially the same wavelength
+!!$          if (abs(ILS_delta_min - wl_input(i)) < (0.1d0 * ILS_wl_spacing)) then
+!!$             idx_hires_ILS_min = i
+!!$             exit
+!!$          end if
+!!$       end do
 
-       do i=1, size(wl_input)-1
-          ! The ILS should be on a high-resolution grid at the same spacing as the
-          ! input radiances, so we only need to find the index at which they are
-          ! essentially the same wavelength
-          if (abs(ILS_delta_min - wl_input(i)) < (0.1d0 * ILS_wl_spacing)) then
-             idx_hires_ILS_min = i
-             exit
-          end if
-       end do
-
-       !idx_hires_ILS_min = minloc(abs(ILS_delta_min - wl_input(:)), dim=1)
 
        if (idx_hires_ILS_min == -1) then
+          write(*,*) "idx_hires_ILS_min is -1"
           success = .false.
           return
        end if
 
-       idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
+      
 
        if (idx_hires_ILS_max > size(input)) then
           success = .false.
           return
        end if
 
-       output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), kernels(:, idx_pix)) &
-            / sum(kernels(:, idx_pix))
+       output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), &
+            kernels(kernel_idx_min:kernel_idx_max, idx_pix)) &
+            / sum(kernels(kernel_idx_min:kernel_idx_max, idx_pix))
 
     end do
 
@@ -329,51 +388,6 @@ contains
         end do
 
     end subroutine
-
-    pure function find_closest_index_DP(array, value) result(index)
-
-        implicit none
-        double precision, intent(in) :: array(:), value
-        integer :: index
-
-        double precision :: old_diff, diff
-        integer :: i
-
-        old_diff = abs(array(1) - value) + 1d3
-        index = -1
-        do i=1, size(array)
-            diff = abs(array(i) - value)
-            if (diff < old_diff) then
-                old_diff = diff
-                index = i
-            end if
-        end do
-
-    end function
-
-
-    pure function single_convolve(input, kernel)
-
-        double precision, intent(in) :: input(:), kernel(:)
-        double precision :: single_convolve
-        integer :: i
-
-        !! Direct convolution for a single pixel, so input and kernel need
-        !! to be the same size.
-
-        if (size(input) /= size(kernel)) then
-            single_convolve = -9999.99
-            return
-        end if
-
-        single_convolve = 0.0d0
-        do i=1, size(input)
-            single_convolve = single_convolve + input(i) * kernel(i)
-        end do
-
-        single_convolve = single_convolve / sum(kernel)
-
-    end function
 
 
     subroutine invert_matrix(mat_in, mat_out, success)

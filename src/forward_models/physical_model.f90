@@ -36,6 +36,18 @@ module physical_model_mod
      double precision, allocatable :: T(:), p(:), sh(:)
   end type atmosphere
 
+  ! This structure contains the result data that will be stored in the
+  ! output HDF file.
+
+  type result_container
+     type(string), allocatable :: sv_names(:)
+     double precision, allocatable :: sv_retrieved(:,:,:), sv_prior(:,:,:)
+     double precision, allocatable, dimension(:,:) :: &
+          chi2, residual_rms, dsigma_sq
+     double precision, allocatable, dimension(:,:) :: num_iterations
+     logical, allocatable :: converged(:,:)
+  end type result_container
+
 
   double precision :: hires_spacing, hires_pad
   double precision, allocatable :: hires_grid(:)
@@ -85,7 +97,8 @@ module physical_model_mod
 
   ! The initial atmosphere provided by the config file, this will stay the same
   ! for all retrievals. Within the physical_FM function, this atmosphere is
-  ! re-gridded, depending on the surface pressure of the particular scene
+  ! re-gridded, depending on the surface pressure of the particular scene, but
+  ! saved into a new variable
   type(atmosphere) :: initial_atm
 
   ! The solar spectrum (wavelength, transmission)
@@ -102,7 +115,10 @@ module physical_model_mod
        measured_radiance, &
        noise_radiance
 
+  ! State vector construct!
   type(statevector) :: SV
+  ! Result container
+  type(result_container) :: results
 
 
 contains
@@ -122,12 +138,11 @@ contains
     logical :: gas_found, all_gases_found
     integer :: absco_dims
 
-
-
     integer :: num_frames
     integer :: i_fp, i_fr, i_pix, i_win, band
     integer :: i, j, retr_count
     logical :: this_converged
+
 
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
@@ -187,20 +202,12 @@ contains
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
        ! Read the time strings
        call my_instrument%read_time_strings(l1b_file_id, sounding_time_strings)
-       ! Read in the measurement geometries
-       call my_instrument%read_sounding_geometry(l1b_file_id, 1, SZA, SAA, VZA, VAA)
-       ! Read in the measurement location
-       call my_instrument%read_sounding_location(l1b_file_id, 1, lon, lat, &
-            altitude, relative_velocity, &
-            relative_solar_velocity)
        ! Read in the instrument ILS data
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
 
        ! Read in bad sample list
        call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
-       ! Read in Spike filter data
-       call my_instrument%read_spike_filter(l1b_file_id, spike_list, 1)
 
     end select
 
@@ -230,7 +237,9 @@ contains
 
              if (MCS%gas(j)%type%lower() == "absco") then
                 call logger%trivia(fname, "Reading in ABSCO-type gas: " // MCS%window(i_win)%gases(i))
-                call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims)
+                call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims, &
+                     MCS%window(i_win)%wl_min - hires_pad, &
+                     MCS%window(i_win)%wl_max + hires_pad)
              else
                 call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type // " not implemented!")
                 stop 1
@@ -389,8 +398,19 @@ contains
        call logger%debug(fname, "Finished re-gridding solar spectrum.")
        ! Note that at this point, the solar spectrum is still normalised
 
+       select type(my_instrument)
+       type is (oco2_instrument)
 
-      
+          ! Read in the measurement geometries - these are the same for all three bands?
+          call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
+          ! Read in the measurement location
+          call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
+               altitude, relative_velocity, &
+               relative_solar_velocity)
+
+          ! Read in Spike filter data
+          call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+       end select
 
        ! Allocate containers to hold the retrieval results
        allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames))
@@ -410,8 +430,6 @@ contains
        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-
-
 
 
        ! Set up state vector structure here
@@ -438,10 +456,14 @@ contains
        call parse_and_initialize_SV(i_win, size(initial_atm%p), SV)
        call logger%info(fname, "Initialised SV structure")
 
+
+       ! And now set up the result container with the appropriate sizes for arrays
+       call create_result_container(results, num_frames, my_instrument%num_fp, size(SV%svap))
+
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, 2 !num_frames
+       do i_fr=1, 10 !num_frames
           do i_fp=1, my_instrument%num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -535,6 +557,8 @@ contains
        !deallocate(bad_sample_list)
        !deallocate(spike_list)
 
+       call destroy_result_container(results)
+
     end do
 
 
@@ -598,10 +622,13 @@ contains
 
     !! Surface pressure
     double precision :: psurf, this_psurf
+    logical :: do_psurf_jac
 
     !! SIF?
     double precision :: this_sif_radiance
 
+    !! GASES
+    logical :: do_gas_jac
 
     double precision :: continuum
 
@@ -726,6 +753,8 @@ contains
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change?
     allocate(K_hi(N_spec_hi, N_sv))
+    K_hi(:,:) = 0.0d0
+
     allocate(Sa_inv(N_sv, N_sv))
     allocate(Shat_inv(N_sv, N_sv))
     allocate(Shat(N_sv, N_sv))
@@ -916,7 +945,14 @@ contains
           this_sif_radiance = 0.0d0
        end if
 
+       !write(*,*) num_active_levels
+       !write(*,*) this_atm%p
 
+       do j=1, num_active_levels
+       !   write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), &
+       !        (this_atm%gas_vmr(j,1), i=1, size(this_atm%gas_vmr, 2))
+       end do
+ 
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
@@ -934,8 +970,10 @@ contains
 
           if (SV%num_psurf == 1) then
              psurf = SV%svsv(SV%idx_psurf(1))
+             do_psurf_jac = .true.
           else
              psurf = met_psurf(i_fp, i_fr)
+             do_psurf_jac = .false.
           end if
 
           if (psurf < 0) then
@@ -945,6 +983,8 @@ contains
 
           do j=1, num_gases
 
+             do_gas_jac = .false.
+
              if (SV%num_gas > 0) then
 
                 gas_scaling_factor = 1.0d0
@@ -953,14 +993,16 @@ contains
                 ! gas to grab the right scaling factor.
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
+                      do_gas_jac = .true.
                       if (MCS%window(i_win)%gas_retrieve_scale(j)) then
                          gas_scaling_factor = SV%svsv(SV%idx_gas(j,1))
                       end if
                    end if
                 end do
+             else
+                ! If no gases are retrieved, we keep this at 1!
+                gas_scaling_factor = 1.0d0
              end if
-
-             !write(*,*) "Gas scaling factor for gas ", j, " is:", gas_scaling_factor
 
              call calculate_gas_tau( &
                   this_solar(:,1), &
@@ -970,31 +1012,18 @@ contains
                   this_atm%T(:), &
                   this_atm%sh(:), &
                   MCS%gas(MCS%window(i_win)%gas_index(j)), &
-                  3, &
-                  (SV%num_psurf == 1), &
-                  .true., & ! In case we ever want per-layer gas jacobians
+                  MCS%window(i_win)%N_sublayers, &
+                  do_psurf_jac, &
+                  do_gas_jac, & ! In case we ever want per-layer gas jacobians
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j), &
                   gas_tau_dvmr(:,:,j))
-
-!!$             call calculate_gas_tau( &
-!!$                  this_solar(:,1), &
-!!$                  this_atm%gas_vmr(:,j), &
-!!$                  psurf - PSURF_PERTURB, &
-!!$                  this_atm%p(:), &
-!!$                  this_atm%T(:), &
-!!$                  this_atm%sh(:), &
-!!$                  MCS%gas(j), &
-!!$                  9, &
-!!$                  .true., &
-!!$                  gas_tau_pert(:,:,j), &
-!!$                  gas_tau_dpsurf2(:,:,j))
           end do
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
 !!$          open(newunit=funit, file=trim(tmp_str))
 !!$          do j=1, size(gas_tau, 1)
-!!$             write(funit, *) (gas_tau(j,num_active_levels-1,i), i=1,size(gas_tau,3))
+!!$             write(funit, *) (gas_tau_dpsurf(j,num_active_levels-1,i), i=1,size(gas_tau,3))
 !!$          end do
 !!$          close(funit)
 !!$
@@ -1032,14 +1061,12 @@ contains
           ! SIF in it, take it out beforehand.
              K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance) &
                   * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-                  * (sum(sum(gas_tau_dpsurf, dim=3), dim=2))
+                  * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
        end if
 
 
        ! Gas jacobians
        if (SV%num_gas > 0) then
-          !write(*,*) SV%gas_idx_lookup
-
           do i=1, SV%num_gas
 
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
@@ -1151,12 +1178,17 @@ contains
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
 
+!!$       write(*,*) "Albedo positions: ", SV%idx_albedo
+!!$       write(*,*) "Dispersion positions: ", SV%idx_dispersion
+!!$       write(*,*) "SIF position: ", SV%idx_sif
+!!$       write(*,*) "psurf position: ", SV%idx_psurf
+!!$
 !!$       open(file="hires_jacs.dat", newunit=funit)
 !!$       do i=1, size(this_solar, 1)
 !!$          write(funit,*) (K_hi(i, j), j=1, N_sv)
 !!$       end do
 !!$       close(funit)
-!!$
+
 !!$       open(file="hires_spec.dat", newunit=funit)
 !!$       do i=1, size(this_solar, 1)
 !!$          write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
@@ -1165,9 +1197,6 @@ contains
 !!$       close(funit)
        ! ! !
 
-!!$       do j=1, num_active_levels
-!!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), this_atm%gas_vmr(j,1), this_atm%gas_vmr(j,2)
-!!$       end do
 
        select type(my_instrument)
        type is (oco2_instrument)
@@ -1286,6 +1315,11 @@ contains
           end do
        end if
 
+!!$       open(file="jacobian.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) (K(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
 
 
 
@@ -1323,15 +1357,15 @@ contains
        end do
 
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i) !, K(i, SV%idx_gas(1)), K(i, SV%idx_gas(2)) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
-!!$       end do
-!!$       close(funit)
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i) !, K(i, SV%idx_gas(1)), K(i, SV%idx_gas(2)) !, K(i, SV%idx_psurf(1)), K(i, SV%idx_dispersion(1)), K(i, SV%idx_dispersion(2))
+       end do
+       close(funit)
 
 !!$
-
+!!$
 !!$       write(*,*) "old, current and delta state vector, and errors"
 !!$       write(*,*) "Iteration: ", iteration-1
 !!$       do i=1, N_sv
@@ -1418,14 +1452,8 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-       !read(*,*)
+
     end do
-
-
-
-
-
-
 
   end function physical_FM
 
@@ -1581,6 +1609,12 @@ contains
           write(tmp_str, '(A,G0.1,A,A)') "There seem to be ", num_gases, " gases in ", filename
           call logger%info(fname, trim(tmp_str))
 
+          if (allocated(atm%p)) deallocate(atm%p)
+          if (allocated(atm%T)) deallocate(atm%T)
+          if (allocated(atm%sh)) deallocate(atm%sh)
+          if (allocated(atm%gas_names)) deallocate(atm%gas_names)
+          if (allocated(atm%gas_index)) deallocate(atm%gas_index)
+          if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
 
           allocate(atm%gas_names(num_gases))
           allocate(atm%gas_vmr(level_count, num_gases))
@@ -1701,7 +1735,16 @@ contains
     N_lev_new = i+1
     N_gases = size(old_atm%gas_names)
 
-    ! Allocate new atmosphere data
+    ! Allocate new atmosphere data, and in case we have an existing object,
+    ! deallocate first
+
+    if (allocated(new_atm%p)) deallocate(new_atm%p)
+    if (allocated(new_atm%T)) deallocate(new_atm%T)
+    if (allocated(new_atm%sh)) deallocate(new_atm%sh)
+    if (allocated(new_atm%gas_names)) deallocate(new_atm%gas_names)
+    if (allocated(new_atm%gas_index)) deallocate(new_atm%gas_index)
+    if (allocated(new_atm%gas_vmr)) deallocate(new_atm%gas_vmr)
+
     allocate(new_atm%p(N_lev_new))
     allocate(new_atm%T(N_lev_new))
     allocate(new_atm%sh(N_lev_new))
@@ -1716,21 +1759,79 @@ contains
     new_atm%gas_names(:) = old_atm%gas_names(:)
     new_atm%gas_index(:) = old_atm%gas_index(:)
     new_atm%gas_vmr(:,:) = old_atm%gas_vmr(1:N_lev_new, :)
+
   end function regrid_atmosphere
 
 
-  subroutine resample_atmosphere(p, T, sh, atm)
 
+  subroutine create_result_container(results, num_frames, num_fp, num_SV)
     implicit none
-    double precision, intent(in) :: p(:), T(:), sh(:)
-    type(atmosphere), intent(inout) :: atm
+    type(result_container), intent(inout) :: results
+    integer, intent(in) :: num_frames, num_fp, num_SV
 
-    call linear_upsample(atm%p, p, T, atm%T)
-    call linear_upsample(atm%p, p, sh, atm%sh)
+    allocate(results%sv_names(num_SV))
 
-  end subroutine resample_atmosphere
+    allocate(results%sv_retrieved(num_frames, num_fp, num_SV))
+    allocate(results%sv_prior(num_frames, num_fp, num_SV))
+    allocate(results%chi2(num_frames, num_fp))
+    allocate(results%residual_rms(num_frames, num_fp))
+    allocate(results%dsigma_sq(num_frames, num_fp))
+
+    allocate(results%num_iterations(num_frames, num_fp))
+    allocate(results%converged(num_frames, num_fp))
+
+    results%sv_names = "NONE"
+
+    results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
+    results%num_iterations = -1
+    results%converged = .false.
+
+  end subroutine create_result_container
 
 
+
+  subroutine destroy_result_container(results)
+    implicit none
+    type(result_container), intent(inout) :: results
+
+    deallocate(results%sv_names)
+    deallocate(results%sv_retrieved)
+    deallocate(results%sv_prior)
+    deallocate(results%chi2)
+    deallocate(results%residual_rms)
+    deallocate(results%dsigma_sq)
+    deallocate(results%num_iterations)
+    deallocate(results%converged)
+
+  end subroutine destroy_result_container
+
+
+  subroutine assign_SV_names_to_result(results, SV)
+    implicit none
+    type(result_container), intent(inout) :: results
+    type(statevector), intent(in) :: SV
+
+    character(len=999) :: tmp_str
+    integer :: i,j
+
+    do i=1, size(SV%svsv)
+
+       do j=1, SV%num_albedo
+          if (SV%idx_albedo(j) == i) then
+             write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+    end do
+
+
+  end subroutine assign_SV_names_to_result
 
 
 

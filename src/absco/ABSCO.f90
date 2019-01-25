@@ -1,7 +1,8 @@
 module absco_mod
 
   use file_utils_mod, only: read_DP_hdf_dataset, get_HDF5_dset_dims, check_hdf_error
-  use control_mod, only: CS_gas
+  use math_utils_mod, only: searchsorted_dp
+  use control_mod, only: MCS, CS_gas
   use logger_mod, only: logger => master_logger
   use HDF5
 
@@ -9,21 +10,22 @@ module absco_mod
 
 contains
 
-  subroutine read_absco_HDF(filename, gas, absco_dims)
+  subroutine read_absco_HDF(filename, gas, absco_dims, wl_min, wl_max)
 
     implicit none
     character(len=*), intent(in) :: filename
     type(CS_gas), intent(inout) :: gas
     integer, intent(inout) :: absco_dims
+    double precision, intent(in) :: wl_min, wl_max ! Not used yet!
 
     character(len=*), parameter :: fname = "read_absco_HDF"
     integer(hid_t) :: absco_file_id, dset_id, filetype
     integer(hsize_t), allocatable :: dset_dims(:)
     integer :: hdferr
     character(len=2) :: gas_index ! Is this always going to stay 2-characters long?
-    double precision, allocatable :: absco_3D(:,:,:)
+    double precision, allocatable :: tmp_absco_3D(:,:,:), tmp_absco_4D(:,:,:,:)
     character(len=999) :: tmp_str
-    integer :: N_wl
+    integer :: wl_idx_left, wl_idx_right, N_wl, i
 
     call logger%trivia(fname, "Reading in ABSCO HDF file at: " // trim(filename))
 
@@ -54,14 +56,15 @@ contains
 
     if (absco_dims == 4) then
        call logger%debug(fname, "ABSCO file has 4 dimensions")
-       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", gas%cross_section, dset_dims)
+       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", &
+            gas%cross_section, dset_dims)
        gas%has_h2o = .true.
     else if (absco_dims == 3) then
        call logger%debug(fname, "ABSCO file has 3 dimensions")
-       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", absco_3D, dset_dims)
+       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", tmp_absco_3D, dset_dims)
        ! Copy to gas structure
        allocate(gas%cross_section(dset_dims(1), dset_dims(2), dset_dims(3), 1))
-       gas%cross_section(:,1,:,:) = absco_3D(:,:,:)
+       gas%cross_section(:,1,:,:) = tmp_absco_3D(:,:,:)
        gas%has_h2o = .false.
     else
        write(tmp_str, '(A, G0.1, A)') "ABSCO file has ", absco_dims, " dimensions. This is not (yet) supported."
@@ -82,6 +85,7 @@ contains
     N_wl = size(gas%wavelength)
     gas%wavelength(:) = gas%wavelength(N_wl:1:-1)
     gas%cross_section(:,:,:,:) = gas%cross_section(N_wl:1:-1,:,:,:)
+
 
     ! Now if ABSCO is 4-dimensional, we also need the broadener gas data
     if (absco_dims == 4) then

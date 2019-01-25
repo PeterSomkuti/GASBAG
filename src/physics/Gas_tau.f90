@@ -82,43 +82,58 @@ contains
     ! Lastly, we just step forwards to see if our wavelength between the
     ! next spectroscopy wavelength grid points.
 
-    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
-         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
-    gas_wl_start = gas%wavelength(1)
+!!$    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
+!!$         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
+!!$    gas_wl_start = gas%wavelength(1)
+!!$
+!!$    gas_idx_fg = -1
+!!$    wl_left_indices(:) = -1
+!!$
+!!$    do j=1, size(wl)
+!!$       ! If out of range, we don't want to use any value.
+!!$       if (wl(j) < gas%wavelength(1)) then
+!!$          cycle
+!!$       elseif (wl(j) > gas%wavelength(size(gas%wavelength))) then
+!!$          cycle
+!!$       end if
+!!$
+!!$       ! Take a rough first guess as to where the wavelength fits in. We are always(?)
+!!$       ! using monotontically increasing wavelength arrays, so whatever spectroscpoy index
+!!$       ! the last wavelength was assigned to, the next one must be at least that value + 1.
+!!$       ! So after the first one has been found (j=1), we can just use that last value as
+!!$       ! a first guess for the next one.
+!!$
+!!$       if (j > 1) then
+!!$          gas_idx_fg = wl_left_indices(j-1)
+!!$       else
+!!$          gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
+!!$       end if
+!!$
+!!$       ! Now this first guess really only works if the spectroscopy file
+!!$       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
+!!$       ! where both windows are saved in one file.
+!!$
+!!$       ! If our guess is bad, start at the beginning
+!!$       if (gas_idx_fg > size(gas%wavelength)) then
+!!$          gas_idx_fg = 1
+!!$       end if
+!!$
+!!$       do while (wl(j) < gas%wavelength(gas_idx_fg))
+!!$
+!!$          gas_idx_fg = gas_idx_fg - 1
+!!$       end do
+!!$
+!!$       do k=gas_idx_fg, size(gas%wavelength, 1)-1
+!!$          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
+!!$             wl_left_indices(j) = k
+!!$             exit
+!!$          end if
+!!$       end do
+!!$    end do
 
+    ! A binary search seems to be similarly quick as the odd thing we're doing above..
     do j=1, size(wl)
-       ! If out of range, set the left index to either first
-       ! or penultimate one.
-       if (wl(j) <= gas%wavelength(1)) then
-          wl_left_indices(j) = 1
-          cycle
-       elseif (wl(j) >= gas%wavelength(size(gas%wavelength))) then
-          wl_left_indices(j) = size(gas%wavelength) - 1
-          cycle
-       end if
-
-       ! Take a rough first guess as to where the wavelength fits in
-       gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
-       ! Now this first guess really only works if the spectroscopy file
-       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
-       ! where both windows are saved in one file.
-
-       ! If our guess is bad, start at the beginning
-       if (gas_idx_fg > size(gas%wavelength)) then
-          gas_idx_fg = 1
-          write(*,*) "GAS_IDX_FG reset to 1"
-       end if
-
-       do while (wl(j) < gas%wavelength(gas_idx_fg))
-          gas_idx_fg = gas_idx_fg - 1
-       end do
-
-       do k=gas_idx_fg, size(gas%wavelength, 1)-1
-          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
-             wl_left_indices(j) = k
-             exit
-          end if
-       end do
+       wl_left_indices(j) = searchsorted_dp(gas%wavelength(:), wl(j), .false.)
     end do
 
     ! Given the number of sublayers, we precompute the Gauss-Kronrod weights for
@@ -197,6 +212,7 @@ contains
           ! This should never happen!!
           stop 1
        end if
+
        ! And adjust the GK abscissae and weights to our pressure interval
        ! between p_lower and p_higher. This way, we don't have to re-scale the
        ! result after integration and can obtain it simply by multiplying with
@@ -249,6 +265,7 @@ contains
           if (need_psurf_jac .and. (l == num_active_levels)) then
 
              this_p_pert = GK_abscissae_f_pert(k)
+
              if (log_scaling) then
                 this_p_fac_pert = ((log(this_p_pert) - log(p_higher)) / (log(p_lower_pert) - log(p_higher)))
              else
@@ -258,7 +275,7 @@ contains
              this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
              this_H2O_pert = (1.0d0 - this_p_fac_pert) * H2O_lower_pert + this_p_fac_pert * H2O_higher
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
-             this_M_pert = 1d3 * (((1 - this_H2O_pert) * DRY_AIR_MASS) + (H2Om * this_H2O_pert))
+             this_M_pert = 1.0d3 * (((1 - this_H2O_pert) * DRY_AIR_MASS) + (H2Om * this_H2O_pert))
 
              ! This calculates the gas OD, as a result of a perturbed surface pressure
              gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&
@@ -279,17 +296,13 @@ contains
           ! surface pressure Jacobian merely affects the BOA layer ODs 
           gas_tau_dpsurf(:,l-1) = 0.0d0 !gas_tau(:,l-1)
        end if
-
     end do
-
-
-
 
  end subroutine calculate_gas_tau
 
 
 
- function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+ pure function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
    implicit none
    type(CS_gas), intent(in) :: gas
@@ -408,6 +421,11 @@ contains
         (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
 
    do i=1, size(wl)
+
+      if (wl_left_idx(i) == -1) then
+         CS_value(i) = 0.0d0
+         cycle
+      end if
 
       idx_l_wl = wl_left_idx(i)
       idx_r_wl = idx_l_wl + 1

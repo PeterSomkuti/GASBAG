@@ -59,6 +59,8 @@ contains
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_3D_DP_dataset"
 
+    if (allocated(array)) deallocate(array)
+
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3)))
 
@@ -80,6 +82,8 @@ contains
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_4D_DP_dataset"
+
+    if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4)))
@@ -103,6 +107,8 @@ contains
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_3D_DP_dataset"
 
+    if (allocated(array)) deallocate(array)
+
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3)))
 
@@ -125,6 +131,8 @@ contains
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_2D_DP_dataset"
 
+    if (allocated(array)) deallocate(array)
+
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1), dset_dims(2)))
 
@@ -146,6 +154,8 @@ contains
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_1D_DP_dataset"
+
+    if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1)))

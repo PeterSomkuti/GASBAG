@@ -463,7 +463,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, 10 !num_frames
+       do i_fr=1, num_frames
           do i_fp=1, my_instrument%num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -1003,6 +1003,8 @@ contains
                 ! If no gases are retrieved, we keep this at 1!
                 gas_scaling_factor = 1.0d0
              end if
+
+	     write(*,*) "N_sublayers", MCS%window(i_win)%N_sublayers
 
              call calculate_gas_tau( &
                   this_solar(:,1), &

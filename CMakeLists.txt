@@ -42,11 +42,11 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=medium")
+  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=large")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O3 -mtune=native -fopenmp")
+  set(opt "-O3 -mtune=native")
   set(bounds "-fbounds-check")
 else()
   # only support Gfortran for now
@@ -69,7 +69,7 @@ find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran HL)
 find_package(NETCDF REQUIRED COMPONENTS Fortran)
-find_package(Gperftools)
+#find_package(Gperftools)
 
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
@@ -85,7 +85,7 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 set_source_files_properties(
   ${third-party}
   PROPERTIES
-  COMPILE_FLAGS "-w -Og -g"
+  COMPILE_FLAGS "-w -O3"
 )
 
 # Our code is definitely in the need of having warnings
@@ -113,4 +113,4 @@ ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES} ${GPERFTOOLS_PROFILER})
 
 # This is needed for Gperfmonitor (or the profiler portion of it) to work
 # properly on Mac's as the have some memory address randomization going on..
-set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)
+#set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)

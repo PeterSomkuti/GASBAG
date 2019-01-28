@@ -145,9 +145,13 @@ contains
     num_sif_parameters = 0
     num_psurf_parameters = 0
 
-    MCS%window(i_win)%gas_retrieved(:) = .false.
-    MCS%window(i_win)%gas_retrieve_profile(:) = .false.
-    MCS%window(i_win)%gas_retrieve_scale(:) = .false.
+    ! Again, we can do these only if the arrays are allocated,
+    ! which they aren't if no gases are defined..
+    if (MCS%window(i_win)%num_gases > 0) then
+       MCS%window(i_win)%gas_retrieved(:) = .false.
+       MCS%window(i_win)%gas_retrieve_profile(:) = .false.
+       MCS%window(i_win)%gas_retrieve_scale(:) = .false.
+    end if
 
     do i=1, size(split_string)
 

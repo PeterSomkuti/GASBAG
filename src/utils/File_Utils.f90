@@ -26,6 +26,11 @@ module file_utils_mod
      module procedure read_4D_DP_hdf_dataset
   end interface read_DP_hdf_dataset
 
+
+  interface write_INT_hdf_dataset
+     module procedure write_2D_INT_hdf_dataset
+  end interface write_INT_hdf_dataset
+
   interface read_INT_hdf_dataset
      module procedure read_3D_INT_hdf_dataset
   end interface read_INT_hdf_dataset
@@ -46,6 +51,31 @@ module file_utils_mod
 contains
 
 
+
+
+  subroutine write_2D_INT_hdf_dataset(file_id, dset_name, array, dims, fill_value)
+
+    integer(hid_t), intent(in) :: file_id
+    character(len=*), intent(in) :: dset_name
+    integer, dimension(:,:), intent(in) :: array
+    integer(hsize_t), dimension(:), intent(in) :: dims
+    integer, optional, intent(in) :: fill_value
+
+    integer, dimension(:,:), allocatable :: conv_array
+    integer :: conv_fill_value
+    character(len=*), parameter :: fname = "write_2D_DP_hdf_dataset"
+    integer :: hdferr
+    integer(hid_t) :: dspace_id, dset_id, dcpl
+
+    allocate(conv_array(size(array, 1), size(array, 2)))
+    conv_array = int(array)
+    if (present(fill_value)) then
+       conv_fill_value = int(fill_value)
+    end if
+
+    include "HDF5_write_INT_array.inc"
+
+  end subroutine write_2D_INT_hdf_dataset
 
 
   subroutine read_3D_INT_hdf_dataset(file_id, dset_name, array, dset_dims)

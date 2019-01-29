@@ -42,7 +42,7 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=large")
+  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=medium")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
@@ -65,8 +65,8 @@ set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
-find_package(BLAS REQUIRED)
-find_package(LAPACK REQUIRED)
+#find_package(BLAS REQUIRED)
+#find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran HL)
 find_package(NETCDF REQUIRED COMPONENTS Fortran)
 #find_package(Gperftools)
@@ -108,7 +108,9 @@ message(STATUS "GPERFTOOLS: " ${GPERFTOOLS_PROFILER})
 # HDF5 needs to be included at compile time already
 target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS}
 ${GPERFTOOLS_INCLUDE_DIR})
-target_link_libraries(GeoCARBSIF ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
+target_link_libraries(GeoCARBSIF
+#${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
+-L/usr/lib -llapack -lblas
 ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES} ${GPERFTOOLS_PROFILER})
 
 # This is needed for Gperfmonitor (or the profiler portion of it) to work

@@ -5,7 +5,7 @@ module physical_model_mod
   use oco2_mod
   use logger_mod, only: logger => master_logger
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
-       read_DP_hdf_dataset
+       read_DP_hdf_dataset, write_INT_hdf_dataset
   use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   use solar_model_mod
@@ -44,7 +44,7 @@ module physical_model_mod
      double precision, allocatable :: sv_retrieved(:,:,:), sv_prior(:,:,:)
      double precision, allocatable, dimension(:,:) :: &
           chi2, residual_rms, dsigma_sq
-     double precision, allocatable, dimension(:,:) :: num_iterations
+     integer, allocatable, dimension(:,:) :: num_iterations
      logical, allocatable :: converged(:,:)
   end type result_container
 
@@ -460,10 +460,14 @@ contains
        ! And now set up the result container with the appropriate sizes for arrays
        call create_result_container(results, num_frames, my_instrument%num_fp, size(SV%svap))
 
+       ! Create the SV names corresponding to the SV indices
+       call assign_SV_names_to_result(results, SV, i_win)
+
+
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
+       do i_fr=1500, 1550 !num_frames
           do i_fp=1, my_instrument%num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -493,31 +497,41 @@ contains
        if (MCS%window(i_win)%fft_convolution) deallocate(ils_hires_avg_relative_response)
 
 
-       out_dims2d = shape(chi2)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_chi2_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            chi2, out_dims2d, -9999.99d0)
 
-       out_dims2d = shape(num_iterations)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_num_iterations_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            num_iterations, out_dims2d, -9999.99d0)
+       out_dims2d(1) = my_instrument%num_fp
+       out_dims2d(2) = num_frames
 
-       if (SV%num_sif == 1) then
-          out_dims2d = shape(retrieved_sif_abs)
-          write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_abs_" // MCS%window(i_win)%name
+       ! Save the retrieved state vectors
+       do i=1, size(SV%svsv)
+          write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
+               // MCS%window(i_win)%name // "_" // results%sv_names(i)
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
-               retrieved_sif_abs, out_dims2d, -9999.99d0)
+               results%sv_retrieved(:,:,i), out_dims2d, -9999.99d0)
+       end do
 
-          out_dims2d = shape(retrieved_sif_rel)
-          write(tmp_str, '(A,A)') "/physical_retrieval_results/retrieved_sif_rel_" // MCS%window(i_win)%name
-          call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               retrieved_sif_rel, out_dims2d, -9999.99d0)
-       end if
+       ! Save number of iterations
+       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
+            // MCS%window(i_win)%name // "_num_iterations"
+       call write_INT_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%num_iterations(:,:), out_dims2d, -9999)
+
+       ! Retrieved CHI2
+       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
+            // MCS%window(i_win)%name // "_retrieved_chi2"
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%chi2(:,:), out_dims2d, -9999.99d0)
+
+       ! Dsigma_sq
+       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
+            // MCS%window(i_win)%name // "_final_dsigma_sq"
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
+
+
 
        out_dims3d = shape(final_radiance)
        write(tmp_str, '(A,A)') "/physical_retrieval_results/modelled_radiance_" // MCS%window(i_win)%name
@@ -628,7 +642,7 @@ contains
     double precision :: this_sif_radiance
 
     !! GASES
-    logical :: do_gas_jac
+    logical :: do_gas_jac, success_gas
 
     double precision :: continuum
 
@@ -781,7 +795,7 @@ contains
        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
        ! take that into account for the incoming solar irradiance
 
-       albedo_apriori = PI * maxval(radiance_l1b) / &
+       albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
             (1.0d0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
     end select
@@ -846,9 +860,6 @@ contains
     allocate(radiance_tmp_work_hi(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
 
-
-
-
     converged = .false.
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
@@ -877,6 +888,8 @@ contains
              call pwl_value_1d(size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
                   size(this_atm%p), log(this_atm%p), this_atm%sh)
+
+             this_atm%gas_vmr(:,2) = this_atm%sh / (1.0d0 - this_atm%sh) * (28.96d0 / 18.01528d0)
 
              do j=1, num_levels
                 if (this_psurf > this_atm%p(j)) then
@@ -930,6 +943,10 @@ contains
              end do
 
           end if
+
+          this_atm%sh = this_atm%gas_vmr(:,2) / ((28.96d0 / 18.01528d0) + this_atm%gas_vmr(:,2))
+
+
        endif
 
 
@@ -949,8 +966,8 @@ contains
        !write(*,*) this_atm%p
 
        do j=1, num_active_levels
-       !   write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), &
-       !        (this_atm%gas_vmr(j,1), i=1, size(this_atm%gas_vmr, 2))
+          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), &
+               (this_atm%gas_vmr(j,i), i=1, size(this_atm%gas_vmr, 2))
        end do
  
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
@@ -1004,8 +1021,6 @@ contains
                 gas_scaling_factor = 1.0d0
              end if
 
-	     write(*,*) "N_sublayers", MCS%window(i_win)%N_sublayers
-
              call calculate_gas_tau( &
                   this_solar(:,1), &
                   this_atm%gas_vmr(:,j) * gas_scaling_factor, &
@@ -1019,7 +1034,13 @@ contains
                   do_gas_jac, & ! In case we ever want per-layer gas jacobians
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j), &
-                  gas_tau_dvmr(:,:,j))
+                  gas_tau_dvmr(:,:,j), &
+                  success_gas)
+
+             if (.not. success_gas) then
+                call logger%error(fname, "Error calculating gas optical depths.")
+                return
+             end if
           end do
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
@@ -1317,11 +1338,11 @@ contains
           end do
        end if
 
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
+       open(file="jacobian.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) (K(i, j), j=1, N_sv)
+       end do
+       close(funit)
 
 
 
@@ -1359,6 +1380,17 @@ contains
        end do
 
 
+       ! In the case of retrieving gas - we have to adjust the retrieved state vector
+       ! if the retrieval wants to push it below 0.
+
+       do i=1, SV%num_gas
+          if (SV%svsv(sv%idx_gas(i, 1)) < 0.0d0) then
+             write(*,*) "Negative SV for ", i, ": ", SV%svsv(sv%idx_gas(i, 1))
+             SV%svsv(sv%idx_gas(i, 1)) = 1.0d-10 !old_sv(sv%idx_gas(i, 1))
+          end if
+       end do
+
+
        open(file="l1b_spec.dat", newunit=funit)
        do i=1, N_spec
           write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
@@ -1366,41 +1398,50 @@ contains
        end do
        close(funit)
 
-!!$
-!!$
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$       write(*,*) "Iteration: ", iteration-1
-!!$       do i=1, N_sv
-!!$          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq
 
-!!$
+       write(*,*) "old, current and delta state vector, and errors"
+       write(*,*) "Iteration: ", iteration-1
+       do i=1, N_sv
+          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq
 
-       if (dsigma_sq < dble(N_sv) * dsigma_scale) then
+
+
+       if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. (iteration > 5)) then
+
+          ! Stop iterating - we've either coverged to exeeded the max. number of
+          ! iterations.
           keep_iterating = .false.
-          !write(*,*) "Converged!"
-          !write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+          if (iteration <= 5) converged = .true.
 
+          ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
              SV%sver(i) = sqrt(Shat(i,i))
           end do
 
-          ! Save values
-          chi2(i_fp, i_fr) = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+          ! Save retrieved CHI2
+          results%chi2(i_fp, i_fr) = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / &
+               (noise_work ** 2)) / (N_spec - N_sv)
 
-          if (SV%num_sif == 1) then
-             retrieved_sif_abs(i_fp, i_fr) = SV%svsv(SV%idx_sif(1))
-             retrieved_sif_rel(i_fp, i_fr) = retrieved_sif_abs(i_fp, i_fr) / maxval(radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max))
-          end if
-          num_iterations(i_fp, i_fr) = iteration
+          ! Save statevector at last iteration
+          do i=1, size(SV%svsv)
+             results%sv_retrieved(i_fp, i_fr,i) = SV%svsv(i)
+          end do
+
+
+          !if (SV%num_sif == 1) then
+          !   retrieved_sif_abs(i_fp, i_fr) = SV%svsv(SV%idx_sif(1))
+          !   retrieved_sif_rel(i_fp, i_fr) = retrieved_sif_abs(i_fp, i_fr) / maxval(radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max))
+          !end if
+          results%num_iterations(i_fp, i_fr) = iteration
 
           final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  chi2(i_fp, i_fr)
+          write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  results%chi2(i_fp, i_fr)
           call logger%debug(fname, trim(tmp_str))
 
           converged = .true.
@@ -1408,7 +1449,7 @@ contains
 !!$       open(file="l1b_spec.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i), K(i, SV%idx_psurf(1))
+!!$               noise_work(i) !, K(i, SV%idx_psurf(1))
 !!$       end do
 !!$       close(funit)
 
@@ -1454,7 +1495,6 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-
     end do
 
   end function physical_FM
@@ -1672,7 +1712,7 @@ contains
 
           dummy_string = dummy
           ! Need to deallocate the split_string object first
-          deallocate(split_string)
+          if (allocated(split_string)) deallocate(split_string)
           call dummy_string%split(tokens=split_string, sep=' ')
 
           ! Now here we need to check again whether a certain line has more than
@@ -1773,14 +1813,14 @@ contains
 
     allocate(results%sv_names(num_SV))
 
-    allocate(results%sv_retrieved(num_frames, num_fp, num_SV))
-    allocate(results%sv_prior(num_frames, num_fp, num_SV))
-    allocate(results%chi2(num_frames, num_fp))
-    allocate(results%residual_rms(num_frames, num_fp))
-    allocate(results%dsigma_sq(num_frames, num_fp))
+    allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
+    allocate(results%sv_prior(num_fp, num_frames, num_SV))
+    allocate(results%chi2(num_fp, num_frames))
+    allocate(results%residual_rms(num_fp, num_frames))
+    allocate(results%dsigma_sq(num_fp, num_frames))
 
-    allocate(results%num_iterations(num_frames, num_fp))
-    allocate(results%converged(num_frames, num_fp))
+    allocate(results%num_iterations(num_fp, num_frames))
+    allocate(results%converged(num_fp, num_frames))
 
     results%sv_names = "NONE"
 
@@ -1813,16 +1853,18 @@ contains
   end subroutine destroy_result_container
 
 
-  subroutine assign_SV_names_to_result(results, SV)
+  subroutine assign_SV_names_to_result(results, SV, i_win)
     implicit none
     type(result_container), intent(inout) :: results
     type(statevector), intent(in) :: SV
+    integer, intent(in) :: i_win
 
     character(len=999) :: tmp_str
-    integer :: i,j
+    integer :: i,j,k
 
     do i=1, size(SV%svsv)
 
+       ! Albedo names
        do j=1, SV%num_albedo
           if (SV%idx_albedo(j) == i) then
              write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
@@ -1830,8 +1872,47 @@ contains
           end if
        end do
 
-    end do
+       do j=1, SV%num_sif
+          if (SV%idx_sif(j) == i) then
+             write(tmp_str, '(A)') "SIF_absolute"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
 
+       do j=1, SV%num_psurf
+          if (SV%idx_psurf(j) == i) then
+             write(tmp_str, '(A)') "psurf"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       do j=1, SV%num_dispersion
+          if (SV%idx_dispersion(j) == i) then
+             write(tmp_str, '(A,G0.1)') "dispersion_coef_", j
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       do j=1, SV%num_gas
+          do k=1, size(SV%idx_gas, 1)
+             if (SV%idx_gas(j,k) /= -1) then
+                if (SV%idx_gas(j,k) == i) then
+                   results%sv_names(i) = MCS%window(i_win)%gases(sv%gas_idx_lookup(j))
+
+                   if (MCS%window(i_win)%gas_retrieve_profile(j)) then
+                      results%sv_names(i) = results%sv_names(i) // "_profile_"
+                   end if
+
+                   if (MCS%window(i_win)%gas_retrieve_scale(j)) then
+                      results%sv_names(i) = results%sv_names(i) // "_scale"
+                   end if
+
+                end if
+             end if
+          end do
+       end do
+
+    end do
 
   end subroutine assign_SV_names_to_result
 

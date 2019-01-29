@@ -9,7 +9,8 @@ contains
 
 
   subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, &
-       gas, N_sub, need_psurf_jac, need_gas_jac, gas_tau, gas_tau_dpsurf, gas_tau_dvmr)
+       gas, N_sub, need_psurf_jac, need_gas_jac, gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
+       success)
 
     implicit none
     double precision, intent(in) :: wl(:) ! Wavelength array
@@ -26,6 +27,8 @@ contains
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
     ! dtau / dvmr
     double precision, intent(inout) :: gas_tau_dvmr(:,:)
+    ! Success?
+    logical, intent(inout) :: success
 
 
     logical :: log_scaling
@@ -61,6 +64,12 @@ contains
           num_active_levels = j+1
        end if
     end do
+
+    if (num_active_levels > N_lev) then
+       write(*,*) "Psurf too big."
+       success = .false.
+       return
+    end if
 
     log_scaling = .false.
 
@@ -297,6 +306,8 @@ contains
           gas_tau_dpsurf(:,l-1) = 0.0d0 !gas_tau(:,l-1)
        end if
     end do
+
+    success = .true.
 
  end subroutine calculate_gas_tau
 

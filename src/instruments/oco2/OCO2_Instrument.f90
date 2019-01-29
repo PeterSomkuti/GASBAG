@@ -130,18 +130,15 @@ contains
     integer, dimension(1) :: tmp_num_frames
 
     integer(hid_t) :: dset_id
-    integer(hsize_t) :: num_frames_shape(1) = [1]
+    integer(hsize_t), allocatable :: num_frames_shape(:)
     integer :: hdferr
     character(len=*), parameter :: fname = "read_num_frames(oco2)"
-    character(len=*), parameter :: dset_name = "/Metadata/ExpectedFrames"
+    character(len=*), parameter :: dset_name = "/SoundingGeometry/sounding_id"
 
-    call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening SNR coeffs at: " // trim(dset_name))
+    call get_HDF5_dset_dims(l1b_file_id, trim(dset_name), num_frames_shape)
+    call check_hdf_error(hdferr, fname, "Error reading data set dimesions at: " // trim(dset_name))
 
-    call h5dread_f(dset_id, H5T_NATIVE_INTEGER, tmp_num_frames, num_frames_shape, hdferr)
-    call check_hdf_error(hdferr, fname, "Error reading SNR coeffs at: " // trim(dset_name))
-
-    num_frames = tmp_num_frames(1)
+    num_frames = num_frames_shape(2)
 
   end subroutine read_num_frames
 

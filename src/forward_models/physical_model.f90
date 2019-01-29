@@ -889,7 +889,7 @@ contains
                   log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
                   size(this_atm%p), log(this_atm%p), this_atm%sh)
 
-             this_atm%gas_vmr(:,2) = this_atm%sh / (1.0d0 - this_atm%sh) * (28.96d0 / 18.01528d0)
+             !this_atm%gas_vmr(:,2) = this_atm%sh / (1.0d0 - this_atm%sh) * (28.96d0 / 18.01528d0)
 
              do j=1, num_levels
                 if (this_psurf > this_atm%p(j)) then
@@ -1386,7 +1386,7 @@ contains
        do i=1, SV%num_gas
           if (SV%svsv(sv%idx_gas(i, 1)) < 0.0d0) then
              write(*,*) "Negative SV for ", i, ": ", SV%svsv(sv%idx_gas(i, 1))
-             SV%svsv(sv%idx_gas(i, 1)) = 1.0d-10 !old_sv(sv%idx_gas(i, 1))
+             SV%svsv(sv%idx_gas(i, 1)) = 1.0d-10 ! * old_sv(sv%idx_gas(i, 1))
           end if
        end do
 
@@ -1495,6 +1495,7 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
+       read(*,*)
     end do
 
   end function physical_FM

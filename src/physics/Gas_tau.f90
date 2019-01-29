@@ -8,7 +8,7 @@ module gas_tau_mod
 contains
 
 
-  subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, H2O, &
+  subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, need_gas_jac, gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
        success)
 
@@ -16,7 +16,8 @@ contains
     double precision, intent(in) :: wl(:) ! Wavelength array
     double precision, intent(in) :: gas_vmr(:) ! Gas volume mixing ratio
     double precision, intent(in) :: psurf ! Surface pressure
-    double precision, intent(in) :: p(:), T(:), H2O(:) ! Pressure, temperature and water vapor profiles
+    ! Pressure, temperature and specific humidity profiles
+    double precision, intent(in) :: p(:), T(:), sh(:) 
     type(CS_gas), intent(in) :: gas ! Gas structure which contains the cross sections
     integer, intent(in) :: N_sub ! How many sublayers for more accurate calculation?
     logical, intent(in) :: need_psurf_jac, need_gas_jac
@@ -32,12 +33,13 @@ contains
 
 
     logical :: log_scaling
-    double precision :: p_lower, p_higher, T_lower, T_higher, H2O_lower, H2O_higher
+    double precision :: p_lower, p_higher, T_lower, T_higher, sh_lower, sh_higher
     double precision :: VMR_lower, VMR_higher
-    double precision :: this_p, p_fac, this_p_fac, this_T, this_H2O, this_VMR, this_M
+    double precision :: this_H2O, this_H2O_pert
+    double precision :: this_p, p_fac, this_p_fac, this_T, this_sh, this_VMR, this_M
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
-         H2O_lower_pert, VMR_lower_pert, this_VMR_pert, this_M_pert, &
-         this_T_pert, this_H2O_pert
+         sh_lower_pert, VMR_lower_pert, this_VMR_pert, this_M_pert, &
+         this_T_pert, this_sh_pert
     double precision, allocatable :: gas_tmp(:)
     double precision :: CS_value_grid(size(wl))
     integer :: wl_left_indices(size(wl))
@@ -153,7 +155,7 @@ contains
     do l=num_active_levels, 2, -1
 
        ! First, grab the lower (altitude-wise) and higher values for
-       ! p,T,H2O from the atmosphere profiles for whatever layer l we're in.
+       ! p,T,sh from the atmosphere profiles for whatever layer l we're in.
 
        if (l == num_active_levels) then
           ! BOA layer - psurf should be between lowermost level and
@@ -166,7 +168,7 @@ contains
              p_fac = (p_lower - p(l-1)) / (p(l) - p(l-1))
           end if
           T_lower = (1.0d0 - p_fac) * T(l-1) + p_fac * T(l)
-          H2O_lower = (1.0d0 - p_fac) * H2O(l-1) + p_fac * H2O(l)
+          sh_lower = (1.0d0 - p_fac) * sh(l-1) + p_fac * sh(l)
           VMR_lower = (1.0d0 - p_fac) * gas_vmr(l-1) + p_fac * gas_vmr(l)
 
           if (need_psurf_jac) then
@@ -178,19 +180,19 @@ contains
                 p_fac_pert = (p_lower_pert - p(l-1)) / (p(l) - p(l-1))
              end if
              T_lower_pert = (1.0d0 - p_fac_pert) * T(l-1) + p_fac_pert * T(l)
-             H2O_lower_pert = (1.0d0 - p_fac_pert) * H2O(l-1) + p_fac_pert * H2O(l)
+             sh_lower_pert = (1.0d0 - p_fac_pert) * sh(l-1) + p_fac_pert * sh(l)
              VMR_lower_pert = (1.0d0 - p_fac_pert) * gas_vmr(l-1) + p_fac_pert * gas_vmr(l)
           end if
        else
           p_lower = p(l)
           T_lower = T(l)
-          H2O_lower = H2O(l)
+          sh_lower = sh(l)
           VMR_lower = gas_vmr(l)
        end if
 
        p_higher = p(l-1)
        T_higher = T(l-1)
-       H2O_higher = H2O(l-1)
+       sh_higher = sh(l-1)
        VMR_higher = gas_vmr(l-1)
 
        ! Should the perturbed surface pressure actually fall onto the next-higher level, we need to make
@@ -254,13 +256,16 @@ contains
              this_p_fac = ((this_p - p_higher) / (p_lower - p_higher))
           end if
           this_T = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
-          this_H2O = (1.0d0 - this_p_fac) * H2O_lower + this_p_fac * H2O_higher
+          this_sh = (1.0d0 - this_p_fac) * sh_lower + this_p_fac * sh_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
-          this_M = 1d3 * (((1 - this_H2O) * DRY_AIR_MASS) + (H2Om * this_H2O))
+          this_M = 1d3 * (((1 - this_sh) * DRY_AIR_MASS) + (H2Om * this_sh))
+
+          ! Gas CS routine works in H2O VMR rather than SH
+          this_H2O = (this_sh) / (1.0d0 - this_sh) * SH_H2O_CONV
 
           gas_tmp(:) = GK_weights_f(k) * (&
                get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:)) &
-               * this_VMR * (1.0d0 - this_H2O) &
+               * this_VMR * (1.0d0 - this_sh) &
                / (9.81 * this_M) * NA * 0.1d0)
 
           gas_tau(:,l-1) = gas_tau(:,l-1) + gas_tmp(:)
@@ -282,14 +287,16 @@ contains
              end if
 
              this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
-             this_H2O_pert = (1.0d0 - this_p_fac_pert) * H2O_lower_pert + this_p_fac_pert * H2O_higher
+             this_sh_pert = (1.0d0 - this_p_fac_pert) * sh_lower_pert + this_p_fac_pert * sh_higher
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
-             this_M_pert = 1.0d3 * (((1 - this_H2O_pert) * DRY_AIR_MASS) + (H2Om * this_H2O_pert))
+             this_M_pert = 1.0d3 * (((1 - this_sh_pert) * DRY_AIR_MASS) + (H2Om * this_sh_pert))
+
+             this_H2O_pert =  (this_sh_pert) / (1.0d0 - this_sh_pert) * SH_H2O_CONV
 
              ! This calculates the gas OD, as a result of a perturbed surface pressure
              gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&
                      get_CS_value_at(gas, wl, this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(:)) &
-                     * this_VMR_pert * (1.0d0 - this_H2O_pert) &
+                     * this_VMR_pert * (1.0d0 - this_sh_pert) &
                      / (9.81 * this_M_pert) * NA * 0.1d0)
 
           end if

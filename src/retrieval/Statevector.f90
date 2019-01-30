@@ -37,6 +37,9 @@ contains
     if (allocated(SV%sv_ap_cov)) deallocate(SV%sv_ap_cov)
     if (allocated(SV%sv_post_cov)) deallocate(SV%sv_post_cov)
 
+    if (allocated(SV%idx_gas)) deallocate(SV%idx_gas)
+    if (allocated(SV%gas_idx_lookup)) deallocate(SV%gas_idx_lookup)
+
     SV%num_albedo = -1
     SV%num_sif = -1
     SV%num_dispersion = -1

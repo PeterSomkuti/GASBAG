@@ -255,7 +255,8 @@ contains
     integer(hid_t) :: dset_id
     integer :: i, hdferr
 
-    call read_DP_hdf_dataset(MCS%input%l1b_file_id, "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
+    call read_DP_hdf_dataset(MCS%input%l1b_file_id, &
+         "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
 
     do i=1, size(noise)
        noise(i) = (MaxMS(band) / 100) * sqrt(abs(100 * radiance(i) / MaxMS(band)) * &

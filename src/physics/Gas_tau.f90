@@ -38,10 +38,11 @@ contains
     double precision :: this_H2O, this_H2O_pert
     double precision :: this_p, p_fac, this_p_fac, this_T, this_sh, this_VMR, this_M
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
-         sh_lower_pert, VMR_lower_pert, this_VMR_pert, this_M_pert, &
+         sh_lower_pert, VMR_lower_pert, VMR_sigma_pert, this_VMR_pert, this_M_pert, &
          this_T_pert, this_sh_pert
+    double precision :: C_tmp, dCS_dVMR_lower(size(wl)), p_lower_gas_pert, this_p_fac_lower
     double precision, allocatable :: gas_tmp(:)
-    double precision :: CS_value_grid(size(wl))
+    double precision :: this_CS_value(size(wl))
     integer :: wl_left_indices(size(wl))
 
     double precision :: GK_abscissae((N_sub-1)/2+1), GK_weights((N_sub-1)/2+1), G_weights((N_sub-1)/2+1)
@@ -93,59 +94,59 @@ contains
     ! Lastly, we just step forwards to see if our wavelength between the
     ! next spectroscopy wavelength grid points.
 
-!!$    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
-!!$         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
-!!$    gas_wl_start = gas%wavelength(1)
-!!$
-!!$    gas_idx_fg = -1
-!!$    wl_left_indices(:) = -1
-!!$
-!!$    do j=1, size(wl)
-!!$       ! If out of range, we don't want to use any value.
-!!$       if (wl(j) < gas%wavelength(1)) then
-!!$          cycle
-!!$       elseif (wl(j) > gas%wavelength(size(gas%wavelength))) then
-!!$          cycle
-!!$       end if
-!!$
-!!$       ! Take a rough first guess as to where the wavelength fits in. We are always(?)
-!!$       ! using monotontically increasing wavelength arrays, so whatever spectroscpoy index
-!!$       ! the last wavelength was assigned to, the next one must be at least that value + 1.
-!!$       ! So after the first one has been found (j=1), we can just use that last value as
-!!$       ! a first guess for the next one.
-!!$
-!!$       if (j > 1) then
-!!$          gas_idx_fg = wl_left_indices(j-1)
-!!$       else
-!!$          gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
-!!$       end if
-!!$
-!!$       ! Now this first guess really only works if the spectroscopy file
-!!$       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
-!!$       ! where both windows are saved in one file.
-!!$
-!!$       ! If our guess is bad, start at the beginning
-!!$       if (gas_idx_fg > size(gas%wavelength)) then
-!!$          gas_idx_fg = 1
-!!$       end if
-!!$
-!!$       do while (wl(j) < gas%wavelength(gas_idx_fg))
-!!$
-!!$          gas_idx_fg = gas_idx_fg - 1
-!!$       end do
-!!$
-!!$       do k=gas_idx_fg, size(gas%wavelength, 1)-1
-!!$          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
-!!$             wl_left_indices(j) = k
-!!$             exit
-!!$          end if
-!!$       end do
-!!$    end do
+    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
+         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
+    gas_wl_start = gas%wavelength(1)
+
+    gas_idx_fg = -1
+    wl_left_indices(:) = -1
+
+    do j=1, size(wl)
+       ! If out of range, we don't want to use any value.
+       if (wl(j) < gas%wavelength(1)) then
+          cycle
+       elseif (wl(j) > gas%wavelength(size(gas%wavelength))) then
+          cycle
+       end if
+
+       ! Take a rough first guess as to where the wavelength fits in. We are always(?)
+       ! using monotontically increasing wavelength arrays, so whatever spectroscpoy index
+       ! the last wavelength was assigned to, the next one must be at least that value + 1.
+       ! So after the first one has been found (j=1), we can just use that last value as
+       ! a first guess for the next one.
+
+       if (j > 1) then
+          gas_idx_fg = wl_left_indices(j-1)
+       else
+          gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
+       end if
+
+       ! Now this first guess really only works if the spectroscopy file
+       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
+       ! where both windows are saved in one file.
+
+       ! If our guess is bad, start at the beginning
+       if (gas_idx_fg > size(gas%wavelength)) then
+          gas_idx_fg = 1
+       end if
+
+       do while (wl(j) < gas%wavelength(gas_idx_fg))
+
+          gas_idx_fg = gas_idx_fg - 1
+       end do
+
+       do k=gas_idx_fg, size(gas%wavelength, 1)-1
+          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
+             wl_left_indices(j) = k
+             exit
+          end if
+       end do
+    end do
 
     ! A binary search seems to be similarly quick as the odd thing we're doing above..
-    do j=1, size(wl)
-       wl_left_indices(j) = searchsorted_dp(gas%wavelength(:), wl(j), .false.)
-    end do
+!!$    do j=1, size(wl)
+!!$       wl_left_indices(j) = searchsorted_dp(gas%wavelength(:), wl(j), .false.)
+!!$    end do
 
     ! Given the number of sublayers, we precompute the Gauss-Kronrod weights for
     ! the integral approximation.
@@ -255,23 +256,28 @@ contains
           else
              this_p_fac = ((this_p - p_higher) / (p_lower - p_higher))
           end if
+
           this_T = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
           this_sh = (1.0d0 - this_p_fac) * sh_lower + this_p_fac * sh_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
-          this_M = 1d3 * (((1 - this_sh) * DRY_AIR_MASS) + (H2Om * this_sh))
+          this_M = 1.0d3 * (((1.0d0 - this_sh) * DRY_AIR_MASS) + (H2Om * this_sh))
 
           ! Gas CS routine works in H2O VMR rather than SH
           this_H2O = (this_sh) / (1.0d0 - this_sh) * SH_H2O_CONV
 
-          gas_tmp(:) = GK_weights_f(k) * (&
-               get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:)) &
-               * this_VMR * (1.0d0 - this_sh) &
-               / (9.81 * this_M) * NA * 0.1d0)
+          this_CS_value =  get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:))
+          C_tmp = (1.0d0 - this_sh) / (9.81d0 * this_M) * NA * 0.1d0
 
+          ! Tau for this sublayer
+          gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
+
+          ! Add sublayer contribution to full layer tau
           gas_tau(:,l-1) = gas_tau(:,l-1) + gas_tmp(:)
 
           if (need_gas_jac) then
-             gas_tau_dvmr(:,l-1) = gas_tau_dvmr(:,l-1) + gas_tmp(:) / this_VMR
+             gas_tau_dvmr(:,l-1) = gas_tau_dvmr(:,l-1) + (&
+                  gas_tmp(:) / this_VMR * (1.0d0 - this_p_fac))
+
           end if
 
           ! The same is required in the case of surface pressure jacobians,
@@ -291,7 +297,7 @@ contains
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
              this_M_pert = 1.0d3 * (((1 - this_sh_pert) * DRY_AIR_MASS) + (H2Om * this_sh_pert))
 
-             this_H2O_pert =  (this_sh_pert) / (1.0d0 - this_sh_pert) * SH_H2O_CONV
+             this_H2O_pert = (this_sh_pert) / (1.0d0 - this_sh_pert) * SH_H2O_CONV
 
              ! This calculates the gas OD, as a result of a perturbed surface pressure
              gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&

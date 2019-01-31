@@ -266,7 +266,7 @@ contains
           this_H2O = (this_sh) / (1.0d0 - this_sh) * SH_H2O_CONV
 
           this_CS_value =  get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:))
-          C_tmp = (1.0d0 - this_sh) / (9.81d0 * this_M) * NA * 0.1d0
+          C_tmp = (1.0d0 - this_VMR) / (9.81d0 * this_M) * NA * 0.1d0
 
           ! Tau for this sublayer
           gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
@@ -301,8 +301,9 @@ contains
 
              ! This calculates the gas OD, as a result of a perturbed surface pressure
              gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&
-                     get_CS_value_at(gas, wl, this_p_pert, this_T_pert, this_H2O_pert, wl_left_indices(:)) &
-                     * this_VMR_pert * (1.0d0 - this_sh_pert) &
+                  get_CS_value_at(gas, wl, this_p_pert, this_T_pert, &
+                  this_H2O_pert, wl_left_indices(:)) &
+                     * this_VMR_pert * (1.0d0 - this_H2O_pert) &
                      / (9.81 * this_M_pert) * NA * 0.1d0)
 
           end if

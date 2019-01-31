@@ -457,7 +457,6 @@ contains
        call parse_and_initialize_SV(i_win, size(initial_atm%p), SV)
        call logger%info(fname, "Initialised SV structure")
 
-
        ! And now set up the result container with the appropriate sizes for arrays
        call create_result_container(results, num_frames, my_instrument%num_fp, size(SV%svap))
 
@@ -468,24 +467,25 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, 100 !num_frames
+       do i_fr=1, num_frames
           do i_fp=1, my_instrument%num_fp
 
-             !if (land_fraction(i_fp, i_fr) < 0.95) then
-             !   cycle
-             !end if
+             if (land_fraction(i_fp, i_fr) < 0.95) then
+                cycle
+             end if
 
              call cpu_time(cpu_time_start)
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
              call cpu_time(cpu_time_stop)
 
              retr_count = retr_count + 1
-             !mean_duration = ((mean_duration * retr_count) + (cpu_time_stop - cpu_time_start)) / (retr_count)
+             mean_duration = mean_duration * (retr_count)/(retr_count+1) + &
+                  (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
-             if (mod(retr_count, 1) == 0) then
+             if (mod(retr_count, 50) == 0) then
                 !mean_duration = (cpu_time_stop - cpu_time_start)
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
-                     "Frame/FP: ", i_fr, "/", i_fp, " - ", cpu_time_stop-cpu_time_start, ' - ', this_converged
+                     "Frame/FP: ", i_fr, "/", i_fp, " - ", mean_duration, ' - ', this_converged
                 call logger%debug(fname, trim(tmp_str))
                 !read(*,*)
              end if
@@ -902,7 +902,11 @@ contains
                 if (this_atm%sh(j) < 0.0d0) this_atm%sh(j) = 1.0d-10
              end do
 
-             !this_atm%sh = 0.0d0
+             do i=1, num_gases
+                if (MCS%window(i_win)%gases(i) == "H2O") then
+                   this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
+                end if
+             end do
           end if
        else
           ! Otherwise, calculate it from the state vector
@@ -1400,21 +1404,21 @@ contains
        end do
 
 
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i)
-       end do
-       close(funit)
-
-
-       write(*,*) "old, current and delta state vector, and errors"
-       write(*,*) "Iteration: ", iteration-1
-       do i=1, N_sv
-          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i)
+!!$       end do
+!!$       close(funit)
+!!$
+!!$
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$       write(*,*) "Iteration: ", iteration-1
+!!$       do i=1, N_sv
+!!$          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq
 
 
 
@@ -1451,7 +1455,7 @@ contains
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
           write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  results%chi2(i_fp, i_fr)
-          call logger%debug(fname, trim(tmp_str))
+          !call logger%debug(fname, trim(tmp_str))
 
           converged = .true.
 
@@ -1504,7 +1508,6 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-       read(*,*)
 
     end do
 

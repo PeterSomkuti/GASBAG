@@ -42,10 +42,10 @@ contains
        ! integer division does by default.
        m = (L + R) / 2
 
-       if ((x(m) < val) .and. (x(m+1) > val)) then
+       if ((x(m) <= val) .and. (x(m+1) >= val)) then
           ! Found!
           idx = m
-          if (.not. from_left) idx = m+1
+          if (.not. from_left) idx = idx+1
           return
        else if (x(m) < val) then
           L = m + 1
@@ -287,9 +287,8 @@ contains
 
        ! Find out, which index of the high-res input is closest to the
        ! detector pixel, and also which is the center pixel
-
        idx_hires_ILS_min = -1
-       !idx_hires_ILS_max = -1
+
 
        if (wl_input(1) > ILS_delta_min) then
           call logger%warning(fname, "ILS produdes out of lower wavelength range!")

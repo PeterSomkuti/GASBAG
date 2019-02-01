@@ -8,11 +8,12 @@ module gas_tau_mod
 contains
 
 
-  subroutine calculate_gas_tau(wl, gas_vmr, psurf, p, T, sh, &
+  subroutine calculate_gas_tau(pre_gridded, wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, need_gas_jac, gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
        success)
 
     implicit none
+    logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
     double precision, intent(in) :: wl(:) ! Wavelength array
     double precision, intent(in) :: gas_vmr(:) ! Gas volume mixing ratio
     double precision, intent(in) :: psurf ! Surface pressure
@@ -32,6 +33,8 @@ contains
     logical, intent(inout) :: success
 
 
+    character(len=999) :: tmp_str
+    character(len=*), parameter :: fname = "calculate_gas_tau"
     logical :: log_scaling
     double precision :: p_lower, p_higher, T_lower, T_higher, sh_lower, sh_higher
     double precision :: VMR_lower, VMR_higher
@@ -63,13 +66,14 @@ contains
     N_wl = size(wl)
 
     do j=1, N_lev
-       if (psurf > p(j)) then
+       if (psurf >= p(j)) then
           num_active_levels = j+1
        end if
     end do
 
     if (num_active_levels > N_lev) then
-       write(*,*) "Psurf too big."
+       write(tmp_str, '(A,F12.2,A,F12.2)') "Psurf: ", psurf, " larger than BOA level: ", p(N_lev)
+       call logger%error(fname, trim(tmp_str))
        success = .false.
        return
     end if
@@ -94,59 +98,69 @@ contains
     ! Lastly, we just step forwards to see if our wavelength between the
     ! next spectroscopy wavelength grid points.
 
-    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
-         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
-    gas_wl_start = gas%wavelength(1)
-
-    gas_idx_fg = -1
-    wl_left_indices(:) = -1
-
-    do j=1, size(wl)
-       ! If out of range, we don't want to use any value.
-       if (wl(j) < gas%wavelength(1)) then
-          cycle
-       elseif (wl(j) > gas%wavelength(size(gas%wavelength))) then
-          cycle
-       end if
-
-       ! Take a rough first guess as to where the wavelength fits in. We are always(?)
-       ! using monotontically increasing wavelength arrays, so whatever spectroscpoy index
-       ! the last wavelength was assigned to, the next one must be at least that value + 1.
-       ! So after the first one has been found (j=1), we can just use that last value as
-       ! a first guess for the next one.
-
-       if (j > 1) then
-          gas_idx_fg = wl_left_indices(j-1)
-       else
-          gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
-       end if
-
-       ! Now this first guess really only works if the spectroscopy file
-       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
-       ! where both windows are saved in one file.
-
-       ! If our guess is bad, start at the beginning
-       if (gas_idx_fg > size(gas%wavelength)) then
-          gas_idx_fg = 1
-       end if
-
-       do while (wl(j) < gas%wavelength(gas_idx_fg))
-
-          gas_idx_fg = gas_idx_fg - 1
-       end do
-
-       do k=gas_idx_fg, size(gas%wavelength, 1)-1
-          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
-             wl_left_indices(j) = k
-             exit
-          end if
-       end do
-    end do
-
-    ! A binary search seems to be similarly quick as the odd thing we're doing above..
+!!$    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
+!!$         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
+!!$    gas_wl_start = gas%wavelength(1)
+!!$
+!!$    gas_idx_fg = -1
+!!$    wl_left_indices(:) = -1
+!!$
 !!$    do j=1, size(wl)
-!!$       wl_left_indices(j) = searchsorted_dp(gas%wavelength(:), wl(j), .false.)
+!!$       ! If out of range, we don't want to use any value.
+!!$       if (wl(j) < gas%wavelength(1)) then
+!!$          cycle
+!!$       elseif (wl(j) > gas%wavelength(size(gas%wavelength))) then
+!!$          cycle
+!!$       end if
+!!$
+!!$       ! Take a rough first guess as to where the wavelength fits in. We are always(?)
+!!$       ! using monotontically increasing wavelength arrays, so whatever spectroscpoy index
+!!$       ! the last wavelength was assigned to, the next one must be at least that value + 1.
+!!$       ! So after the first one has been found (j=1), we can just use that last value as
+!!$       ! a first guess for the next one.
+!!$
+!!$       if (j > 1) then
+!!$          gas_idx_fg = wl_left_indices(j-1)
+!!$       else
+!!$          gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
+!!$       end if
+!!$
+!!$       ! Now this first guess really only works if the spectroscopy file
+!!$       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
+!!$       ! where both windows are saved in one file.
+!!$
+!!$       ! If our guess is bad, start at the beginning
+!!$       if (gas_idx_fg > size(gas%wavelength)) then
+!!$          gas_idx_fg = 1
+!!$       end if
+!!$
+!!$       do while (wl(j) < gas%wavelength(gas_idx_fg))
+!!$
+!!$          gas_idx_fg = gas_idx_fg - 1
+!!$       end do
+!!$
+!!$       do k=gas_idx_fg, size(gas%wavelength, 1)-1
+!!$          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
+!!$             wl_left_indices(j) = k
+!!$             exit
+!!$          end if
+!!$       end do
 !!$    end do
+
+
+    ! If we do not have pre-gridded spectroscopy, then we need to calculate
+    ! wavelength positions..
+    if (.not. pre_gridded) then
+       ! A binary search seems to be similarly quick as the odd thing we're doing above..
+       do j=1, size(wl)
+          wl_left_indices(j) = searchsorted_dp(gas%wavelength(:), wl(j), .true.)
+       end do
+    else
+       if (size(gas%wavelength) /= size(wl)) then
+          call logger%fatal(fname, "Spectroscopy wavelenght size not equal to hires grid!")
+          stop 1
+       end if
+    end if
 
     ! Given the number of sublayers, we precompute the Gauss-Kronrod weights for
     ! the integral approximation.
@@ -163,11 +177,13 @@ contains
           ! the level above (ideally). But this will extrapolate linearly
           ! anyway, which might cause some trouble.
           p_lower = psurf
+
           if (log_scaling) then
              p_fac = (log(p_lower) - log(p(l-1))) / (log(p(l)) - log(p(l-1)))
           else
              p_fac = (p_lower - p(l-1)) / (p(l) - p(l-1))
           end if
+
           T_lower = (1.0d0 - p_fac) * T(l-1) + p_fac * T(l)
           sh_lower = (1.0d0 - p_fac) * sh(l-1) + p_fac * sh(l)
           VMR_lower = (1.0d0 - p_fac) * gas_vmr(l-1) + p_fac * gas_vmr(l)
@@ -265,7 +281,8 @@ contains
           ! Gas CS routine works in H2O VMR rather than SH
           this_H2O = (this_sh) / (1.0d0 - this_sh) * SH_H2O_CONV
 
-          this_CS_value =  get_CS_value_at(gas, wl(:), this_p, this_T, this_H2O, wl_left_indices(:))
+          this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
+               this_T, this_H2O, wl_left_indices(:))
           C_tmp = (1.0d0 - this_VMR) / (9.81d0 * this_M) * NA * 0.1d0
 
           ! Tau for this sublayer
@@ -301,10 +318,10 @@ contains
 
              ! This calculates the gas OD, as a result of a perturbed surface pressure
              gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&
-                  get_CS_value_at(gas, wl, this_p_pert, this_T_pert, &
+                  get_CS_value_at(pre_gridded, gas, wl, this_p_pert, this_T_pert, &
                   this_H2O_pert, wl_left_indices(:)) &
-                     * this_VMR_pert * (1.0d0 - this_H2O_pert) &
-                     / (9.81 * this_M_pert) * NA * 0.1d0)
+                  * this_VMR_pert * (1.0d0 - this_H2O_pert) &
+                  / (9.81 * this_M_pert) * NA * 0.1d0)
 
           end if
        end do
@@ -316,20 +333,21 @@ contains
 
        if (need_psurf_jac .and. (l < num_active_levels)) then
           ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array, as the
-          ! surface pressure Jacobian merely affects the BOA layer ODs 
-          gas_tau_dpsurf(:,l-1) = 0.0d0 !gas_tau(:,l-1)
+          ! surface pressure Jacobian merely affects the BOA layer ODs
+          gas_tau_dpsurf(:,l-1) = 0.0d0
        end if
     end do
 
     success = .true.
 
- end subroutine calculate_gas_tau
+  end subroutine calculate_gas_tau
 
 
 
- pure function get_CS_value_at(gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+ pure function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
    implicit none
+   logical, intent(in) :: pre_gridded
    type(CS_gas), intent(in) :: gas
    double precision, intent(in) :: wl(:), p, T, H2O
    integer, intent(in) :: wl_left_idx(:)
@@ -354,7 +372,6 @@ contains
    ! comes with such a large overhead that I had to inline them explicitly. Maybe there's a way around
    ! it, but for now the performance increase is totally worth it!
 
-
    ! Get the pressure indices
    if (p <= gas%p(1)) then
       idx_l_p = 1
@@ -370,11 +387,11 @@ contains
    end if
    idx_r_p = idx_l_p + 1
 
-
    ! Get the temperature indices, which depend on P - so we have two
    ! indices for the temperature dimension. One set of T indices (idx_l(l,r)_T)
    ! corresponds to the left index of pressure (idx_l_p), the other set
    ! (idx_r(l,r)_T) corresponds to the right index of pressure (idx_r_p).
+
    if (T <= gas%T(1, idx_l_p)) then
       idx_ll_T = 1
    else if (T >= gas%T(size(gas%T, 1), idx_l_p)) then
@@ -447,41 +464,57 @@ contains
 
    do i=1, size(wl)
 
-      if (wl_left_idx(i) == -1) then
-         CS_value(i) = 0.0d0
-         cycle
+      if (.not. pre_gridded) then
+         wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
+              (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
+
+         if (wl_left_idx(i) == -1) then
+            CS_value(i) = 0.0d0
+            cycle
+         end if
+
+         idx_l_wl = wl_left_idx(i)
+         idx_r_wl = idx_l_wl + 1
+
+         ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
+         C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_ll_T, idx_l_p) * wl_d
+
+         C3(1,0,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_ll_T, idx_l_p) * wl_d
+
+         C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
+
+         C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
+ 
+         C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
+
+         C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
+
+         C3(1,0,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rl_T, idx_r_p) * wl_d
+
+         C3(1,1,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
+              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
+
+      else
+
+         C3(0,0,0) = gas%cross_section(i, idx_l_H2O, idx_ll_T, idx_l_p)
+         C3(1,0,0) = gas%cross_section(i, idx_r_H2O, idx_ll_T, idx_l_p)
+         C3(0,1,0) = gas%cross_section(i, idx_l_H2O, idx_lr_T, idx_l_p)
+         C3(0,0,1) = gas%cross_section(i, idx_l_H2O, idx_rl_T, idx_r_p)
+         C3(1,1,0) = gas%cross_section(i, idx_r_H2O, idx_lr_T, idx_l_p)
+         C3(0,1,1) = gas%cross_section(i, idx_l_H2O, idx_rr_T, idx_r_p)
+         C3(1,0,1) = gas%cross_section(i, idx_r_H2O, idx_rl_T, idx_r_p)
+         C3(1,1,1) = gas%cross_section(i, idx_r_H2O, idx_rr_T, idx_r_p)
+
       end if
 
-      idx_l_wl = wl_left_idx(i)
-      idx_r_wl = idx_l_wl + 1
 
-      wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
-           (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
-
-      ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
-      C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_ll_T, idx_l_p) * wl_d
-
-      C3(1,0,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_ll_T, idx_l_p) * wl_d
-
-      C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
-
-      C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
-
-      C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
-
-      C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
-
-      C3(1,0,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rl_T, idx_r_p) * wl_d
-
-      C3(1,1,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
-           + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
 
       ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
       C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d

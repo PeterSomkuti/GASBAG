@@ -83,20 +83,14 @@ contains
 
     ! We hard-code the dimensions of the OCO-2 dispersion coefficients here,
     ! we do not really expect them to change do we?
-    integer(hsize_t) :: disp_shape(3) = [6,8,3]
+    integer(hsize_t), allocatable :: disp_shape(:)
     character(len=*), parameter :: fname = "read_l1b_dispersion(oco2)"
     character(len=*), parameter :: dset_name = "/InstrumentHeader/dispersion_coef_samp"
     integer :: hdferr
     integer(hid_t) :: dset_id
 
     ! Coeffs, footprints, bands
-    allocate(dispersion_coeffs(6,8,3))
-
-    call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening dispersion coeffs at: " // trim(dset_name))
-
-    call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, dispersion_coeffs, disp_shape, hdferr)
-    call check_hdf_error(hdferr, fname, "Error reading dispersion coeffs at: " // trim(dset_name))
+    call read_DP_hdf_dataset(l1b_file_id, dset_name, dispersion_coeffs, disp_shape)
 
   end subroutine read_l1b_dispersion
 

@@ -1,5 +1,7 @@
 module physical_model_mod
 
+  use ISO_FORTRAN_ENV
+
   use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
   use instruments, only: generic_instrument
   use oco2_mod
@@ -14,6 +16,7 @@ module physical_model_mod
   use radiance_mod
   use absco_mod
   use gas_tau_mod
+  use spectroscopy_utils_mod
 
   use mod_datetime
 
@@ -194,8 +197,8 @@ contains
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
        allocate(dispersion(1016,num_fp,3))
 
-       do band=1,3
-          do i_fp=1,num_fp
+       do band=1, 3
+          do i_fp=1, num_fp
              call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, band), &
                   dispersion(:, i_fp, band), band, i_fp)
           end do
@@ -255,6 +258,7 @@ contains
           ! with the contents of said file. It is cross-referenced against the gases in the
           ! list of gases in this window.
 
+          call logger%debug(fname, "Looking into atmosphere file.")
           call read_atmosphere_file(&
                MCS%window(i_win)%atmosphere_file%chars(), &
                MCS%window(i_win)%gas_index, &
@@ -308,7 +312,6 @@ contains
           allocate(ils_hires_avg_relative_response(num_ils_hires, &
                size(ils_relative_response, 3), &
                size(ils_relative_response, 4)))
-
        end if
 
 
@@ -330,7 +333,7 @@ contains
              ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
 
              ! Interpolate the ILS onto the high-resolution grid
-             call pwl_value_1d(&
+             call pwl_value_1d( &
                   size(ils_delta_lambda, 1), &
                   ils_delta_lambda(:, i_pix, i_fp, band), &
                   ils_relative_response(:, i_pix, i_fp, band), &
@@ -372,6 +375,21 @@ contains
 
        end do
        call logger%debug(fname, "Done re-gridding ILS.")
+
+
+       ! For a faster gas-OD calculation, we re-grid the spectroscopy data
+       ! as well, such that we do not have to interpolate in the wavelength
+       ! dimension every single time.
+
+       if (MCS%window(i_win)%num_gases > 0) then
+          ! Read in the spectroscopy data, depending on the type
+          do i=1, size(MCS%window(i_win)%gases)
+             j = MCS%window(i_win)%gas_index(i)
+
+             call regrid_spectroscopy(MCS%gas(j), hires_grid)
+
+          end do
+       end if
 
 
        ! Read in the solar model - we do this for every band, the reason being
@@ -437,7 +455,6 @@ contains
        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
-
        ! Set up state vector structure here
 
        ! We can do this once for every window, and simply clear the contents
@@ -472,7 +489,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, 100 !num_frames
+       do i_fr=1, num_frames
           do i_fp=1, num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -538,19 +555,22 @@ contains
             results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
        out_dims3d = shape(final_radiance)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/modelled_radiance_" // MCS%window(i_win)%name
+       write(tmp_str, '(A,A)') "/physical_retrieval_results/modelled_radiance_" &
+            // MCS%window(i_win)%name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             final_radiance, out_dims3d)
 
        out_dims3d = shape(measured_radiance)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/measured_radiance_" // MCS%window(i_win)%name
+       write(tmp_str, '(A,A)') "/physical_retrieval_results/measured_radiance_" &
+            // MCS%window(i_win)%name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             measured_radiance, out_dims3d)
 
        out_dims3d = shape(noise_radiance)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/noise_radiance_" // MCS%window(i_win)%name
+       write(tmp_str, '(A,A)') "/physical_retrieval_results/noise_radiance_" &
+            // MCS%window(i_win)%name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             noise_radiance, out_dims3d)
@@ -604,7 +624,7 @@ contains
          noise_work
 
     ! The current atmosphere, dependent on surface pressure. This can change
-    type(atmosphere) :: this_atm 
+    type(atmosphere) :: this_atm
 
     !! Dispersion indices
     double precision :: high_res_wl_min, high_res_wl_max
@@ -1039,6 +1059,7 @@ contains
              end if
 
              call calculate_gas_tau( &
+                  .true., & ! We are using pre-gridded spectroscopy!
                   this_solar(:,1), &
                   this_atm%gas_vmr(:,j) * gas_scaling_factor, &
                   psurf, &
@@ -1125,7 +1146,7 @@ contains
                       write(*,*) "profile jac ", i, "at position", SV%idx_gas(i,j)
                       K_hi(:, SV%idx_gas(i,j)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
                            * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-                           * gas_tau_dvmr(:,j,SV%gas_idx_lookup(i)) 
+                           * gas_tau_dvmr(:,j,SV%gas_idx_lookup(i))
 
                    end if
                 end do
@@ -1511,7 +1532,7 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-
+       !read(*,*)
     end do
 
   end function physical_FM
@@ -1591,6 +1612,8 @@ contains
     if (.not. file_exist) then
        call logger%fatal(fname, "Atmosphere file does not exist: " // filename)
        stop 1
+    else
+       call logger%debug(fname, "File does exist.")
     end if
 
     ! First pass: we scan the file to see how many levels our atmosphere has
@@ -1602,9 +1625,11 @@ contains
     nonempty_line_count = 0
     file_start = -1
 
+    ! Loop through the file until we have reached EOF
     do
        read(funit, '(A)', iostat=iostat) dummy
-       if (iostat < 0) then
+
+       if (iostat == iostat_end) then
           ! End of file?
           exit
        end if
@@ -1630,19 +1655,18 @@ contains
           end if
        end if
 
-
-
     end do
-    close(funit)
 
+    !close(funit)
+    !open(newunit=funit, file=filename, iostat=iostat, action='read', status='old')
 
-    open(newunit=funit, file=filename, iostat=iostat, action='read', status='old')
+    ! Go back to the top of the file.
     rewind(unit=funit, iostat=iostat)
 
     line_count = 0
-
     do
        read(funit, '(A)', iostat=iostat) dummy
+
        line_count = line_count + 1
 
        if (line_count < file_start) cycle
@@ -1772,6 +1796,8 @@ contains
        if (line_count == (file_start + level_count)) exit
 
     end do
+
+    close(funit)
 
   end subroutine read_atmosphere_file
 

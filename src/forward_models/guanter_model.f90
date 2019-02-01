@@ -60,7 +60,7 @@ contains
 
 
         integer :: i_fr, i_fp, i_win ! Indices for frames, footprints, microwindows
-        integer :: num_frames, num_total_soundings, cnt, band, fp
+        integer :: num_frames, num_fp, num_total_soundings, cnt, band, fp
 
         character(len=999) :: dset_name
         integer(hid_t) :: dset_id, sif_result_gid
@@ -139,20 +139,21 @@ contains
                 ! Read dispersion coefficients and create dispersion array
                 call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
 
-                allocate(dispersion(1016,8,3))
+                ! Grab the SNR coefficients for noise calculations
+                call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
+                ! How many frames do we have in this file again?
+                call my_instrument%read_num_frames_and_fp(l1b_file_id, num_frames, num_fp)
+                ! Read in the sounding id's
+                call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
 
+                allocate(dispersion(1016,8,3))
                 do band=1,3
-                    do fp=1,8
+                    do fp=1, num_fp
                         call my_instrument%calculate_dispersion(dispersion_coefs(:,fp,band), dispersion(:,fp,band), band, fp)
                     end do
                 end do
 
-                ! Grab the SNR coefficients for noise calculations
-                call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-                ! How many frames do we have in this file again?
-                call my_instrument%read_num_frames(l1b_file_id, num_frames)
-                ! Read in the sounding id's
-                call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
+
 
         end select
 

@@ -410,7 +410,7 @@ contains
        sv%idx_gas(:,:) = -1
        sv%gas_idx_lookup(:) = -1
 
-       write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", cnt
+       write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", count_gas
        call logger%info(fname, trim(tmp_str))
 
        cnt = 1

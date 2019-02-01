@@ -138,7 +138,7 @@ contains
     logical :: gas_found, all_gases_found
     integer :: absco_dims
 
-    integer :: num_frames
+    integer :: num_frames, num_fp
     integer :: i_fp, i_fr, i_pix, i_win, band
     integer :: i, j, retr_count
     logical :: this_converged
@@ -161,43 +161,48 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
 
+       ! How many frames do we have in this file again?
+       call my_instrument%read_num_frames_and_fp(l1b_file_id, num_frames, num_fp)
+
        !! Get the necesary MET data profiles. This probably needs expanding for
        !! other instrument types / file structures. (will Geocarb be different?)
        dset_name = "/Meteorology/vector_pressure_levels_met"
+       dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
        call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
        call logger%trivia(fname, "Finished reading in pressure levels.")
 
        dset_name = "/Meteorology/temperature_profile_met"
+       dset_name = "/ECMWF/temperature_profile_ecmwf"
        call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
        call logger%trivia(fname, "Finished reading in temperature profiles.")
 
        dset_name = "/Meteorology/specific_humidity_profile_met"
+       dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
        call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
        call logger%trivia(fname, "Finished reading in specific humidity profiles.")
 
        dset_name = "/Meteorology/surface_pressure_met"
+       dset_name = "/ECMWF/surface_pressure_ecmwf"
        call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
        call logger%trivia(fname, "Finished reading in surface pressure.")
 
        dset_name = "/SoundingGeometry/sounding_land_fraction"
-       call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
-       call logger%trivia(fname, "Finished reading in land fraction.")
+       !call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
+       !call logger%trivia(fname, "Finished reading in land fraction.")
 
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-       allocate(dispersion(1016,8,3))
+       allocate(dispersion(1016,num_fp,3))
 
        do band=1,3
-          do i_fp=1,8
-             call my_instrument%calculate_dispersion(dispersion_coefs(:,i_fp,band), &
-                  dispersion(:,i_fp,band), band, i_fp)
+          do i_fp=1,num_fp
+             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, band), &
+                  dispersion(:, i_fp, band), band, i_fp)
           end do
        end do
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-       ! How many frames do we have in this file again?
-       call my_instrument%read_num_frames(l1b_file_id, num_frames)
        ! Read in the sounding id's
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
        ! Read the time strings
@@ -207,7 +212,7 @@ contains
             ils_relative_response)
 
        ! Read in bad sample list
-       call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
+       !call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
 
     end select
 
@@ -275,7 +280,7 @@ contains
 
        ! This is the amount by which we have to pad the hi-resolution grid in order to
        ! allow for ILS protrusion. (and add small percentage to be on the safe side)
-       hires_pad = (ils_hires_max_wl - ils_hires_min_wl) * 1.5d0
+       hires_pad = (ils_hires_max_wl - ils_hires_min_wl) * 2.0d0
 
        ! Grab the desired high-resolution wavelength grid spacing
        hires_spacing = MCS%window(i_win)%wl_spacing
@@ -319,7 +324,7 @@ contains
 
        call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
 
-       do i_fp=1, my_instrument%num_fp
+       do i_fp=1, num_fp
           do i_pix=1, size(dispersion, 1)
 
              ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
@@ -410,18 +415,18 @@ contains
                relative_solar_velocity)
 
           ! Read in Spike filter data
-          call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+          !call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
        end select
 
        ! Allocate containers to hold the retrieval results
-       allocate(retrieved_SIF_abs(my_instrument%num_fp, num_frames))
-       allocate(retrieved_SIF_rel(my_instrument%num_fp, num_frames))
-       allocate(num_iterations(my_instrument%num_fp, num_frames))
-       allocate(chi2(my_instrument%num_fp, num_frames))
+       allocate(retrieved_SIF_abs(num_fp, num_frames))
+       allocate(retrieved_SIF_rel(num_fp, num_frames))
+       allocate(num_iterations(num_fp, num_frames))
+       allocate(chi2(num_fp, num_frames))
 
-       allocate(final_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
-       allocate(measured_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
-       allocate(noise_radiance(size(dispersion, 1), my_instrument%num_fp, num_frames))
+       allocate(final_radiance(size(dispersion, 1), num_fp, num_frames))
+       allocate(measured_radiance(size(dispersion, 1), num_fp, num_frames))
+       allocate(noise_radiance(size(dispersion, 1), num_fp, num_frames))
 
        num_iterations = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -458,7 +463,7 @@ contains
        call logger%info(fname, "Initialised SV structure")
 
        ! And now set up the result container with the appropriate sizes for arrays
-       call create_result_container(results, num_frames, my_instrument%num_fp, size(SV%svap))
+       call create_result_container(results, num_frames, num_fp, size(SV%svap))
 
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, SV, i_win)
@@ -467,12 +472,12 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
-          do i_fp=1, my_instrument%num_fp
+       do i_fr=1, 100 !num_frames
+          do i_fp=1, num_fp
 
-             if (land_fraction(i_fp, i_fr) < 0.95) then
-                cycle
-             end if
+             !if (land_fraction(i_fp, i_fr) < 0.95) then
+             !   cycle
+             !end if
 
              call cpu_time(cpu_time_start)
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
@@ -499,7 +504,7 @@ contains
 
 
 
-       out_dims2d(1) = my_instrument%num_fp
+       out_dims2d(1) = num_fp
        out_dims2d(2) = num_frames
 
        ! Save the retrieved state vectors
@@ -531,8 +536,6 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
-
-
 
        out_dims3d = shape(final_radiance)
        write(tmp_str, '(A,A)') "/physical_retrieval_results/modelled_radiance_" // MCS%window(i_win)%name
@@ -1193,11 +1196,11 @@ contains
           ! save otherwise good spectra with just a few distorted
           ! radiance values.
 
-          do i=1, N_spec
-             if (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) then
-                noise_work(i) = noise_work(i) * 10000.0d0
-             end if
-          end do
+!!$          do i=1, N_spec
+!!$             if (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) then
+!!$                noise_work(i) = noise_work(i) * 10000.0d0
+!!$             end if
+!!$          end do
 
        end select
 

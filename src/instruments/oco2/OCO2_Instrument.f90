@@ -22,7 +22,7 @@ module oco2_mod
      procedure, nopass :: scan_l1b_file
      procedure, nopass :: read_l1b_dispersion
      procedure, nopass :: read_l1b_snr_coef
-     procedure, nopass :: read_num_frames
+     procedure, nopass :: read_num_frames_and_fp
      procedure, nopass :: calculate_dispersion
      procedure, nopass :: read_one_spectrum
      procedure, nopass :: calculate_noise
@@ -105,28 +105,22 @@ contains
     integer(hid_t), intent(in) :: l1b_file_id
     double precision, allocatable, intent(out) :: snr_coefs(:,:,:,:)
 
-    integer(hsize_t) :: snr_shape(4) = [2,1016,8,3]
+    integer(hsize_t), allocatable :: snr_shape(:)
     character(len=*), parameter :: fname = "read_l1b_snr_coefs(oco2)"
     character(len=*), parameter :: dset_name = "/InstrumentHeader/snr_coef"
     integer :: hdferr
     integer(hid_t) :: dset_id
 
     ! coefficients, spectral indices, footprints, bands
-    allocate(snr_coefs(2,1016,8,3))
-
-    call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening SNR coeffs at: " // trim(dset_name))
-
-    call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, snr_coefs, snr_shape, hdferr)
-    call check_hdf_error(hdferr, fname, "Error reading SNR coeffs at: " // trim(dset_name))
+    call read_DP_hdf_dataset(l1b_file_id, dset_name, snr_coefs, snr_shape)
 
   end subroutine read_l1b_snr_coef
 
 
-  subroutine read_num_frames(l1b_file_id, num_frames)
+  subroutine read_num_frames_and_fp(l1b_file_id, num_frames, num_fp)
 
     integer(hid_t), intent(in) :: l1b_file_id
-    integer, intent(out) :: num_frames
+    integer, intent(out) :: num_frames, num_fp
     integer, dimension(1) :: tmp_num_frames
 
     integer(hid_t) :: dset_id
@@ -138,9 +132,10 @@ contains
     call get_HDF5_dset_dims(l1b_file_id, trim(dset_name), num_frames_shape)
     call check_hdf_error(hdferr, fname, "Error reading data set dimesions at: " // trim(dset_name))
 
+    num_fp = num_frames_shape(1)
     num_frames = num_frames_shape(2)
 
-  end subroutine read_num_frames
+  end subroutine read_num_frames_and_fp
 
   subroutine calculate_dispersion(disp_coef, dispersion, band, fp)
 
@@ -445,8 +440,11 @@ contains
     allocate(altitude(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
     altitude(:,:) = tmp_array(band,:,:)
 
-    call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_relative_velocity", rel_vel, dset_dims)
-    call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_solar_relative_velocity", rel_solar_vel, dset_dims)
+    allocate(rel_vel(dset_dims(2), dset_dims(3)))
+    allocate(rel_solar_vel(dset_dims(2), dset_dims(3)))
+
+    !call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_relative_velocity", rel_vel, dset_dims)
+    !call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_solar_relative_velocity", rel_solar_vel, dset_dims)
 
   end subroutine read_sounding_location
 

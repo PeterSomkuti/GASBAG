@@ -83,8 +83,11 @@ contains
     gas%wavelength = 1.0d4 / gas%wavelength
     ! We also have to re-arrange the arrays
     N_wl = size(gas%wavelength)
+
+    call logger%debug(fname, "Re-arranging spectroscopy arrays.")
     gas%wavelength(:) = gas%wavelength(N_wl:1:-1)
     gas%cross_section(:,:,:,:) = gas%cross_section(N_wl:1:-1,:,:,:)
+    call logger%debug(fname, "..done!")
 
 
     ! Now if ABSCO is 4-dimensional, we also need the broadener gas data

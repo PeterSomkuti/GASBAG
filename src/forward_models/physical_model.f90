@@ -2,14 +2,14 @@ module physical_model_mod
 
   use ISO_FORTRAN_ENV
 
-  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
-  use instruments, only: generic_instrument
-  use oco2_mod
   use logger_mod, only: logger => master_logger
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
   use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
+  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
+  use instruments, only: generic_instrument
+  use oco2_mod
   use solar_model_mod
   use math_utils_mod
   use statevector_mod
@@ -27,7 +27,7 @@ module physical_model_mod
   private
 
   ! A simple structure to keep the atmosphere data nice
-  ! and tidy - one per sounding.
+  ! and tidy.
   type atmosphere
      ! The name(s) of the gas(es)
      type(string), allocatable :: gas_names(:)
@@ -45,6 +45,7 @@ module physical_model_mod
   type result_container
      type(string), allocatable :: sv_names(:)
      double precision, allocatable :: sv_retrieved(:,:,:), sv_prior(:,:,:)
+     double precision, allocatable :: xgas(:,:,:)
      double precision, allocatable, dimension(:,:) :: &
           chi2, residual_rms, dsigma_sq
      integer, allocatable, dimension(:,:) :: num_iterations
@@ -480,7 +481,7 @@ contains
        call logger%info(fname, "Initialised SV structure")
 
        ! And now set up the result container with the appropriate sizes for arrays
-       call create_result_container(results, num_frames, num_fp, size(SV%svap))
+       call create_result_container(results, num_frames, num_fp, size(SV%svap), SV%num_gas)
 
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, SV, i_win)
@@ -489,7 +490,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
+       do i_fr=1, 300 !num_frames
           do i_fp=1, num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -532,6 +533,16 @@ contains
                trim(tmp_str), &
                results%sv_retrieved(:,:,i), out_dims2d, -9999.99d0)
        end do
+
+       ! Save XGAS for each gas
+       do i=1, SV%num_gas
+          write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
+               // MCS%window(i_win)%name // "_X" // MCS%window(i_win)%gases(SV%gas_idx_lookup(i))
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               results%xgas(:,:,i), out_dims2d, -9999.99d0)
+       end do
+
 
        ! Save number of iterations
        write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
@@ -651,9 +662,9 @@ contains
     !! Atmosphere
     integer :: num_gases, num_levels, num_active_levels
     double precision, allocatable :: gas_tau(:,:,:), gas_tau_dvmr(:,:,:), &
-         gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:), gas_tau_dpsurf2(:,:,:)
+         gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:), gas_tau_dsh(:,:,:)
     double precision :: gas_scaling_factor
-
+    logical :: is_H2O
     !! Albedo
     double precision :: albedo_apriori
     double precision, allocatable :: albedo(:)
@@ -680,6 +691,8 @@ contains
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:), tmp_m3(:,:)
     double precision, allocatable :: tmp_v1(:), tmp_v2(:), old_sv(:)
+    ! Pressure weighting function
+    double precision, allocatable :: pwgts(:)
     ! Levenberg-Marquart gamma
     double precision :: lm_gamma
     ! Iteration-related
@@ -693,7 +706,7 @@ contains
     character(len=999) :: tmp_str
     character(len=*), parameter :: fname = "physical_FM"
     integer :: N_spec, N_spec_hi, N_spec_tmp, N_sv
-    integer :: i, j
+    integer :: i, j, l
     integer :: funit
     double precision :: cpu_start, cpu_end
     logical :: ILS_success
@@ -714,7 +727,7 @@ contains
     type is (oco2_instrument)
        call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
     end select
-    doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0
+    doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
 
     ! Use user-supplied value for convergence critertion
@@ -747,9 +760,9 @@ contains
 
     ! Allocate the micro-window bounded solar and radiance arrays
     allocate(this_solar(N_hires, 2))
+
     ! If solar doppler-shift is needed, calculate the distance and relative
     ! velocity between point of measurement and the (fixed) sun
-
     call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
     call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
@@ -786,13 +799,14 @@ contains
     N_sv = size(SV%svap)
     N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
-    lm_gamma = 5.0d0
+    lm_gamma = 10.0d0
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change?
     allocate(K_hi(N_spec_hi, N_sv))
     K_hi(:,:) = 0.0d0
 
+    allocate(Sa(N_sv, N_sv))
     allocate(Sa_inv(N_sv, N_sv))
     allocate(Shat_inv(N_sv, N_sv))
     allocate(Shat(N_sv, N_sv))
@@ -801,14 +815,65 @@ contains
 
     ! Inverse prior covariance
     Sa_inv(:,:) = 0.0d0
+    Sa(:,:) = 0.0d0
+
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
-          Sa_inv(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0
+          if (i==1) then
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0
+          else
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0
+          end if
        end do
     end if
 
     if (SV%num_sif > 0) then
-       Sa_inv(SV%idx_sif(1), SV%idx_sif(1)) = 1.0d0 / (1.0d18 ** 2)
+       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (1.0d20 ** 2)
+    end if
+
+    if (SV%num_dispersion > 0) then
+       do i=1, SV%num_dispersion
+          Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = MCS%window(i_win)%dispersion_pert(i)**2
+       end do
+    end if
+
+    do i=1, SV%num_gas
+       if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = 1.0d0
+       end if
+
+       if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
+
+          if (MCS%window(i_win)%gases(SV%gas_idx_lookup(i)) == "H2O") then
+
+             open(newunit=funit, file="h2o_covariance.dat", status='old')
+             do j=1, size(initial_atm%p)
+                read(funit, *) Sa(SV%idx_gas(i,j), SV%idx_gas(i,:))
+             end do
+             close(funit)
+
+          else
+
+             do j=1, size(SV%idx_gas(i,:))
+                Sa(SV%idx_gas(i,j), SV%idx_gas(i,j)) = (20.0d-6) ** 2
+             end do
+
+             do j=SV%idx_gas(i,1), SV%idx_gas(i, size(SV%idx_gas(i,:)))
+                do l=SV%idx_gas(i,1), SV%idx_gas(i, size(SV%idx_gas(i,:)))
+                   if (j == l) cycle
+                   Sa(j,l) = 0.0d0 ! sqrt(Sa(j,j)) * sqrt(Sa(l,l)) * 0.01d0
+                end do
+             end do
+
+          end if
+
+       end if
+    end do
+
+    call invert_matrix(Sa, Sa_inv, success_inv_mat)
+    if (.not. success_inv_mat) then
+       call logger%error(fname, "Failed to invert Sa")
+       return
     end if
 
     ! Populate state vector priors (this should also be read from config)
@@ -828,7 +893,6 @@ contains
        write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
        call logger%warning(fname, trim(tmp_str))
     end if
-
 
     ! TODO: What do we do in case of invalid albedo (<0, >1)?
 
@@ -871,10 +935,6 @@ contains
 
        end do
     end if
-
-    do i=1, size(SV%svap)
-    !   write(*,*) i, SV%svap(i)
-    end do
 
     ! Retrival iteration loop
     iteration = 1
@@ -927,6 +987,9 @@ contains
 
              do i=1, num_gases
                 if (MCS%window(i_win)%gases(i) == "H2O") then
+                   ! If H2O is needed to be retrieved, take it from the MET atmosphere
+                   ! specific humidty directly, rather than the H2O column of the
+                   ! atmosphere text file.
                    this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
                 end if
              end do
@@ -965,7 +1028,7 @@ contains
              end if
 
              ! The number of active levels has to be inferred for every
-             ! iteration if we are retrieving surface pressure 
+             ! iteration if we are retrieving surface pressure
              do j=1, num_levels
                 if (this_psurf > this_atm%p(j)) then
                    num_active_levels = j+1
@@ -974,9 +1037,21 @@ contains
 
           end if
 
-          !this_atm%gas_vmr(:,2) = maxval(this_atm%gas_vmr(:,2))
+          do i=1, num_gases
+             ! Copy gas VMRs from SV if appropriate
 
-          !this_atm%sh = this_atm%gas_vmr(:,2) / ((28.96d0 / 18.01528d0) + this_atm%gas_vmr(:,2))
+             do j=1, SV%num_gas
+                if (SV%gas_idx_lookup(j) == i) then
+                   if (MCS%window(i_win)%gas_retrieve_profile(j)) then
+                      this_atm%gas_vmr(:,i) = SV%svsv(SV%idx_gas(j,:))
+                   end if
+                end if
+             end do
+
+             if (MCS%window(i_win)%gases(i) == "H2O") then
+                this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
+             end if
+          end do
 
 
        endif
@@ -997,11 +1072,6 @@ contains
        !write(*,*) num_active_levels
        !write(*,*) this_atm%p
 
-!!$       do j=1, num_active_levels
-!!$          write(*,*) j, this_atm%p(j), this_atm%T(j), this_atm%sh(j), &
-!!$               (this_atm%gas_vmr(j,i), i=1, size(this_atm%gas_vmr, 2))
-!!$       end do
-
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
@@ -1010,8 +1080,8 @@ contains
 
           allocate(gas_tau(size(this_solar, 1), num_levels-1, num_gases))
           allocate(gas_tau_dpsurf(size(this_solar, 1), num_levels-1, num_gases))
-          allocate(gas_tau_dpsurf2(size(this_solar, 1), num_levels-1, num_gases))
           allocate(gas_tau_dvmr(size(this_solar, 1), num_levels, num_gases))
+          allocate(gas_tau_dsh(size(this_solar, 1), num_levels-1, num_gases))
           allocate(gas_tau_pert(size(this_solar, 1), num_levels-1, num_gases))
 
           ! If we retrieve surface pressure, grab it from the state vector,
@@ -1058,8 +1128,15 @@ contains
                 gas_scaling_factor = 1.0d0
              end if
 
+             if (MCS%window(i_win)%gases(j) == "H2O") then
+                is_H2O = .true.
+             else
+                is_H2O = .false.
+             end if
+
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
+                  is_H2O, & ! Is this gas H2O?
                   this_solar(:,1), &
                   this_atm%gas_vmr(:,j) * gas_scaling_factor, &
                   psurf, &
@@ -1069,13 +1146,15 @@ contains
                   MCS%gas(MCS%window(i_win)%gas_index(j)), &
                   MCS%window(i_win)%N_sublayers, &
                   do_psurf_jac, &
-                  do_gas_jac, & ! In case we ever want per-layer gas jacobians
+                  do_gas_jac, &
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j), &
                   gas_tau_dvmr(:,:,j), &
+                  gas_tau_dsh(:,:,j), &
                   success_gas)
 
-             gas_tau_dvmr(:,num_active_levels,j) = gas_tau_dvmr(:,num_active_levels-1,j)
+
+             !gas_tau_dvmr(:,num_active_levels,j) = gas_tau_dvmr(:,num_active_levels-1,j)
 
              if (.not. success_gas) then
                 call logger%error(fname, "Error calculating gas optical depths.")
@@ -1083,12 +1162,14 @@ contains
              end if
           end do
 
-!!$          write(tmp_str,'(A,G0.1,A)') "gas_od_iter", iteration, ".dat"
-!!$          open(newunit=funit, file=trim(tmp_str))
-!!$          do j=1, size(gas_tau, 1)
-!!$             write(funit, *) (gas_tau(j,num_active_levels-1,i), i=1,size(gas_tau,3))
+!!$          do i=1, num_active_levels
+!!$             write(tmp_str,'(A,G0.1,A,G0.1,A)') "gas_od_iter", iteration, "layer", i, ".dat"
+!!$             open(newunit=funit, file=trim(tmp_str))
+!!$             do j=1, size(gas_tau, 1)
+!!$                write(funit, *) (gas_tau(j,i,l), l=1,size(gas_tau,3))
+!!$             end do
+!!$             close(funit)
 !!$          end do
-!!$          close(funit)
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_dvmr_iter", iteration, ".dat"
 !!$          open(newunit=funit, file=trim(tmp_str))
@@ -1098,7 +1179,6 @@ contains
 !!$          close(funit)
 
        end if
-
 
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'
@@ -1122,9 +1202,9 @@ contains
        if (SV%num_psurf == 1) then
           ! This equation requires the TOA radiance before SIF is added, so if we have
           ! SIF in it, take it out beforehand.
-             K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance) &
-                  * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-                  * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
+          K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance) &
+               * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
        end if
 
 
@@ -1137,17 +1217,26 @@ contains
                 K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
                      * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
                      * sum(gas_tau(:,:,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
+
+                ! If this is a H2O Jacobian, we need to add the derivative
+                ! dtau / dsh * dsh / dh2o
+                if (MCS%window(i_win)%gases(sv%gas_idx_lookup(i)) == "H2O") then
+
+                   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
+                        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
+                        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
+                        dim=2)
+                end if
+
              end if
 
              if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
                 ! This is a profile-type gas jacobian!
                 do j=1, size(SV%idx_gas, 2)
                    if (SV%idx_gas(i,j) /= -1) then
-                      write(*,*) "profile jac ", i, "at position", SV%idx_gas(i,j)
                       K_hi(:, SV%idx_gas(i,j)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
                            * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
                            * gas_tau_dvmr(:,j,SV%gas_idx_lookup(i))
-
                    end if
                 end do
              end if
@@ -1383,8 +1472,8 @@ contains
 !!$       close(funit)
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
-       !tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
-       tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
+       tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
+       !tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
 
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
        if (.not. success_inv_mat) then
@@ -1394,14 +1483,13 @@ contains
 
 
        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-       !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+       tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
 
        ! Update state vector
-       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1) !  - tmp_v2)
-
+       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
 
        ! Calculate Shat_inv
-       Shat_inv = matmul(matmul(transpose(K), Se_inv), K)! + Sa_inv
+       Shat_inv = matmul(matmul(transpose(K), Se_inv), K) + Sa_inv
        call invert_matrix(Shat_inv, Shat, success_inv_mat)
 
        if (.not. success_inv_mat) then
@@ -1421,37 +1509,80 @@ contains
        ! if the retrieval wants to push it below 0.
 
        do i=1, SV%num_gas
-          if (SV%svsv(sv%idx_gas(i, 1)) < 0.0d0) then
-             write(*,*) "Negative SV for ", i, ": ", SV%svsv(sv%idx_gas(i, 1))
-             SV%svsv(sv%idx_gas(i, 1)) = 1.0d-10 ! * old_sv(sv%idx_gas(i, 1))
-          end if
+          do j=1, size(sv%idx_gas(i,:))
+             if (SV%svsv(sv%idx_gas(i, j)) < 0.0d0) then
+                !write(*,*) "Negative SV for ", i, ": ", SV%svsv(sv%idx_gas(i, 1))
+                SV%svsv(sv%idx_gas(i, j)) = 1.0d-10 ! * old_sv(sv%idx_gas(i, j))
+             end if
+          end do
        end do
 
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i)
+       end do
+       close(funit)
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)
-!!$       end do
-!!$       close(funit)
+       do i=1, num_active_levels
+          write(*,*) (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
+       end do
 !!$
 !!$
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$       write(*,*) "Iteration: ", iteration-1
-!!$       do i=1, N_sv
-!!$          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq
 
+       write(*,*) "old, current and delta state vector, and errors"
+       write(*,*) "Iteration: ", iteration-1
+       do i=1, N_sv
+          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq
 
-
-       if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. (iteration > 5)) then
+       if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
+            (iteration > MCS%window(i_win)%max_iterations)) then
 
           ! Stop iterating - we've either coverged to exeeded the max. number of
           ! iterations.
           keep_iterating = .false.
-          if (iteration <= 5) converged = .true.
+          if (iteration <= MCS%window(i_win)%max_iterations) converged = .true.
+
+          allocate(pwgts(num_active_levels))
+
+          ! Calculate the XGAS for every retreived gas only, same as above with the
+          ! gas OD calculation, we loop through all gases, apply the gas scaling
+          ! factor from the state vector, and calculate the pressure weighting function
+          ! as well as the XGAS.
+
+          do j=1, num_gases
+             if (SV%num_gas > 0) then
+
+                gas_scaling_factor = 1.0d0
+
+                ! We need to 'reverse-lookup' to see which SV index belongs to this
+                ! gas to grab the right scaling factor.
+                do i=1, SV%num_gas
+
+                   if (SV%gas_idx_lookup(i) == j) then
+                      if (MCS%window(i_win)%gas_retrieve_scale(j)) then
+                         gas_scaling_factor = SV%svsv(SV%idx_gas(j,1))
+                      end if
+                   end if
+
+                end do
+
+                call pressure_weighting_function(this_atm%p(1:num_active_levels), &
+                     psurf, this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor, pwgts)
+
+                results%xgas(i_fp, i_fr, j) =  sum(pwgts(:) * this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor)
+
+!!$                do l=1, num_active_levels
+!!$                   write(*,*) l, this_atm%sh(l), this_atm%gas_vmr(l, j) * gas_scaling_factor, pwgts(l), sum(pwgts(:))
+!!$                end do
+!!$                write(*,*) "xgas:", sum(pwgts(:) * this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor)
+
+             end if
+          end do
+
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
@@ -1467,57 +1598,20 @@ contains
              results%sv_retrieved(i_fp, i_fr,i) = SV%svsv(i)
           end do
 
-
-          !if (SV%num_sif == 1) then
-          !   retrieved_sif_abs(i_fp, i_fr) = SV%svsv(SV%idx_sif(1))
-          !   retrieved_sif_rel(i_fp, i_fr) = retrieved_sif_abs(i_fp, i_fr) / maxval(radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max))
-          !end if
           results%num_iterations(i_fp, i_fr) = iteration
 
           final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          write(tmp_str, '(A,G0.1,A,F10.3)') "Iteration: ", iteration ,", Chi2: ",  results%chi2(i_fp, i_fr)
-          !call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,G3.1,A,F6.3,A,G2.1,A,F10.2)') "Iteration: ", iteration ,&
+               ", Chi2: ",  results%chi2(i_fp, i_fr), &
+               ", Active Levels: ", num_active_levels, &
+               ", Psurf: ", this_psurf
+          call logger%debug(fname, trim(tmp_str))
 
           converged = .true.
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i) !, K(i, SV%idx_psurf(1))
-!!$       end do
-!!$       close(funit)
-
-          !if (i_fr == 51) then
-          ! end if
-          !read(*,*)
-       end if
-
-       if (iteration == 5) then
-          call logger%warning(fname, "Not converged!")
-          keep_iterating = .false.
-
-          return
-
-          ! Print out SV for visual inspection!
-
-!!$          do i=1, N_sv
-!!$             write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$          end do
-!!$          write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$
-!!$          write(*,*) "Dsigma_sq: ", dsigma_sq
-
-!!$          open(file="l1b_spec.dat", newunit=funit)
-!!$          do i=1, N_spec
-!!$             write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$                  noise_work(i), bad_sample_list(i+l1b_wl_idx_min-1,i_fp,band)
-!!$          end do
-!!$          close(funit)
-!!$
-!!$          read(*,*)
        end if
 
        ! These quantities are all allocated within the iteration loop, and
@@ -1528,11 +1622,11 @@ contains
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
        if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
-       if (allocated(gas_tau_dpsurf2)) deallocate(gas_tau_dpsurf2)
+       if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-       !read(*,*)
+       read(*,*)
     end do
 
   end function physical_FM
@@ -1859,15 +1953,17 @@ contains
 
 
 
-  subroutine create_result_container(results, num_frames, num_fp, num_SV)
+  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas)
     implicit none
     type(result_container), intent(inout) :: results
-    integer, intent(in) :: num_frames, num_fp, num_SV
+    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas
 
     allocate(results%sv_names(num_SV))
 
     allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
     allocate(results%sv_prior(num_fp, num_frames, num_SV))
+    allocate(results%xgas(num_fp, num_frames, num_gas))
+
     allocate(results%chi2(num_fp, num_frames))
     allocate(results%residual_rms(num_fp, num_frames))
     allocate(results%dsigma_sq(num_fp, num_frames))
@@ -1879,6 +1975,7 @@ contains
 
     results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -1897,6 +1994,7 @@ contains
     deallocate(results%sv_names)
     deallocate(results%sv_retrieved)
     deallocate(results%sv_prior)
+    deallocate(results%xgas)
     deallocate(results%chi2)
     deallocate(results%residual_rms)
     deallocate(results%dsigma_sq)

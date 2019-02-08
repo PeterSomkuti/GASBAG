@@ -92,6 +92,7 @@ contains
                 valid_options(this_idx,16) = "wl_spacing"
                 valid_options(this_idx,17) = "band"
                 valid_options(this_idx,18) = "sublayers"
+                valid_options(this_idx,19) = "max_iterations"
         end do
 
         ! Section for gases

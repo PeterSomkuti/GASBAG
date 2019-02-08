@@ -65,6 +65,7 @@ module control_mod
        integer :: num_gases
        integer :: N_sublayers
        double precision :: dsigma_scale ! Convergence scaling factor
+       integer :: max_iterations
        ! Do we use the less-accurate, but faster FFT convolution with an
        ! averaged ILS kernel?
        logical :: fft_convolution 
@@ -366,6 +367,14 @@ contains
 
                 call fini_extract(fini, tmp_str, 'band', .false., fini_int)
                 MCS%window(window_nr)%band = fini_int
+
+                call fini_extract(fini, tmp_str, 'max_iterations', .true., fini_int)
+                if (fini_int > 0) then
+                   MCS%window(window_nr)%max_iterations = fini_int
+                else
+                   call logger%fatal(fname, "Max iterations has to be > 0")
+                   stop 1
+                end if
 
                 call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
                 MCS%window(window_nr)%SV_string = fini_char

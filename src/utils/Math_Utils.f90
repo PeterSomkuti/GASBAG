@@ -16,6 +16,57 @@ module math_utils_mod
 
 contains
 
+  subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
+    implicit none
+    double precision, intent(in) :: p_levels(:), psurf, vmrs(:)
+    double precision, intent(inout) :: pwgts(:)
+
+    integer :: i, N
+    double precision, allocatable :: hp(:), cbar(:), dp(:)
+    double precision :: f, fs
+
+    N = size(p_levels)
+
+    ! First, calculate h-prime (Equation A4 in O'Dell 2012)
+    allocate(hp(N-1))
+    allocate(cbar(N-1))
+    allocate(dp(N-1))
+
+
+    do i=1, N-1
+       ! Loop over levels starting from top down to
+       ! the surface layer.
+
+       cbar(i) = 0.5d0 * (vmrs(i) + vmrs(i+1))
+       dp(i) = p_levels(i+1) - p_levels(i)
+
+       hp(i) = cbar(i) * dp(i)
+    end do
+
+    hp(:) = hp(:) / sum(hp(:))
+
+    f = 0.5d0
+    fs = (psurf - p_levels(N-1)) &
+         / (p_levels(N) - p_levels(N-1))
+
+    do i=1, N
+
+       if (i == 1) then
+          pwgts(i) = (1.0d0 - f) * hp(i)
+       else if (i == (N-1)) then
+          pwgts(i) = f * hp(i-1) + (1.0d0 - fs * f) * hp(i)
+       else if (i == N) then
+          pwgts(i) = fs * f * hp(i-1)
+       else
+          pwgts(i) = f * hp(i-1) + (1.0d0 - f) * hp(i)
+       end if
+
+    end do
+
+
+  end subroutine pressure_weighting_function
+
+
 
   pure function searchsorted_dp(x, val, left) result(idx)
     implicit none
@@ -389,7 +440,6 @@ contains
 
     end subroutine
 
-
     subroutine invert_matrix(mat_in, mat_out, success)
 
       double precision, dimension(:,:), intent(in) :: mat_in
@@ -410,6 +460,7 @@ contains
 
       if (info /= 0) then
          call logger%fatal("invert_matrix", "Matrix is numerically singular!")
+         write(*,*) "DGETRF Error Code: ", info
          success = .false.
          return
       end if

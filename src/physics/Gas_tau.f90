@@ -8,17 +8,20 @@ module gas_tau_mod
 contains
 
 
-  subroutine calculate_gas_tau(pre_gridded, wl, gas_vmr, psurf, p, T, sh, &
-       gas, N_sub, need_psurf_jac, need_gas_jac, gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
+  subroutine calculate_gas_tau(pre_gridded, is_H2O, &
+       wl, gas_vmr, psurf, p, T, sh, &
+       gas, N_sub, need_psurf_jac, need_gas_jac, &
+       gas_tau, gas_tau_dpsurf, gas_tau_dvmr, gas_tau_dsh, &
        success)
 
     implicit none
     logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
+    logical, intent(in) :: is_H2O ! Is this gas water vapor?
     double precision, intent(in) :: wl(:) ! Wavelength array
     double precision, intent(in) :: gas_vmr(:) ! Gas volume mixing ratio
     double precision, intent(in) :: psurf ! Surface pressure
     ! Pressure, temperature and specific humidity profiles
-    double precision, intent(in) :: p(:), T(:), sh(:) 
+    double precision, intent(in) :: p(:), T(:), sh(:)
     type(CS_gas), intent(in) :: gas ! Gas structure which contains the cross sections
     integer, intent(in) :: N_sub ! How many sublayers for more accurate calculation?
     logical, intent(in) :: need_psurf_jac, need_gas_jac
@@ -29,6 +32,8 @@ contains
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
     ! dtau / dvmr
     double precision, intent(inout) :: gas_tau_dvmr(:,:)
+    ! dtau / dsh
+    double precision, intent(inout) :: gas_tau_dsh(:,:)
     ! Success?
     logical, intent(inout) :: success
 
@@ -38,6 +43,7 @@ contains
     logical :: log_scaling
     double precision :: p_lower, p_higher, T_lower, T_higher, sh_lower, sh_higher
     double precision :: VMR_lower, VMR_higher
+    double precision :: H2O_corr
     double precision :: this_H2O, this_H2O_pert
     double precision :: this_p, p_fac, this_p_fac, this_T, this_sh, this_VMR, this_M
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
@@ -78,13 +84,14 @@ contains
        return
     end if
 
-    log_scaling = .false.
+    log_scaling = .true.
 
     allocate(gas_tmp(N_wl))
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
+    gas_tau_dvmr(:,:) = 0.0d0
 
     ! Pre-compute the indicies of the ABSCO wavlength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
@@ -157,7 +164,7 @@ contains
        end do
     else
        if (size(gas%wavelength) /= size(wl)) then
-          call logger%fatal(fname, "Spectroscopy wavelenght size not equal to hires grid!")
+          call logger%fatal(fname, "Spectroscopy wavelength size not equal to hires grid!")
           stop 1
        end if
     end if
@@ -189,7 +196,11 @@ contains
           VMR_lower = (1.0d0 - p_fac) * gas_vmr(l-1) + p_fac * gas_vmr(l)
 
           if (need_psurf_jac) then
-             ! Calculate perturbed properties when psurf jacobian is needed
+             ! Calculate perturbed properties when psurf jacobian is needed.
+             ! We perturb psurf towards lower values, making it essentially a
+             ! backwards-differentiation, so we don't accidentally step outside
+             ! the lower atmsophere bound. It's then 'reversed' via a minus
+             ! sign when calculating the proper forward Jacobians.
              p_lower_pert = psurf - PSURF_PERTURB
              if (log_scaling) then
                 p_fac_pert = (log(p_lower_pert) - log(p(l-1))) / (log(p(l)) - log(p(l-1)))
@@ -238,6 +249,7 @@ contains
           end do
        else
           ! This should never happen!!
+          write(*,*) "Really bad stuff! Gas tau even number of sublayers.."
           stop 1
        end if
 
@@ -252,12 +264,23 @@ contains
           GK_abscissae_f_pert = GK_abscissae_f
           GK_weights_f_pert = GK_weights_f
           G_weights_f_pert = G_weights_f
-          call kronrod_adjust(p_higher, p_lower_pert, N_sub, &
-               GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
+
+          if (log_scaling) then
+             call kronrod_adjust(log(p_higher), log(p_lower_pert), N_sub, &
+                  GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
+          else
+             call kronrod_adjust(p_higher, p_lower_pert, N_sub, &
+                  GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
+          end if
        end if
 
-       call kronrod_adjust(p_higher, p_lower, N_sub, &
-            GK_abscissae_f, GK_weights_f, G_weights_f)
+       if (log_scaling) then
+          call kronrod_adjust(log(p_higher), log(p_lower), N_sub, &
+               GK_abscissae_f, GK_weights_f, G_weights_f)
+       else
+          call kronrod_adjust(p_higher, p_lower, N_sub, &
+               GK_abscissae_f, GK_weights_f, G_weights_f)
+       end if
 
        do k=1, N_sub
 
@@ -268,32 +291,57 @@ contains
           ! And get corresponding values for T,sh and the VMR at this (scaled)
           ! pressure value, which is obtained via simple linear interpolation.
           if (log_scaling) then
-             this_p_fac = ((log(this_p) - log(p_higher)) / (log(p_lower) - log(p_higher)))
+             this_p_fac = (this_p - log(p_higher)) / (log(p_lower) - log(p_higher))
           else
-             this_p_fac = ((this_p - p_higher) / (p_lower - p_higher))
+             this_p_fac = (this_p - p_higher) / (p_lower - p_higher)
           end if
 
           this_T = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
           this_sh = (1.0d0 - this_p_fac) * sh_lower + this_p_fac * sh_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
-          this_M = 1.0d3 * (((1.0d0 - this_sh) * DRY_AIR_MASS) + (H2Om * this_sh))
+          this_M = 1.0d3 * DRY_AIR_MASS
 
           ! Gas CS routine works in H2O VMR rather than SH
-          this_H2O = (this_sh) / (1.0d0 - this_sh) * SH_H2O_CONV
+          this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
 
-          this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
-               this_T, this_H2O, wl_left_indices(:))
-          C_tmp = (1.0d0 - this_VMR) / (9.81d0 * this_M) * NA * 0.1d0
+          if (log_scaling) then
+             this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), exp(this_p), &
+                  this_T, this_H2O, wl_left_indices(:))
+          else
+             this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
+                  this_T, this_H2O, wl_left_indices(:))
+          end if
+
+          if (is_H2O) then
+             H2O_corr = 1.0d0
+          else
+             H2O_corr = (1.0d0 - this_sh)
+          end if
+
+          C_tmp = 1.0d0 / (9.81d0 * this_M) * NA * 0.1d0 * H2O_corr
+
 
           ! Tau for this sublayer
-          gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
+          if (log_scaling) then
+             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp * exp(this_p)
+          else
+             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
+          end if
 
           ! Add sublayer contribution to full layer tau
           gas_tau(:,l-1) = gas_tau(:,l-1) + gas_tmp(:)
 
           if (need_gas_jac) then
-             gas_tau_dvmr(:,l-1) = gas_tau_dvmr(:,l-1) + (&
-                  gas_tmp(:) / this_VMR * (1.0d0 - this_p_fac))
+
+             gas_tau_dvmr(:,l) = gas_tau_dvmr(:,l) + (&
+                  gas_tmp(:) / this_VMR * (this_p_fac))
+
+             if (l == 2) then
+                gas_tau_dvmr(:,1) = gas_tau_dvmr(:,1) + (&
+                     gas_tmp(:) / this_VMR * (1.0d0 - this_p_fac))
+             end if
+
+             gas_tau_dsh(:,l-1) = -gas_tmp(:) / (1.0d0 - this_sh)
 
           end if
 
@@ -304,7 +352,7 @@ contains
              this_p_pert = GK_abscissae_f_pert(k)
 
              if (log_scaling) then
-                this_p_fac_pert = ((log(this_p_pert) - log(p_higher)) / (log(p_lower_pert) - log(p_higher)))
+                this_p_fac_pert = (this_p_pert - log(p_higher)) / (log(p_lower_pert) - log(p_higher))
              else
                 this_p_fac_pert = ((this_p_pert - p_higher) / (p_lower_pert - p_higher))
              end if
@@ -312,16 +360,33 @@ contains
              this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
              this_sh_pert = (1.0d0 - this_p_fac_pert) * sh_lower_pert + this_p_fac_pert * sh_higher
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
-             this_M_pert = 1.0d3 * (((1 - this_sh_pert) * DRY_AIR_MASS) + (H2Om * this_sh_pert))
+             this_M_pert = 1.0d3 * DRY_AIR_MASS
 
-             this_H2O_pert = (this_sh_pert) / (1.0d0 - this_sh_pert) * SH_H2O_CONV
+             this_H2O_pert = this_sh_pert / (1.0d0 - this_sh_pert) * SH_H2O_CONV
 
+             if (log_scaling) then
+                this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), exp(this_p_pert), &
+                     this_T_pert, this_H2O_pert, wl_left_indices(:))
+             else
+                this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), this_p_pert, &
+                     this_T_pert, this_H2O_pert, wl_left_indices(:))
+             end if
+
+             if (is_H2O) then
+                H2O_corr = 1.0d0
+             else
+                H2O_corr = (1.0d0 - this_sh_pert)
+             end if
              ! This calculates the gas OD, as a result of a perturbed surface pressure
-             gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + GK_weights_f_pert(k) * (&
-                  get_CS_value_at(pre_gridded, gas, wl, this_p_pert, this_T_pert, &
-                  this_H2O_pert, wl_left_indices(:)) &
-                  * this_VMR_pert * (1.0d0 - this_H2O_pert) &
-                  / (9.81 * this_M_pert) * NA * 0.1d0)
+             C_tmp = 1.0d0 / (9.81d0 * this_M) * NA * 0.1d0 * H2O_corr
+
+             if (log_scaling) then
+                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) * this_VMR_pert * C_tmp * exp(this_p_pert)
+             else
+                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) * this_VMR_pert * C_tmp
+             end if
+
+             gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + gas_tmp(:)
 
           end if
        end do
@@ -503,6 +568,10 @@ contains
 
       else
 
+         ! For pre-gridded cross sections, we do not need to interpolate along
+         ! the wavelength dimension, and the requested wavelength wl(i) corresponds
+         ! to the cross section wavelength at that index i.
+
          C3(0,0,0) = gas%cross_section(i, idx_l_H2O, idx_ll_T, idx_l_p)
          C3(1,0,0) = gas%cross_section(i, idx_r_H2O, idx_ll_T, idx_l_p)
          C3(0,1,0) = gas%cross_section(i, idx_l_H2O, idx_lr_T, idx_l_p)
@@ -513,8 +582,6 @@ contains
          C3(1,1,1) = gas%cross_section(i, idx_r_H2O, idx_rr_T, idx_r_p)
 
       end if
-
-
 
       ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
       C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d

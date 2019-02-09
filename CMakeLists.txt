@@ -59,7 +59,7 @@ else()
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds}")
+set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} -fcheck=all -fbacktrace")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg")
 
@@ -82,6 +82,7 @@ file(GLOB_RECURSE third-party third-party/*.?90)
 file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 
 # Third-party libraries are assumed to work fine, so compile with optimisation
+# and no debugging options.
 set_source_files_properties(
   ${third-party}
   PROPERTIES

@@ -37,14 +37,14 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
     pcm = ax.pcolormesh(binres[1], binres[2], binres[0].T,
                         transform=ccrs.PlateCarree(),
                         vmin=data_lower, vmax=data_higher,
-                        cmap='plasma', rasterized=True)
+                        cmap='nipy_spectral', rasterized=True)
     ax.set_title("(${:.1f}^\circ$)".format(gridsize))
     plt.colorbar(pcm, ax=ax)
 
     ax = plt.subplot(gs[1])
     ax.hist(binres[0].flatten(),
             range=(0.95 * data_lower, 1.05 * data_higher),
-            bins=20)
+            bins=50)
 
     hist_med = np.nanmedian(binres[0].flatten())
     hist_iqr = np.diff(np.nanpercentile(binres[0].flatten(), [25, 75]))[0]

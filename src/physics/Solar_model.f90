@@ -53,8 +53,10 @@ contains
 
         ! Now turn them into wavelengths (microns) and re-order the array, so that
         ! we have the spectrum in units of increasing wavelength
+
         solar_spectrum(:,:) = solar_spectrum(line_count:1:-1,:)
         solar_spectrum(:,1) = 1e4 / solar_spectrum(:,1)
+        !solar_spectrum(:,1) = 1.0d-3 *  solar_spectrum(:,1)
 
         ! If the user wants to, we can cut off the fairly large solar spectrum
         ! array, depending on the wavelength limits supplied to the function

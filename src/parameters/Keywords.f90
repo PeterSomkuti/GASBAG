@@ -93,6 +93,7 @@ contains
                 valid_options(this_idx,17) = "band"
                 valid_options(this_idx,18) = "sublayers"
                 valid_options(this_idx,19) = "max_iterations"
+                valid_options(this_idx,20) = "solar_dispersion"
         end do
 
         ! Section for gases

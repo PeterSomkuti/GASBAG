@@ -6,9 +6,11 @@ module statevector_mod
 
     type statevector
         ! Number of state vector elements per type
-        integer :: num_albedo, num_sif, num_dispersion, num_psurf, num_gas
+       integer :: num_albedo, num_sif, num_dispersion, num_psurf, num_gas, &
+            num_solar_shift, num_solar_stretch
         integer, dimension(:), allocatable :: idx_albedo, idx_sif, &
-             idx_dispersion, idx_psurf, gas_idx_lookup
+             idx_dispersion, idx_psurf, idx_solar_shift, idx_solar_stretch, &
+             gas_idx_lookup
         integer, allocatable :: idx_gas(:,:)
         ! State vector (current), state vector a priori
         double precision, dimension(:), allocatable :: svsv, svap, sver
@@ -29,6 +31,8 @@ contains
     if (allocated(SV%idx_sif)) deallocate(SV%idx_sif)
     if (allocated(SV%idx_dispersion)) deallocate(SV%idx_dispersion)
     if (allocated(SV%idx_psurf)) deallocate(SV%idx_psurf)
+    if (allocated(SV%idx_solar_shift)) deallocate(SV%idx_solar_shift)
+    if (allocated(SV%idx_solar_stretch)) deallocate(SV%idx_solar_stretch)
 
     if (allocated(SV%svap)) deallocate(SV%svap)
     if (allocated(SV%svsv)) deallocate(SV%svsv)
@@ -45,6 +49,8 @@ contains
     SV%num_dispersion = -1
     SV%num_psurf = -1
     SV%num_gas = -1
+    SV%num_solar_shift = -1
+    SV%num_solar_stretch = -1
 
   end subroutine clear_SV
 
@@ -64,11 +70,12 @@ contains
     type(string) :: known_SV(99)
     logical :: is_gas_SV(99)
 
-    integer :: num_SV, i, j, k, gas_index, known_SV_max
+    integer :: i, j, k, gas_index, known_SV_max, last_known
     logical :: SV_found
 
     integer :: num_albedo_parameters, num_dispersion_parameters, &
-         num_sif_parameters, num_psurf_parameters
+         num_sif_parameters, num_psurf_parameters, num_solar_shift_parameters, &
+         num_solar_stretch_parameters
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
@@ -79,19 +86,22 @@ contains
     known_SV(2) = "dispersion"
     known_SV(3) = "sif"
     known_SV(4) = "psurf"
+    known_SV(5) = "solar_shift"
+    known_SV(6) = "solar_stretch"
+    last_known = 6
 
     ! Add gases as 'known' state vector elements. CAUTION! There is
     ! obviously a danger if someone decides to name their gas "psurf".
     ! Maybe I should add a list of protected names that can't be used.
     do i=1, MCS%window(i_win)%num_gases
-       known_SV(4+i) = MCS%window(i_win)%gases(i)
+       known_SV(last_known+i) = MCS%window(i_win)%gases(i)
        ! This flags the known SV as one of a gas type
-       is_gas_SV(4+i) = .true.
+       is_gas_SV(last_known+i) = .true.
     end do
 
     ! We really only need to look for this many items in the list
     ! of known SV's
-    known_SV_max = 4+i
+    known_SV_max = last_known+i
 
     ! Split the state vector string from the config file
     call MCS%window(i_win)%SV_string%split(tokens=split_string, sep=' ')
@@ -147,6 +157,8 @@ contains
     num_dispersion_parameters = 0
     num_sif_parameters = 0
     num_psurf_parameters = 0
+    num_solar_shift_parameters = 0
+    num_solar_stretch_parameters = 0
 
     ! Again, we can do these only if the arrays are allocated,
     ! which they aren't if no gases are defined..
@@ -200,6 +212,16 @@ contains
           end if
        end if
 
+       ! We are retrieving solar shift
+       if (split_string(i)%lower() == "solar_shift") then
+          num_solar_shift_parameters = 1
+       end if
+
+       ! We are retrieving solar stretch
+       if (split_string(i)%lower() == "solar_stretch") then
+          num_solar_stretch_parameters = 1
+       end if
+
        ! We are retrieving SIF!
        if (split_string(i)%lower() == "sif") then
           num_sif_parameters = 1
@@ -208,7 +230,7 @@ contains
        ! We are retrieving surface pressure!
        if (split_string(i)%lower() == "psurf") then
           ! Surface pressure only makes sense if we have gases defined
-          ! in our current microwindow. 
+          ! in our current microwindow.
 
           if (MCS%window(i_win)%num_gases == 0) then
              call logger%fatal(fname, "Sorry, you must have at least one gas in the window " &
@@ -286,7 +308,9 @@ contains
          num_albedo_parameters, &
          num_sif_parameters, &
          num_dispersion_parameters, &
-         num_psurf_parameters)
+         num_psurf_parameters, &
+         num_solar_shift_parameters, &
+         num_solar_stretch_parameters)
 
   end subroutine parse_and_initialize_SV
 
@@ -294,13 +318,15 @@ contains
 
 
   subroutine initialize_statevector(i_win, num_levels, sv, &
-       count_albedo, count_sif, count_dispersion, count_psurf)
+       count_albedo, count_sif, count_dispersion, count_psurf, &
+       count_solar_shift, count_solar_stretch)
 
     implicit none
     integer, intent(in) :: i_win, num_levels
     type(statevector), intent(inout) :: sv
     integer, intent(in) :: count_albedo, count_sif, &
-         count_dispersion, count_psurf
+         count_dispersion, count_psurf, count_solar_shift, &
+         count_solar_stretch
 
     integer :: count_gas
     character(len=*), parameter :: fname = "initialize_statevector"
@@ -313,6 +339,8 @@ contains
     sv%num_sif = count_sif
     sv%num_dispersion = count_dispersion
     sv%num_psurf = count_psurf
+    sv%num_solar_shift = count_solar_shift
+    sv%num_solar_stretch = count_solar_stretch
     sv%num_gas = 0
 
     sv_count = 0
@@ -373,6 +401,27 @@ contains
     else
        allocate(sv%idx_dispersion(1))
        sv%idx_dispersion(1) = -1
+    end if
+
+    ! Solar shift and stretch
+    allocate(sv%idx_solar_shift(1))
+    if (sv%num_solar_shift == 1) then
+       write(tmp_str, '(A, G0.1)') "Number of solar shift elements: ", sv%num_solar_shift
+       call logger%info(fname, trim(tmp_str))
+       sv_count = sv_count + 1
+       sv%idx_solar_shift(1) = sv_count
+    else
+       sv%idx_solar_shift(1) = -1
+    end if
+
+    allocate(sv%idx_solar_stretch(1))
+    if (sv%num_solar_stretch == 1) then
+       write(tmp_str, '(A, G0.1)') "Number of solar stretch elements: ", sv%num_solar_stretch
+       call logger%info(fname, trim(tmp_str))
+       sv_count = sv_count + 1
+       sv%idx_solar_stretch(1) = sv_count
+    else
+       sv%idx_solar_stretch(1) = -1
     end if
 
     ! Surface pressure

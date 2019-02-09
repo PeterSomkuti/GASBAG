@@ -365,7 +365,7 @@ contains
                 call fini_extract(fini, tmp_str, 'wl_spacing', .true., fini_val)
                 MCS%window(window_nr)%wl_spacing = fini_val
 
-                call fini_extract(fini, tmp_str, 'band', .false., fini_int)
+                call fini_extract(fini, tmp_str, 'band', .true., fini_int)
                 MCS%window(window_nr)%band = fini_int
 
                 call fini_extract(fini, tmp_str, 'max_iterations', .true., fini_int)

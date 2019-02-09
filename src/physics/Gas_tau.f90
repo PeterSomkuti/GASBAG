@@ -303,6 +303,7 @@ contains
 
           ! Gas CS routine works in H2O VMR rather than SH
           this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
+          this_H2O = 0.0d0
 
           if (log_scaling) then
              this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), exp(this_p), &

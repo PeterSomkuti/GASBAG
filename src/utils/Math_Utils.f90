@@ -10,9 +10,9 @@ module math_utils_mod
     double precision, parameter :: RAD2DEG = 57.29577951308232d0
     double precision, parameter :: NA = 6.022140857d23
     double precision, parameter :: H2Om = 0.018015422135d0
-    double precision, parameter :: DRY_AIR_MASS = 0.02897d0
+    double precision, parameter :: DRY_AIR_MASS = 0.0289644d0
     double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
-    double precision, parameter :: SH_H2O_CONV = 1.607524279389496d0
+    double precision, parameter :: SH_H2O_CONV = DRY_AIR_MASS / H2Om
 
 contains
 

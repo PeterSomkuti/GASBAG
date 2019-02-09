@@ -106,7 +106,8 @@ module physical_model_mod
   type(atmosphere) :: initial_atm
 
   ! The solar spectrum (wavelength, transmission)
-  double precision, allocatable :: solar_spectrum(:,:), solar_spectrum_regular(:,:)
+  double precision, allocatable :: solar_spectrum(:,:), &
+       solar_spectrum_regular(:,:), solar_tmp(:)
   integer :: N_solar
 
   ! Final SIF value in physical radiance units, chi2
@@ -490,7 +491,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, 300 !num_frames
+       do i_fr=1, 1000 !num_frames
           do i_fp=1, num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -657,7 +658,8 @@ contains
     !! Solar stuff
     double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
     double precision, dimension(:,:), allocatable :: this_solar
-    double precision, allocatable :: solar_irrad(:)
+    double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_low(:)
+    double precision :: this_solar_shift, this_solar_stretch
 
     !! Atmosphere
     integer :: num_gases, num_levels, num_active_levels
@@ -757,9 +759,9 @@ contains
     allocate(this_dispersion_coefs(size(dispersion_coefs, 1)))
     allocate(this_dispersion_coefs_pert(size(dispersion_coefs, 1)))
 
-
     ! Allocate the micro-window bounded solar and radiance arrays
     allocate(this_solar(N_hires, 2))
+    allocate(dsolar_dlambda(N_hires))
 
     ! If solar doppler-shift is needed, calculate the distance and relative
     ! velocity between point of measurement and the (fixed) sun
@@ -770,17 +772,6 @@ contains
     ! solar_doppler =  (solar_rv * 1000.0d0 + earth_rv) / SPEED_OF_LIGHT
     solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
     !solar_doppler = (relative_solar_velocity(i_fp, i_fr)) / SPEED_OF_LIGHT
-    ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
-    ! According to the Doppler shift
-    this_solar(:,1) = solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
-
-    ! Since we now have the solar distance, we can calculate the proper solar
-    ! continuum for the given day of the year.
-    allocate(solar_irrad(size(this_solar, 1)))
-    call calculate_solar_planck_function(6500.d0, solar_dist * 1000.d0, &
-         this_solar(:,1), solar_irrad)
-    ! And multiply to get the solar irradiance in physical units
-    this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
 
     ! Correct for instrument doppler shift
     instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
@@ -791,15 +782,15 @@ contains
     ! write(*,*) "Relative velocity instrument: ", relative_velocity(i_fp, i_fr)
     !
     !
-    ! write(*,*) "Solar doppler: ", solar_doppler
-    ! write(*,*) "Instrument doppler: ", instrument_doppler
+    !write(*,*) "Solar doppler: ", solar_doppler
+    !write(*,*) "Instrument doppler: ", instrument_doppler
 
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
     N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
-    lm_gamma = 10.0d0
+    lm_gamma = 5.0d0
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change?
@@ -827,9 +818,19 @@ contains
        end do
     end if
 
+    if (SV%num_solar_shift == 1) then
+       Sa(SV%idx_solar_shift(1), SV%idx_solar_shift(1)) = 1.0d0
+    end if
+
+    if (SV%num_solar_stretch == 1) then
+       Sa(SV%idx_solar_stretch(1), SV%idx_solar_stretch(1)) = 1.0d0
+    end if
+
     if (SV%num_sif > 0) then
        Sa(SV%idx_sif(1), SV%idx_sif(1)) = (1.0d20 ** 2)
     end if
+
+    if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1000.0d0 ** 2
 
     if (SV%num_dispersion > 0) then
        do i=1, SV%num_dispersion
@@ -861,7 +862,7 @@ contains
              do j=SV%idx_gas(i,1), SV%idx_gas(i, size(SV%idx_gas(i,:)))
                 do l=SV%idx_gas(i,1), SV%idx_gas(i, size(SV%idx_gas(i,:)))
                    if (j == l) cycle
-                   Sa(j,l) = 0.0d0 ! sqrt(Sa(j,j)) * sqrt(Sa(l,l)) * 0.01d0
+                   Sa(j,l) = sqrt(Sa(j,j)) * sqrt(Sa(l,l)) * 0.001d0
                 end do
              end do
 
@@ -878,14 +879,17 @@ contains
 
     ! Populate state vector priors (this should also be read from config)
 
+    allocate(solar_irrad(N_hires))
     ! Albedo
     select type(my_instrument)
     type is (oco2_instrument)
        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
        ! take that into account for the incoming solar irradiance
 
+       call calculate_solar_planck_function(6500.0d0, solar_dist * 1000.0d0, &
+            solar_spectrum_regular(:,1), solar_irrad)
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(this_solar(:,2)) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+            (1.0d0 * maxval(solar_irrad) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
     end select
 
@@ -903,6 +907,15 @@ contains
           SV%svap(SV%idx_albedo(i)) = 0.0d0
        end do
     end if
+
+    if (SV%num_solar_shift == 1) then
+       SV%svap(SV%idx_solar_shift(1)) = 0.0d0
+    end if
+
+    if (SV%num_solar_stretch == 1) then
+       SV%svap(SV%idx_solar_stretch(1)) = 1.0d0
+    end if
+
 
     ! Start SIF with zero
     if (SV%num_sif > 0) then
@@ -929,6 +942,7 @@ contains
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,1)) = 1.0d0
           end if
+
           if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,:)) = initial_atm%gas_vmr(:, sv%gas_idx_lookup(i))
           end if
@@ -947,6 +961,9 @@ contains
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
     allocate(radiance_tmp_work_hi(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
+
+    this_solar_shift = 0.0d0
+    this_solar_stretch = 1.0d0
 
     converged = .false.
     ! Main iteration loop for the retrieval process.
@@ -993,6 +1010,7 @@ contains
                    this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
                 end if
              end do
+
           end if
        else
           ! Otherwise, calculate it from the state vector
@@ -1001,9 +1019,12 @@ contains
           if (SV%num_albedo > 0) then
              albedo = 0.0d0
              do i=1, SV%num_albedo
-                albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((this_solar(:, 1) - this_solar(1,1)) ** (dble(i-1)))
+                albedo = albedo + SV%svsv(SV%idx_albedo(i)) * ((hires_grid(:) - hires_grid(1)) ** (dble(i-1)))
              end do
           endif
+
+          if (SV%num_solar_shift == 1) this_solar_shift = SV%svsv(SV%idx_solar_shift(1))
+          if (SV%num_solar_stretch == 1) this_solar_stretch = SV%svsv(SV%idx_solar_stretch(1))
 
           ! If we are retrieving surface pressure, we possibly need
           ! to re-grid the atmosphere if the surface pressure jumps to the
@@ -1038,8 +1059,12 @@ contains
           end if
 
           do i=1, num_gases
-             ! Copy gas VMRs from SV if appropriate
+             ! Replace SH if H2O is used in atmosphere
+             if (MCS%window(i_win)%gases(i) == "H2O") then
+                !this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
+             end if
 
+             ! Copy gas VMRs from SV if appropriate
              do j=1, SV%num_gas
                 if (SV%gas_idx_lookup(j) == i) then
                    if (MCS%window(i_win)%gas_retrieve_profile(j)) then
@@ -1048,14 +1073,11 @@ contains
                 end if
              end do
 
-             if (MCS%window(i_win)%gases(i) == "H2O") then
-                this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
-             end if
+
           end do
 
 
        endif
-
 
        !this_atm%sh = 1d-5
        !this_atm%T = 220.0d0
@@ -1137,7 +1159,7 @@ contains
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
-                  this_solar(:,1), &
+                  hires_grid, &
                   this_atm%gas_vmr(:,j) * gas_scaling_factor, &
                   psurf, &
                   this_atm%p(:), &
@@ -1170,6 +1192,14 @@ contains
 !!$             end do
 !!$             close(funit)
 !!$          end do
+!!$
+!!$          open(newunit=funit, file="gas_od_full.dat")
+!!$          do j=1, size(gas_tau, 1)
+!!$             write(funit, *) (sum(gas_tau(j,:,l)), l=1,size(gas_tau,3))
+!!$          end do
+!!$          close(funit)
+
+
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_dvmr_iter", iteration, ".dat"
 !!$          open(newunit=funit, file=trim(tmp_str))
@@ -1182,9 +1212,54 @@ contains
 
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'
-       call calculate_radiance(this_solar(:,1), SZA(i_fp, i_fr), &
+       call calculate_radiance(hires_grid, SZA(i_fp, i_fr), &
             VZA(i_fp, i_fr), albedo, gas_tau, &
             radiance_calc_work_hi)
+
+
+       ! Since we now have the solar distance, we can calculate the proper solar
+       ! continuum for the given day of the year.
+
+       ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
+       ! According to both pre-computed solar shift as well as potentially retrieved
+       ! solar stretch and shift
+       this_solar(:,1) = this_solar_shift + &
+            this_solar_stretch * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
+
+       call calculate_solar_planck_function(6500.0d0, solar_dist * 1000.0d0, &
+            this_solar(:,1), solar_irrad)
+       ! And multiply to get the solar irradiance in physical units
+       this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
+
+
+       ! Sample doppler-shifted and scaled solar spectrum at hires grid
+       allocate(solar_tmp(N_hires))
+       call pwl_value_1d( &
+            N_hires, &
+            this_solar(:,1), &
+            solar_spectrum_regular(:, 2), &
+            N_hires, &
+            hires_grid, solar_tmp(:))
+
+       this_solar(:,2) = solar_tmp(:) * solar_irrad(:)
+       deallocate(solar_tmp)
+
+       ! If needed, calculate dSolar / dlambda using central differences
+       ! apart from the first and last point obviously
+       if ((SV%num_solar_shift == 1) .or. (SV%num_solar_stretch == 1)) then
+
+          dsolar_dlambda(1) = (this_solar(2,2) - this_solar(1,2)) / &
+               (this_solar(2,1) - this_solar(1,1))
+          dsolar_dlambda(N_hires) = (this_solar(N_hires-1,2) - this_solar(N_hires,2)) / &
+               (this_solar(N_hires-1,1) - this_solar(N_hires,1))
+
+          do i=2, N_hires-1
+             dsolar_dlambda(i) = (this_solar(i+1,2) - this_solar(i-1,2)) / &
+                  (this_solar(i+1,1) - this_solar(i-1,1))
+          end do
+
+       end if
+
 
        ! And multiply with the solar spectrum for physical units and add SIF contributions
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
@@ -1194,7 +1269,7 @@ contains
        if (SV%num_albedo > 0) then
           do i=1, SV%num_albedo
              K_hi(:, SV%idx_albedo(i)) = (radiance_calc_work_hi(:) - this_sif_radiance) / albedo * &
-                  ((this_solar(:,1) - this_solar(1,1)) ** (dble(i-1)))
+                  ((hires_grid(:) - hires_grid(1)) ** (dble(i-1)))
           end do
        end if
 
@@ -1205,6 +1280,18 @@ contains
           K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance) &
                * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
                * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
+       end if
+
+       ! Solar shift jacobian
+       if (SV%num_solar_shift == 1) then
+          K_hi(:, SV%idx_solar_shift(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+               / this_solar(:,2) * dsolar_dlambda(:)
+       end if
+
+       ! Solar stretch jacobian
+       if (SV%num_solar_stretch == 1) then
+          K_hi(:, SV%idx_solar_stretch(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+               / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
        end if
 
 
@@ -1222,10 +1309,10 @@ contains
                 ! dtau / dsh * dsh / dh2o
                 if (MCS%window(i_win)%gases(sv%gas_idx_lookup(i)) == "H2O") then
 
-                   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
-                        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
-                        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
-                        dim=2)
+!!$                   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
+!!$                        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
+!!$                        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
+!!$                        dim=2)
                 end if
 
              end if
@@ -1341,8 +1428,9 @@ contains
 !!$       close(funit)
 !!$
 !!$       open(file="hires_spec.dat", newunit=funit)
-!!$       do i=1, size(this_solar, 1)
-!!$          write(funit,*) this_solar(i,1), this_solar(i,2), solar_spectrum_regular(i,1), &
+!!$       do i=1, N_hires
+!!$          write(funit,*) this_solar(i,1), this_solar(i,2), dsolar_dlambda(i), &
+!!$               solar_spectrum_regular(i,1), &
 !!$               solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
 !!$       end do
 !!$       close(funit)
@@ -1357,7 +1445,7 @@ contains
              call fft_convolution(radiance_calc_work_hi, ils_hires_avg_relative_response(:,i_fp,band), &
                   this_solar(:,1), this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work)
           else
-             call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
+             call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
                   ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
@@ -1392,11 +1480,11 @@ contains
              if (MCS%window(i_win)%fft_convolution) then
 
                 call fft_convolution(K_hi(:,i), ils_hires_avg_relative_response(:,i_fp,band), &
-                     this_solar(:,1), this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i))
+                     hires_grid, this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i))
 
              else
 
-                call oco_type_convolution(this_solar(:,1), K_hi(:,i), &
+                call oco_type_convolution(hires_grid, K_hi(:,i), &
                      ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
@@ -1439,12 +1527,12 @@ contains
 
                    call fft_convolution(radiance_calc_work_hi, &
                         ils_hires_avg_relative_response(:,i_fp,band), &
-                        this_solar(:,1), this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), &
+                        hires_grid, this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), &
                         radiance_tmp_work)
 
                 else
 
-                   call oco_type_convolution(this_solar(:,1), radiance_calc_work_hi, &
+                   call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
                         ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                         ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                         this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
@@ -1464,12 +1552,6 @@ contains
 
           end do
        end if
-
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
        tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
@@ -1510,33 +1592,53 @@ contains
 
        do i=1, SV%num_gas
           do j=1, size(sv%idx_gas(i,:))
-             if (SV%svsv(sv%idx_gas(i, j)) < 0.0d0) then
-                !write(*,*) "Negative SV for ", i, ": ", SV%svsv(sv%idx_gas(i, 1))
-                SV%svsv(sv%idx_gas(i, j)) = 1.0d-10 ! * old_sv(sv%idx_gas(i, j))
+             if (SV%idx_gas(i,j) /= -1) then
+                if (SV%svsv(sv%idx_gas(i, j)) < 0.0d0) then
+                   !write(*,*) "Negative SV for ", i, ": ", SV%svsv(sv%idx_gas(i, 1))
+                   SV%svsv(sv%idx_gas(i, j)) = 1.0d-10 ! * old_sv(sv%idx_gas(i, j))
+                end if
              end if
           end do
        end do
 
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i)
-       end do
-       close(funit)
+!!$       open(file="jacobian.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) (K(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
 
-       do i=1, num_active_levels
-          write(*,*) (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
-       end do
-!!$
-!!$
+       if (allocated(solar_low)) deallocate(solar_low)
+       allocate(solar_low(N_spec))
 
-       write(*,*) "old, current and delta state vector, and errors"
-       write(*,*) "Iteration: ", iteration-1
-       do i=1, N_sv
-          write(*,*) i, old_sv(i), SV%svsv(i), SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2: ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq
+       call oco_type_convolution(hires_grid, this_solar(:,2), &
+            ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+            ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+            this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
+            ILS_success)
+
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i), solar_low(i)
+!!$
+!!$       end do
+!!$       close(funit)
+!!$
+!!$       deallocate(solar_low)
+!!$
+!!$       do i=1, num_active_levels
+!!$          write(*,*) (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
+!!$       end do
+!!$
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(A25,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
 
        if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
@@ -1544,7 +1646,11 @@ contains
           ! Stop iterating - we've either coverged to exeeded the max. number of
           ! iterations.
           keep_iterating = .false.
-          if (iteration <= MCS%window(i_win)%max_iterations) converged = .true.
+          if (iteration <= MCS%window(i_win)%max_iterations) then
+             converged = .true.
+          else
+             converged = .false.
+          end if
 
           allocate(pwgts(num_active_levels))
 
@@ -1610,14 +1716,12 @@ contains
                ", Psurf: ", this_psurf
           call logger%debug(fname, trim(tmp_str))
 
-          converged = .true.
-
        end if
 
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.
        deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-            noise_work,Se_inv, K)
+            noise_work, Se_inv, K, solar_irrad)
 
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
@@ -1626,7 +1730,7 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
 
        iteration = iteration + 1
-       read(*,*)
+       !read(*,*)
     end do
 
   end function physical_FM
@@ -2030,6 +2134,16 @@ contains
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
+
+       if (SV%idx_solar_shift(1) == i) then
+          write(tmp_str, '(A)') "solar_shift"
+          results%sv_names(i) = trim(tmp_str)
+       end if
+
+       if (SV%idx_solar_stretch(1) == i) then
+          write(tmp_str, '(A)') "solar_stretch"
+          results%sv_names(i) = trim(tmp_str)
+       end if
 
        do j=1, SV%num_psurf
           if (SV%idx_psurf(j) == i) then

@@ -22,7 +22,7 @@ contains
     integer(hid_t) :: absco_file_id, dset_id, filetype
     integer(hsize_t), allocatable :: dset_dims(:)
     integer :: hdferr
-    character(len=2) :: gas_index ! Is this always going to stay 2-characters long?
+    character(len=3) :: gas_index ! Is this always going to stay 2-characters long?
     double precision, allocatable :: tmp_absco_3D(:,:,:), tmp_absco_4D(:,:,:,:)
     character(len=999) :: tmp_str
     integer :: wl_idx_left, wl_idx_right, N_wl, i
@@ -40,7 +40,10 @@ contains
     call check_hdf_error(hdferr, fname, "Could not open dataset /Gas_Index")
     call h5dget_type_f(dset_id, filetype, hdferr)
 
+    allocate(dset_dims(1))
+    dset_dims(1) = 3
     call h5dread_f(dset_id, filetype, gas_index, dset_dims, hdferr)
+
     if (allocated(dset_dims)) deallocate(dset_dims)
     call check_hdf_error(hdferr, fname, "Error reading in: /Gas_Index")
 
@@ -50,18 +53,18 @@ contains
     ! Grab the full ABSCO table
     call logger%debug(fname, "Starting to read in cross section data..")
 
-    call get_HDF5_dset_dims(absco_file_id, "Gas_" // gas_index // "_Absorption", dset_dims)
+    call get_HDF5_dset_dims(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", dset_dims)
     absco_dims = size(dset_dims)
     deallocate(dset_dims)
 
     if (absco_dims == 4) then
        call logger%debug(fname, "ABSCO file has 4 dimensions")
-       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", &
+       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", &
             gas%cross_section, dset_dims)
        gas%has_h2o = .true.
     else if (absco_dims == 3) then
        call logger%debug(fname, "ABSCO file has 3 dimensions")
-       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index // "_Absorption", tmp_absco_3D, dset_dims)
+       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", tmp_absco_3D, dset_dims)
        ! Copy to gas structure
        allocate(gas%cross_section(dset_dims(1), dset_dims(2), dset_dims(3), 1))
        gas%cross_section(:,1,:,:) = tmp_absco_3D(:,:,:)
@@ -102,11 +105,13 @@ contains
        call check_hdf_error(hdferr, fname, "Could not open dataset /Broadener_Index")
        call h5dget_type_f(dset_id, filetype, hdferr)
 
+       allocate(dset_dims(1))
+       dset_dims(1) = 1
        call h5dread_f(dset_id, filetype, gas_index, dset_dims, hdferr)
        if (allocated(dset_dims)) deallocate(dset_dims)
        call check_hdf_error(hdferr, fname, "Error reading in: /Broadener_Index")
 
-       call read_DP_hdf_dataset(absco_file_id, "Broadener_" // gas_index // "_VMR", gas%H2O, dset_dims)
+       call read_DP_hdf_dataset(absco_file_id, "Broadener_" // gas_index(1:2) // "_VMR", gas%H2O, dset_dims)
 
     end if 
 

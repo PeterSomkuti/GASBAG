@@ -20,14 +20,14 @@ sh_on_atmos = np.zeros((sh_met.shape[0], atmos.shape[0]))
 for i in range(sh_on_atmos.shape[0]):
     sh_on_atmos[i] = np.interp(atmos[:,0], p_levels_met[i], sh_met[i])
 
-cov = np.clip(np.cov(sh_on_atmos.T), 1e-10, 1e10)
+cov = np.clip(np.cov(sh_on_atmos.T), 0, 1e10)
 
 #cov[cov < 1e-10] = 0.0
 
 # Set diagonals to at least some small value
 for i in range(cov.shape[0]):
-    if (cov[i,i] < 1e-5):
-        cov[i,i] = 1e-5
+    if (cov[i,i] < 1e-10):
+        cov[i,i] = 1e-6
 
 cov *= 1.0
 

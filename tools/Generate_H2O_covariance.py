@@ -27,9 +27,9 @@ cov = np.clip(np.cov(sh_on_atmos.T), 0, 1e10)
 # Set diagonals to at least some small value
 for i in range(cov.shape[0]):
     if (cov[i,i] < 1e-10):
-        cov[i,i] = 1e-6
+        cov[i,i] = 1e-10
 
-cov *= 1.0
+cov *= 0.5
 
 np.savetxt('h2o_covariance.dat', cov, fmt='%.5e')
 

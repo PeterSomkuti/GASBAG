@@ -314,7 +314,6 @@ contains
 
           ! Gas CS routine works in H2O VMR rather than SH
           this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
-          this_H2O = 0.0d0
 
           if (log_scaling) then
              this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), exp(this_p), &
@@ -325,19 +324,19 @@ contains
           end if
 
           if (is_H2O) then
-             H2O_corr = 1.0d0
+             H2O_corr = 1.0d0 - this_sh
           else
              H2O_corr = (1.0d0 - this_sh)
           end if
 
-          C_tmp = 1.0d0 / (9.81d0 * this_M) * NA * 0.1d0 * H2O_corr
+          C_tmp = 1.0d0 / 9.80665d0 * NA * 0.1d0 * H2O_corr
 
 
           ! Tau for this sublayer
           if (log_scaling) then
-             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp * exp(this_p)
+             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp * exp(this_p)
           else
-             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
+             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp
           end if
 
           ! Add sublayer contribution to full layer tau
@@ -385,12 +384,12 @@ contains
              end if
 
              if (is_H2O) then
-                H2O_corr = 1.0d0
+                H2O_corr = 1.0d0 - this_sh
              else
                 H2O_corr = (1.0d0 - this_sh_pert)
              end if
              ! This calculates the gas OD, as a result of a perturbed surface pressure
-             C_tmp = 1.0d0 / (9.81d0 * this_M) * NA * 0.1d0 * H2O_corr
+             C_tmp = 1.0d0 / (9.80665d0 * this_M) * NA * 0.1d0 * H2O_corr
 
              if (log_scaling) then
                 gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) * this_VMR_pert * C_tmp * exp(this_p_pert)

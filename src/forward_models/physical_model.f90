@@ -286,7 +286,7 @@ contains
 
        ! This is the amount by which we have to pad the hi-resolution grid in order to
        ! allow for ILS protrusion. (and add small percentage to be on the safe side)
-       hires_pad = (ils_hires_max_wl - ils_hires_min_wl) * 2.0d0
+       hires_pad = (ils_hires_max_wl - ils_hires_min_wl) * 1.10d0
 
        ! Grab the desired high-resolution wavelength grid spacing
        hires_spacing = MCS%window(i_win)%wl_spacing
@@ -1613,7 +1613,7 @@ contains
        call oco_type_convolution(hires_grid, this_solar(:,2), &
             ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
             ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-            this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
+            this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
             ILS_success)
 
 !!$       open(file="l1b_spec.dat", newunit=funit)

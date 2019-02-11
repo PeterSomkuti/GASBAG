@@ -343,7 +343,8 @@ contains
 
        if (wl_input(1) > ILS_delta_min) then
           call logger%warning(fname, "ILS protudes out of lower wavelength range!")
-          write(*,*) wl_input(1), ILS_delta_min
+          write(*,*) wl_input(1), ILS_delta_min, wl_kernels(1, idx_pix), wl_kernels(N_ils_pix, idx_pix)
+          write(*,*) wl_output(1), wl_output(N_pix)
           kernel_idx_min = searchsorted_dp(wl_kernels(:, idx_pix) + wl_output(idx_pix), wl_input(1))
           kernel_idx_max = N_ils_pix
           idx_hires_ILS_min = 1

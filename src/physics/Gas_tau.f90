@@ -50,12 +50,11 @@ contains
          sh_lower_pert, VMR_lower_pert, VMR_sigma_pert, this_VMR_pert, this_M_pert, &
          this_T_pert, this_sh_pert
     double precision :: C_tmp, dCS_dVMR_lower(size(wl)), p_lower_gas_pert, this_p_fac_lower
-    double precision, allocatable :: gas_tmp(:)
-    double precision :: this_CS_value(size(wl))
-    integer :: wl_left_indices(size(wl))
+    double precision, allocatable :: gas_tmp(:), this_CS_value(:)
+    integer, allocatable :: wl_left_indices(:)
 
-    double precision :: GK_abscissae((N_sub-1)/2+1), GK_weights((N_sub-1)/2+1), G_weights((N_sub-1)/2+1)
-    double precision :: GK_abscissae_f(N_sub), GK_weights_f(N_sub), G_weights_f(N_sub)
+    double precision, allocatable :: GK_abscissae(:), GK_weights(:), G_weights(:)
+    double precision, allocatable :: GK_abscissae_f(:), GK_weights_f(:), G_weights_f(:)
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
 
     integer :: N_lay, N_lev, N_wl, num_active_levels
@@ -66,6 +65,17 @@ contains
     integer :: gas_idx_fg
 
     double precision :: cpu_start, cpu_end
+
+    allocate(this_CS_value(size(wl)))
+    allocate(wl_left_indices(size(wl)))
+
+    allocate(GK_abscissae((N_sub+1)/2))
+    allocate(GK_weights((N_sub+1)/2))
+    allocate(G_weights((N_sub+1)/2))
+
+    allocate(GK_abscissae_f(N_sub))
+    allocate(GK_weights_f(N_sub))
+    allocate(G_weights_f(N_sub))
 
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
@@ -256,7 +266,8 @@ contains
        ! And adjust the GK abscissae and weights to our pressure interval
        ! between p_lower and p_higher. This way, we don't have to re-scale the
        ! result after integration and can obtain it simply by multiplying with
-       ! the GK weights.
+       ! the GK weights. NOTE: kronrod_adjust requires the order or the rule as
+       ! the third argument, but this is N_sub-1 (rather than just N_sub)!
 
        if (need_psurf_jac) then
           ! Since we altered the integration limit, we also need to re-scale the
@@ -266,19 +277,19 @@ contains
           G_weights_f_pert = G_weights_f
 
           if (log_scaling) then
-             call kronrod_adjust(log(p_higher), log(p_lower_pert), N_sub, &
+             call kronrod_adjust(log(p_higher), log(p_lower_pert), N_sub-1, &
                   GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
           else
-             call kronrod_adjust(p_higher, p_lower_pert, N_sub, &
+             call kronrod_adjust(p_higher, p_lower_pert, N_sub-1, &
                   GK_abscissae_f_pert, GK_weights_f_pert, G_weights_f_pert)
           end if
        end if
 
        if (log_scaling) then
-          call kronrod_adjust(log(p_higher), log(p_lower), N_sub, &
+          call kronrod_adjust(log(p_higher), log(p_lower), N_sub-1, &
                GK_abscissae_f, GK_weights_f, G_weights_f)
        else
-          call kronrod_adjust(p_higher, p_lower, N_sub, &
+          call kronrod_adjust(p_higher, p_lower, N_sub-1, &
                GK_abscissae_f, GK_weights_f, G_weights_f)
        end if
 

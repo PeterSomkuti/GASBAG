@@ -64,8 +64,8 @@ if 'physical_retrieval_results' in f:
 
     mask = (f['physical_retrieval_results/weak_co2_num_iterations'][:,:].flatten() <= 10)
     #mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 5)
-    mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 1)
-    mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 1)
+    mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 5)
+    mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 5)
 
     print(np.sum(mask))
 

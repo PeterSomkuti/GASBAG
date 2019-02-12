@@ -497,7 +497,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 1000
+       do i_fr=1, num_frames, 100
           do i_fp=1, num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -542,12 +542,14 @@ contains
        end do
 
        ! Save XGAS for each gas
-       do i=1, SV%num_gas
-          write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
-               // MCS%window(i_win)%name // "_X" // MCS%window(i_win)%gases(SV%gas_idx_lookup(i))
-          call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               results%xgas(:,:,i), out_dims2d, -9999.99d0)
+       do i=1,MCS%window(i_win)%num_gases
+          if (MCS%window(i_win)%gas_retrieved(i)) then
+             write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
+                  // MCS%window(i_win)%name // "_X" // MCS%window(i_win)%gases(i)
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%xgas(:,:,i), out_dims2d, -9999.99d0)
+          end if
        end do
 
 
@@ -668,10 +670,10 @@ contains
     double precision :: this_solar_shift, this_solar_stretch
 
     !! Atmosphere
-    integer :: num_gases, num_levels, num_active_levels
+    integer :: num_gases, num_levels, num_active_levels, s_start, s_stop
     double precision, allocatable :: gas_tau(:,:,:), gas_tau_dvmr(:,:,:), &
          gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:,:), gas_tau_dsh(:,:,:), &
-         vmr_pert(:)
+         vmr_pert(:), this_vmr_profile(:)
     double precision :: gas_scaling_factor
     logical :: is_H2O
     !! Albedo
@@ -847,7 +849,7 @@ contains
 
     do i=1, SV%num_gas
        if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = 1.0d0
+          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = 0.5d0
        end if
 
        if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
@@ -974,7 +976,7 @@ contains
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
     allocate(radiance_tmp_work_hi(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
- 
+
     this_solar_shift = 0.0d0
     this_solar_stretch = 1.0d0
 
@@ -1074,13 +1076,13 @@ contains
           do i=1, num_gases
              ! Replace SH if H2O is used in atmosphere
              if (MCS%window(i_win)%gases(i) == "H2O") then
-             !   this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
+                !   this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
              end if
 
              ! Copy gas VMRs from SV if appropriate
              do j=1, SV%num_gas
                 if (SV%gas_idx_lookup(j) == i) then
-                   if (MCS%window(i_win)%gas_retrieve_profile(j)) then
+                   if (MCS%window(i_win)%gas_retrieve_profile(i)) then
                       this_atm%gas_vmr(:,i) = SV%svsv(SV%idx_gas(j,:))
                    end if
                 end if
@@ -1118,6 +1120,7 @@ contains
           allocate(gas_tau_dsh(size(this_solar, 1), num_levels-1, num_gases))
           allocate(gas_tau_pert(size(this_solar, 1), num_levels-1, num_levels-1, num_gases))
           allocate(vmr_pert(num_levels))
+          allocate(this_vmr_profile(num_levels))
 
           ! If we retrieve surface pressure, grab it from the state vector,
           ! otherwise, grab it from the MET data.
@@ -1137,6 +1140,8 @@ contains
 
           do j=1, num_gases
 
+             ! Copy over this gases' VMR profile
+             this_vmr_profile(:) = this_atm%gas_vmr(:,j)
              do_gas_jac = .false.
 
              if (SV%num_gas > 0) then
@@ -1149,7 +1154,12 @@ contains
                    if (SV%gas_idx_lookup(i) == j) then
 
                       if (MCS%window(i_win)%gas_retrieve_scale(j)) then
-                         gas_scaling_factor = SV%svsv(SV%idx_gas(j,1))
+                         !gas_scaling_factor = SV%svsv(SV%idx_gas(j,1))
+
+                         s_start = SV%gas_retrieve_scale_start(i) !MCS%window(i_win)%gas_retrieve_scale_start(j,l)
+                         s_stop = SV%gas_retrieve_scale_stop(i) !MCS%window(i_win)%gas_retrieve_scale_stop(j,l)
+                         ! Multiply this segment by the scaling factor
+                         this_vmr_profile(s_start:s_stop) = this_vmr_profile(s_start:s_stop) * SV%svsv(SV%idx_gas(i,1))
                       end if
 
                       if (MCS%window(i_win)%gas_retrieve_profile(j)) then
@@ -1158,6 +1168,7 @@ contains
 
                    end if
                 end do
+
              else
                 ! If no gases are retrieved, we keep this at 1!
                 gas_scaling_factor = 1.0d0
@@ -1173,7 +1184,7 @@ contains
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
                   hires_grid, &
-                  this_atm%gas_vmr(:,j) * gas_scaling_factor, &
+                  this_vmr_profile, & !this_atm%gas_vmr(:,j) * gas_scaling_factor, &
                   psurf, &
                   this_atm%p(:), &
                   this_atm%T(:), &
@@ -1205,11 +1216,11 @@ contains
 !!$             close(funit)
 !!$          end do
 !!$
-          open(newunit=funit, file="gas_od_full.dat")
-          do j=1, size(gas_tau, 1)
-             write(funit, *) (sum(gas_tau(j,:,l)), l=1,size(gas_tau,3))
-          end do
-          close(funit)
+!!$          open(newunit=funit, file="gas_od_full.dat")
+!!$          do j=1, size(gas_tau, 1)
+!!$             write(funit, *) (sum(gas_tau(j,:,l)), l=1,size(gas_tau,3))
+!!$          end do
+!!$          close(funit)
 
 
 
@@ -1313,19 +1324,28 @@ contains
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
                 ! This is a scale-type jacobian
 
-                K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
-                     * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-                     * sum(gas_tau(:,:,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
+                do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
 
-                ! If this is a H2O Jacobian, we need to add the derivative
-                ! dtau / dsh * dsh / dh2o
-                if (MCS%window(i_win)%gases(sv%gas_idx_lookup(i)) == "H2O") then
+                   if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1) cycle
 
-                !   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
-                !        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
-                !        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
-                !        dim=2)
-                end if
+                   s_start = SV%gas_retrieve_scale_start(i) !MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j)
+                   s_stop = SV%gas_retrieve_scale_stop(i) !MCS%window(i_win)%gas_retrieve_scale_stop(sv%gas_idx_lookup(i), j)
+
+                   K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+                        * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+                        * sum(gas_tau(:,s_start:s_stop,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
+
+                   ! If this is a H2O Jacobian, we need to add the derivative
+                   ! dtau / dsh * dsh / dh2o
+                   if (MCS%window(i_win)%gases(sv%gas_idx_lookup(i)) == "H2O") then
+
+                      !   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
+                      !        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
+                      !        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
+                      !        dim=2)
+                   end if
+
+                end do
 
              end if
 
@@ -1439,13 +1459,13 @@ contains
 !!$       end do
 !!$       close(funit)
 !!$
-       open(file="hires_spec.dat", newunit=funit)
-       do i=1, N_hires
-          write(funit,*) this_solar(i,1), this_solar(i,2), dsolar_dlambda(i), &
-               solar_spectrum_regular(i,1), &
-               solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
-       end do
-       close(funit)
+!!$       open(file="hires_spec.dat", newunit=funit)
+!!$       do i=1, N_hires
+!!$          write(funit,*) this_solar(i,1), this_solar(i,2), dsolar_dlambda(i), &
+!!$               solar_spectrum_regular(i,1), &
+!!$               solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
+!!$       end do
+!!$       close(funit)
 
 
        select type(my_instrument)
@@ -1614,36 +1634,36 @@ contains
           end do
        end do
 
-       open(file="jacobian.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) (K(i, j), j=1, N_sv)
-       end do
-       close(funit)
-
-       if (allocated(solar_low)) deallocate(solar_low)
-       allocate(solar_low(N_spec))
-
-       call oco_type_convolution(hires_grid, this_solar(:,2), &
-            ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-            ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-            this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
-            ILS_success)
+!!$       open(file="jacobian.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) (K(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
 !!$
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i), solar_low(i)
+!!$       if (allocated(solar_low)) deallocate(solar_low)
+!!$       allocate(solar_low(N_spec))
+!!$
+!!$       call oco_type_convolution(hires_grid, this_solar(:,2), &
+!!$            ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$            ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$            this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
+!!$            ILS_success)
 
-       end do
-       close(funit)
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i), solar_low(i)
+!!$
+!!$       end do
+!!$       close(funit)
+!!$
+!!$       deallocate(solar_low)
 
-       deallocate(solar_low)
 
-
-       do i=1, num_active_levels
-          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
-       end do
-
+!!$       do i=1, num_active_levels
+!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
+!!$       end do
+!!$
        write(*,*) "old, current and delta state vector, and errors"
        write(*,*) "Iteration: ", iteration
        do i=1, N_sv
@@ -1743,6 +1763,7 @@ contains
        if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
        if (allocated(vmr_pert)) deallocate(vmr_pert)
+       if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
 
        iteration = iteration + 1
        !read(*,*)
@@ -2174,18 +2195,39 @@ contains
           end if
        end do
 
+       k = 1
        do j=1, SV%num_gas
+
 
           ! Check if this SV element is a scalar retrieval
           if (SV%idx_gas(j,1) == i) then
-             if (MCS%window(i_win)%gas_retrieve_scale(j)) then
-                results%sv_names(i) = trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale")
+
+             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
+
+                write(*,*) "I am here", i,j
+
+                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1) cycle
+
+                write(*,*) " And then here..", i,j,k
+
+                write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
+                write(tmp_str, '(A, G0.1)') trim(tmp_str), &
+                     SV%gas_retrieve_scale_start(j)
+                     !MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k)
+                write(tmp_str, '(A,A,G0.1)') trim(tmp_str), ":" , &
+                     SV%gas_retrieve_scale_stop(j)
+                     !MCS%window(i_win)%gas_retrieve_scale_stop(sv%gas_idx_lookup(j), k)
+                write(*,*) trim(tmp_str)
+                results%sv_names(i) = trim(tmp_str)
+
+                k = k + 1
              end if
+
           end if
 
           ! Check if it's a profile retrieval, and then loop through the profile
           ! elements to get each name.
-          if (MCS%window(i_win)%gas_retrieve_profile(j)) then
+          if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(j))) then
              do k=1, size(SV%idx_gas, 2)
                 if (SV%idx_gas(j,k) == i) then
 

@@ -10,7 +10,7 @@ module statevector_mod
             num_solar_shift, num_solar_stretch
         integer, dimension(:), allocatable :: idx_albedo, idx_sif, &
              idx_dispersion, idx_psurf, idx_solar_shift, idx_solar_stretch, &
-             gas_idx_lookup
+             gas_idx_lookup, gas_retrieve_scale_start, gas_retrieve_scale_stop
         integer, allocatable :: idx_gas(:,:)
         ! State vector (current), state vector a priori
         double precision, dimension(:), allocatable :: svsv, svap, sver
@@ -43,6 +43,8 @@ contains
 
     if (allocated(SV%idx_gas)) deallocate(SV%idx_gas)
     if (allocated(SV%gas_idx_lookup)) deallocate(SV%gas_idx_lookup)
+    if (allocated(SV%gas_retrieve_scale_start)) deallocate(SV%gas_retrieve_scale_start)
+    if (allocated(SV%gas_retrieve_scale_stop)) deallocate(SV%gas_retrieve_scale_stop)
 
     SV%num_albedo = -1
     SV%num_sif = -1
@@ -62,7 +64,7 @@ contains
     type(statevector), intent(inout) :: SV
 
     character(len=*), parameter :: fname = "parse_and_initialize_statevector"
-    type(string), allocatable :: split_string(:), split_gas_string(:)
+    type(string), allocatable :: split_string(:), split_gas_string(:), split_scale_string(:)
     type(string) :: check_gas_name, check_gas_retr_type
     character(len=999) :: tmp_str
 
@@ -73,12 +75,19 @@ contains
     integer :: i, j, k, gas_index, known_SV_max, last_known
     logical :: SV_found
 
+    integer, allocatable :: gas_retr_count(:)
+
     integer :: num_albedo_parameters, num_dispersion_parameters, &
          num_sif_parameters, num_psurf_parameters, num_solar_shift_parameters, &
-         num_solar_stretch_parameters
+         num_solar_stretch_parameters, num_retrieved_gas
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
+
+    ! How many SV elements do we have per gas? We can retrieve
+    ! multiple sub-column VMRs for our gases.
+    allocate(gas_retr_count(MCS%window(i_win)%num_gases))
+    gas_retr_count(:) = 0
 
     ! These are the known state vector elements - only these will be properly
     ! parsed. The order in which they are defined is not significant.
@@ -122,7 +131,7 @@ contains
 
           ! If there is a (one) '-' in the state vector name, we might
           ! have a gas candidate.
-          if (split_string(i)%count('-') == 1) then
+          if (split_string(i)%count('-') >= 1) then
 
              ! Split that string, so we can grab the gas bit before the
              ! dash, and check that one against the list of known SVs
@@ -249,10 +258,18 @@ contains
           ! We tell the algorithm to retrieve either a scaling factor,
           ! or a full profile by attaching a "-scale" or "-profile". So when
           ! checking for gases, we must drop that part of the string.
-          if (split_string(i)%count("-") == 1) then
+          if (split_string(i)%count("-") >= 1) then
              call split_string(i)%split(tokens=split_gas_string, sep='-')
+             ! Everything OK, we need to supply scalar retrieval
+             ! as e.g. CO2-scale-1:5, ergo exactly 2 "-" symbols
              check_gas_name = split_gas_string(1)
              check_gas_retr_type = split_gas_string(2)
+
+             !   write(tmp_str, '(A,A)') "Sorry, SV element for gas retrieval needs two '-' signs: ", &
+             !        split_string(i)%chars()
+             !   call logger%fatal(fname, trim(tmp_str))
+             !   stop 1
+
           else
              check_gas_name = split_string(i)
              check_gas_retr_type = ""
@@ -276,11 +293,24 @@ contains
                    if ((check_gas_retr_type == "profile") .or. (check_gas_retr_type == "")) then
                       write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_gas_name%chars(), &
                            " as a full profile."
+                      call logger%debug(fname, trim(tmp_str))
                       MCS%window(i_win)%gas_retrieve_profile(k) = .true.
                    else if (check_gas_retr_type == "scale") then
                       write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_gas_name%chars(), &
-                           " as a scale factor."
+                           " as scale factor(s)."
+                      call logger%debug(fname, trim(tmp_str))
+                      ! Increment gas retrieval counter
+                      gas_retr_count(k) = gas_retr_count(k) + 1
+
                       MCS%window(i_win)%gas_retrieve_scale(k) = .true.
+                      call split_gas_string(3)%split(tokens=split_scale_string, sep=':')
+
+                      ! Stick the gas scalar start and end indices into the MCS
+                      write(tmp_str, *) split_scale_string(1)%chars()
+                      read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k))
+                      write(tmp_str, *) split_scale_string(2)%chars()
+                      read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k))
+
                    else
                       call logger%fatal(fname, "Gas state vector needs to be stated as " &
                            // "[gas]-profile or [gas]-scale.")
@@ -298,6 +328,7 @@ contains
 
     end do
 
+
     ! Once we have all the data, initialize the state vector with the appropriate
     ! number of elements for each type.
 
@@ -310,7 +341,8 @@ contains
          num_dispersion_parameters, &
          num_psurf_parameters, &
          num_solar_shift_parameters, &
-         num_solar_stretch_parameters)
+         num_solar_stretch_parameters, &
+         gas_retr_count)
 
   end subroutine parse_and_initialize_SV
 
@@ -319,14 +351,14 @@ contains
 
   subroutine initialize_statevector(i_win, num_levels, sv, &
        count_albedo, count_sif, count_dispersion, count_psurf, &
-       count_solar_shift, count_solar_stretch)
+       count_solar_shift, count_solar_stretch, gas_retr_count)
 
     implicit none
     integer, intent(in) :: i_win, num_levels
     type(statevector), intent(inout) :: sv
     integer, intent(in) :: count_albedo, count_sif, &
          count_dispersion, count_psurf, count_solar_shift, &
-         count_solar_stretch
+         count_solar_stretch, gas_retr_count(:)
 
     integer :: count_gas
     character(len=*), parameter :: fname = "initialize_statevector"
@@ -438,26 +470,32 @@ contains
 
     ! In order to find out which gases are retrieved, we access the MCS
     ! rather than have it passed into this function. We also have to find out
-    ! how many leves the atmosphere currently has, if we run profile
+    ! how many levels the atmosphere currently has, if we run profile
     ! retrievals.
 
     ! Simply just count the number of gases and add either 1
     ! or the number of levels, depending on retrieval type.
 
-    count_gas = 0 ! This gives us the number of retrieved gases
-    do i=1, MCS%window(i_win)%num_gases
-       if (.not. MCS%window(i_win)%gas_retrieved(i)) cycle
-       count_gas = count_gas + 1
-    end do
+    !count_gas = 0 ! This gives us the number of retrieved gases
+    !do i=1, MCS%window(i_win)%num_gases
+    !   if (.not. MCS%window(i_win)%gas_retrieved(i)) cycle
+    !   count_gas = count_gas + count(MCS%window(i_win)%gas_retrieve_scale_start(i, :) /= -1)
+    !end do
+
+    count_gas = sum(gas_retr_count)
 
     sv%num_gas = count_gas
 
     if (count_gas > 0) then
        allocate(sv%idx_gas(count_gas, num_levels))
        allocate(sv%gas_idx_lookup(count_gas))
+       allocate(sv%gas_retrieve_scale_start(count_gas))
+       allocate(sv%gas_retrieve_scale_stop(count_gas))
 
        sv%idx_gas(:,:) = -1
        sv%gas_idx_lookup(:) = -1
+       sv%gas_retrieve_scale_start(:) = -1
+       sv%gas_retrieve_scale_stop(:) = -1
 
        write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", count_gas
        call logger%info(fname, trim(tmp_str))
@@ -471,16 +509,32 @@ contains
                    sv_count = sv_count + 1
                    sv%idx_gas(cnt, j) = sv_count
                 end do
+
+                sv%gas_idx_lookup(cnt) = i
+                cnt = cnt + 1
+
              end if
+
 
              if (MCS%window(i_win)%gas_retrieve_scale(i)) then
-                sv_count = sv_count + 1
-                sv%idx_gas(cnt, :) = -1
-                sv%idx_gas(cnt, 1) = sv_count
+                ! Retrieving scale factor(s)? Set idx_gas to -1 first.
+                do j=1, gas_retr_count(i)
+                   ! Loop through the number of retrieved elements per
+                   ! gas to grab all scale limits for each gas i and each
+                   ! retrieved parameter j per gas i
+                   sv%idx_gas(cnt, :) = -1
+
+                   sv_count = sv_count + 1
+                   sv%idx_gas(cnt, 1) = sv_count
+                   sv%gas_idx_lookup(cnt) = i
+
+                   sv%gas_retrieve_scale_start(cnt) = MCS%window(i_win)%gas_retrieve_scale_start(i, j)
+                   sv%gas_retrieve_scale_stop(cnt) = MCS%window(i_win)%gas_retrieve_scale_stop(i, j)
+                   cnt = cnt + 1
+                end do
              end if
 
-             sv%gas_idx_lookup(cnt) = i
-             cnt = cnt + 1
+
           end if
        end do
 

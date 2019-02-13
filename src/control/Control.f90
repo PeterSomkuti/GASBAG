@@ -62,7 +62,8 @@ module control_mod
        logical, allocatable :: gas_retrieved(:)
        ! What type of gas retrieval is used here?
        logical, allocatable :: gas_retrieve_profile(:), gas_retrieve_scale(:)
-       integer, allocatable :: gas_retrieve_scale_start(:,:), gas_retrieve_scale_stop(:,:)
+       double precision, allocatable :: gas_retrieve_scale_start(:,:), &
+            gas_retrieve_scale_stop(:,:), gas_retrieve_scale_cov(:,:)
        integer :: num_gases
        integer :: N_sublayers
        double precision :: dsigma_scale ! Convergence scaling factor
@@ -451,6 +452,7 @@ contains
                     allocate(MCS%window(window_nr)%gas_retrieve_scale(size(fini_string_array)))
                     allocate(MCS%window(window_nr)%gas_retrieve_scale_start(size(fini_string_array), 99))
                     allocate(MCS%window(window_nr)%gas_retrieve_scale_stop(size(fini_string_array), 99))
+                    allocate(MCS%window(window_nr)%gas_retrieve_scale_cov(size(fini_string_array), 99))
                     allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
 
 

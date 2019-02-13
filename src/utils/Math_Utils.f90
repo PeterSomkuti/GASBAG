@@ -93,6 +93,11 @@ contains
        ! integer division does by default.
        m = (L + R) / 2
 
+       if (m == size(x)) then
+          idx = m
+          return
+       end if
+
        if ((x(m) <= val) .and. (x(m+1) >= val)) then
           ! Found!
           idx = m

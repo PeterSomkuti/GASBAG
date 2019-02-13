@@ -13,6 +13,7 @@ from cartopy import crs as ccrs
 
 f = h5py.File(sys.argv[1], 'r')
 
+gridsize = 2.0
 
 def plot_map_and_hist(lon, lat, data, gridsize=1.0,
                       title='', fname='default.pdf'):
@@ -25,7 +26,7 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
                                      bins=[360.0 / gridsize, 180.0/gridsize],
                                      statistic='mean')
 
-    data_lower, data_higher = np.nanpercentile(binres[0], [2, 98])
+    data_lower, data_higher = np.nanpercentile(binres[0], [5, 95])
 
 
     fig = plt.figure(figsize=(12,4), dpi=150)
@@ -41,13 +42,15 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
     ax.set_title("(${:.1f}^\circ$)".format(gridsize))
     plt.colorbar(pcm, ax=ax)
 
-    ax = plt.subplot(gs[1])
-    ax.hist(binres[0].flatten(),
-            range=(0.95 * data_lower, 1.05 * data_higher),
-            bins=50)
-
     hist_med = np.nanmedian(binres[0].flatten())
     hist_iqr = np.diff(np.nanpercentile(binres[0].flatten(), [25, 75]))[0]
+
+    ax = plt.subplot(gs[1])
+    ax.hist(binres[0].flatten(),
+            range=(data_lower - hist_iqr, data_higher + hist_iqr),
+            bins=50)
+
+
 
     ax.vlines([hist_med], ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1],
               color='red', linestyle='dashed', lw=0.5)
@@ -63,9 +66,9 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
 if 'physical_retrieval_results' in f:
 
     mask = (f['physical_retrieval_results/weak_co2_num_iterations'][:,:].flatten() <= 10)
-    #mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 5)
-    mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 5)
-    mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 5)
+    mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 10)
+    #mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 5)
+    #mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 5)
 
     print(np.sum(mask))
 
@@ -82,23 +85,23 @@ if 'physical_retrieval_results' in f:
 
 if 'HighLevelResults' in f:
 
-    lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[::1000]
-    lat =  f['SoundingGeometry/sounding_latitude'][:,:].flatten()[::1000]
+    lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[::10]
+    lat =  f['SoundingGeometry/sounding_latitude'][:,:].flatten()[::10]
 
-    co2_ratio = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::1000]
-    h2o_ratio = f['HighLevelResults/CloudScreen/h2o_ratio'][:,:].flatten()[::1000]
+    co2_ratio = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::10]
+    h2o_ratio = f['HighLevelResults/CloudScreen/h2o_ratio'][:,:].flatten()[::10]
 
-    co2_weak = f['HighLevelResults/CO2_bands/co2_vcd_weakBand'][:,:].flatten()[::1000]
-    co2_strong = f['HighLevelResults/CO2_bands/co2_vcd_strongBand'][:,:].flatten()[::1000]
+    co2_weak = f['HighLevelResults/CO2_bands/co2_vcd_weakBand'][:,:].flatten()[::10]
+    co2_strong = f['HighLevelResults/CO2_bands/co2_vcd_strongBand'][:,:].flatten()[::10]
 
 if 'physical_retrieval_results' in f:
-    plot_map_and_hist(lon, lat, h2o_strong, gridsize=0.5,
-                      title='Strong H$_2$O Scale',
-                      fname=f.filename+'_strong_h2o_scale.pdf')
+    plot_map_and_hist(lon, lat, h2o_strong, gridsize=gridsize,
+                      title='Strong XH$_2$O',
+                      fname=f.filename+'_strong_h2o.pdf')
 
-    plot_map_and_hist(lon, lat, h2o_weak, gridsize=0.5,
-                      title='Weak H$_2$O Scale',
-                      fname=f.filename+'_weak_h2o_scale.pdf')
+    plot_map_and_hist(lon, lat, h2o_weak, gridsize=gridsize,
+                      title='Weak XH$_2$O',
+                      fname=f.filename+'_weak_h2o.pdf')
 
 
 
@@ -107,16 +110,16 @@ if 'physical_retrieval_results' in f:
         chi2 = f[f'physical_retrieval_results/{band}_co2_retrieved_chi2'][:,:].flatten()[mask]
         plot_map_and_hist(lon, lat,
                           chi2,
-                          gridsize=0.5,
+                          gridsize=gridsize,
                           title=f'{band} $\chi^2$',
                           fname=f.filename+f'_{band}_chi2.pdf')
 
-        meas = f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0]
-        meas_norm = (f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0].T /
-                     np.nanmax(f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0], axis=1)).T
-        conv = f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0]
-        conv_norm = (f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0].T /
-                     np.nanmax(f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0], axis=1)).T
+        meas = f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask]
+        meas_norm = (f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask].T /
+                     np.nanmax(f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask], axis=1)).T
+        conv = f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0][mask]
+        conv_norm = (f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0][mask].T /
+                     np.nanmax(f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0][mask], axis=1)).T
 
 
         res_relative = (conv - meas) / meas
@@ -131,28 +134,30 @@ if 'physical_retrieval_results' in f:
 
         ax.plot(np.nanpercentile(conv_norm-meas_norm, 50, axis=0),
                 'k-', lw=1.5)
-        for perc in [5, 25, 75, 95]:
+        for perc in [5, 25]:
             ax.plot(np.nanpercentile(conv_norm-meas_norm, perc, axis=0),
             #ax.plot(np.nanpercentile(res_relative, perc, axis=0),
-                    'b--', lw=1.0)
-
+                    'b-', lw=0.5)
+            ax.plot(np.nanpercentile(conv_norm-meas_norm, 100-perc, axis=0),
+            #ax.plot(np.nanpercentile(res_relative, perc, axis=0),
+                    'b-', lw=0.5)
         plt.savefig(f'{f.filename}_residuals_{band}.pdf', bbox_inches='tight')
 
 
 
-plot_map_and_hist(lon, lat, co2_weak, gridsize=0.5,
-                  title='Weak CO$_2$ Scale',
-                  fname=f.filename+'_weak_co2_scale.pdf')
+plot_map_and_hist(lon, lat, co2_weak, gridsize=gridsize,
+                  title='Weak XCO$_2$',
+                  fname=f.filename+'_weak_co2.pdf')
 
-plot_map_and_hist(lon, lat, co2_strong, gridsize=0.5,
-                  title='Strong CO$_2$ Scale',
-                  fname=f.filename+'_strong_co2_scale.pdf')
+plot_map_and_hist(lon, lat, co2_strong, gridsize=gridsize,
+                  title='Strong XCO$_2$',
+                  fname=f.filename+'_strong_co2.pdf')
 
-plot_map_and_hist(lon, lat, co2_ratio, gridsize=0.5,
+plot_map_and_hist(lon, lat, co2_ratio, gridsize=gridsize,
                   title='CO$_2$ Ratio',
                   fname=f.filename+'_co2_ratio.pdf')
 
-plot_map_and_hist(lon, lat, h2o_ratio, gridsize=0.5,
+plot_map_and_hist(lon, lat, h2o_ratio, gridsize=gridsize,
                   title='H$_2$O Ratio',
                   fname=f.filename+'_h2o_ratio.pdf')
 

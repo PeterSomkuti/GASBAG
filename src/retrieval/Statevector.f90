@@ -10,7 +10,10 @@ module statevector_mod
             num_solar_shift, num_solar_stretch
         integer, dimension(:), allocatable :: idx_albedo, idx_sif, &
              idx_dispersion, idx_psurf, idx_solar_shift, idx_solar_stretch, &
-             gas_idx_lookup, gas_retrieve_scale_start, gas_retrieve_scale_stop
+             gas_idx_lookup
+        double precision, allocatable :: gas_retrieve_scale_start(:), &
+             gas_retrieve_scale_stop(:)
+        double precision, allocatable :: gas_retrieve_scale_cov(:)
         integer, allocatable :: idx_gas(:,:)
         ! State vector (current), state vector a priori
         double precision, dimension(:), allocatable :: svsv, svap, sver
@@ -45,6 +48,7 @@ contains
     if (allocated(SV%gas_idx_lookup)) deallocate(SV%gas_idx_lookup)
     if (allocated(SV%gas_retrieve_scale_start)) deallocate(SV%gas_retrieve_scale_start)
     if (allocated(SV%gas_retrieve_scale_stop)) deallocate(SV%gas_retrieve_scale_stop)
+    if (allocated(SV%gas_retrieve_scale_cov)) deallocate(SV%gas_retrieve_scale_cov)
 
     SV%num_albedo = -1
     SV%num_sif = -1
@@ -291,7 +295,7 @@ contains
                    ! Depending on the type, we must set the profile/scale retrieval
                    ! flags accordingly. The default setting is a profile retrieval.
                    if ((check_gas_retr_type == "profile") .or. (check_gas_retr_type == "")) then
-                      write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_gas_name%chars(), &
+                      write(tmp_str, '(A, A, A)b') "We are retrieving gas ", check_gas_name%chars(), &
                            " as a full profile."
                       call logger%debug(fname, trim(tmp_str))
                       MCS%window(i_win)%gas_retrieve_profile(k) = .true.
@@ -305,11 +309,28 @@ contains
                       MCS%window(i_win)%gas_retrieve_scale(k) = .true.
                       call split_gas_string(3)%split(tokens=split_scale_string, sep=':')
 
-                      ! Stick the gas scalar start and end indices into the MCS
+                      ! Stick the gas scalar start and end psurf factors into the MCS
                       write(tmp_str, *) split_scale_string(1)%chars()
                       read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k))
                       write(tmp_str, *) split_scale_string(2)%chars()
                       read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k))
+                      write(tmp_str, *) split_scale_string(3)%chars()
+                      read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_cov(k, gas_retr_count(k))
+
+                      ! Of course the values cannot be outside of the interval [0,1]
+                      if ((MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k)) < 0.0d0) .or. &
+                           (MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k)) > 1.0d0)) then
+                         call logger%fatal(fname, "Sorry scalar retrieval boundary needs to be [0,1]!")
+                         call logger%fatal(fname, split_string(i)%chars())
+                         stop 1
+                      end if
+
+                      if ((MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k)) < 0.0d0) .or. &
+                           (MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k)) > 1.0d0)) then
+                         call logger%fatal(fname, "Sorry scalar retrieval boundary needs to be [0,1]!")
+                         call logger%fatal(fname, split_string(i)%chars())
+                         stop 1
+                      end if
 
                    else
                       call logger%fatal(fname, "Gas state vector needs to be stated as " &
@@ -491,11 +512,13 @@ contains
        allocate(sv%gas_idx_lookup(count_gas))
        allocate(sv%gas_retrieve_scale_start(count_gas))
        allocate(sv%gas_retrieve_scale_stop(count_gas))
+       allocate(sv%gas_retrieve_scale_cov(count_gas))
 
        sv%idx_gas(:,:) = -1
        sv%gas_idx_lookup(:) = -1
-       sv%gas_retrieve_scale_start(:) = -1
-       sv%gas_retrieve_scale_stop(:) = -1
+       sv%gas_retrieve_scale_start(:) = -1.0d0
+       sv%gas_retrieve_scale_stop(:) = -1.0d0
+       sv%gas_retrieve_scale_cov(:) = -1.0d0
 
        write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", count_gas
        call logger%info(fname, trim(tmp_str))
@@ -530,6 +553,7 @@ contains
 
                    sv%gas_retrieve_scale_start(cnt) = MCS%window(i_win)%gas_retrieve_scale_start(i, j)
                    sv%gas_retrieve_scale_stop(cnt) = MCS%window(i_win)%gas_retrieve_scale_stop(i, j)
+                   sv%gas_retrieve_scale_cov(cnt) = MCS%window(i_win)%gas_retrieve_scale_cov(i, j)
                    cnt = cnt + 1
                 end do
              end if

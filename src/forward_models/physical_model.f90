@@ -82,6 +82,8 @@ module physical_model_mod
   integer :: num_ils_hires
   double precision :: ils_norm_factor
 
+  double precision, allocatable :: gas_tau_static(:,:,:)
+
   double precision, allocatable :: dispersion_coefs(:,:,:)
   double precision, allocatable :: snr_coefs(:,:,:,:)
   double precision, allocatable :: land_fraction(:,:)
@@ -303,6 +305,11 @@ contains
           hires_grid(i) = MCS%window(i_win)%wl_min - hires_pad + dble(i-1) * hires_spacing
        end do
 
+       allocate(gas_tau_static( &
+            N_hires, &
+            size(initial_atm%p), &
+            MCS%window(i_win)%num_gases))
+
        ! Now that we have the appropriate high-resolution spacing, we can finish the ILS business
        num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / hires_spacing)
 
@@ -497,7 +504,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 100
+       do i_fr=1, num_frames, 10
           do i_fp=1, num_fp
 
              !if (land_fraction(i_fp, i_fr) < 0.95) then
@@ -612,6 +619,8 @@ contains
        deallocate(measured_radiance)
        deallocate(noise_radiance)
 
+       deallocate(gas_tau_static)
+
        !deallocate(bad_sample_list)
        !deallocate(spike_list)
 
@@ -670,10 +679,11 @@ contains
     double precision :: this_solar_shift, this_solar_stretch
 
     !! Atmosphere
-    integer :: num_gases, num_levels, num_active_levels, s_start, s_stop
+    integer :: num_gases, num_levels, num_active_levels
     double precision, allocatable :: gas_tau(:,:,:), gas_tau_dvmr(:,:,:), &
          gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:,:), gas_tau_dsh(:,:,:), &
          vmr_pert(:), this_vmr_profile(:)
+    integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
     double precision :: gas_scaling_factor
     logical :: is_H2O
     !! Albedo
@@ -820,7 +830,7 @@ contains
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
           if (i==1) then
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0
           else
              Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0
           end if
@@ -849,7 +859,7 @@ contains
 
     do i=1, SV%num_gas
        if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = 0.5d0
+          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = (SV%gas_retrieve_scale_cov(i)) ** 2
        end if
 
        if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(i))) then
@@ -1151,21 +1161,49 @@ contains
                 ! We need to 'reverse-lookup' to see which SV index belongs to this
                 ! gas to grab the right scaling factor.
                 do i=1, SV%num_gas
+
+                   if (MCS%window(i_win)%gas_retrieve_scale(j)) then
+                      do_gas_jac = .true.
+                      if (SV%gas_idx_lookup(i) == j) then
+
+                         s_start(i) = searchsorted_dp(this_atm%p, &
+                              SV%gas_retrieve_scale_start(i) * psurf, .false.)
+                         s_start(i) = max(1, s_start(i))
+                         s_stop(i) = searchsorted_dp(this_atm%p, &
+                              SV%gas_retrieve_scale_stop(i) * psurf, .false.)
+                         s_stop(i) = min(num_active_levels, s_stop(i))
+
+                      end if
+                   end if
+
+                   if (MCS%window(i_win)%gas_retrieve_profile(SV%gas_idx_lookup(i))) then
+                      do_gas_jac = .true.
+                   end if
+                end do
+
+                ! We need to make sure that we are not "doubling up" on a specific
+                ! gas VMR level when retrieving scale factors. E.g. 0:0.5 0.5:1.0 will
+                ! produce overlapping s_start/s_stop.
+
+                do i=1, SV%num_gas
+                   do l=1, SV%num_gas
+                      if (SV%gas_idx_lookup(i) /= j) cycle
+                      if (SV%gas_idx_lookup(l) /= j) cycle
+
+                      if (s_start(i) == s_stop(l)) then
+                         s_start(i) = s_start(i) + 1
+                      end if
+
+                   end do
+                end do
+
+                do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
+                      !write(*,*) results%sv_names(sv%idx_gas(j,1))%chars(), &
+                      !     MCS%window(i_win)%gases(j)%chars(), s_start(i), s_stop(i)
 
-                      if (MCS%window(i_win)%gas_retrieve_scale(j)) then
-                         !gas_scaling_factor = SV%svsv(SV%idx_gas(j,1))
-
-                         s_start = SV%gas_retrieve_scale_start(i) !MCS%window(i_win)%gas_retrieve_scale_start(j,l)
-                         s_stop = SV%gas_retrieve_scale_stop(i) !MCS%window(i_win)%gas_retrieve_scale_stop(j,l)
-                         ! Multiply this segment by the scaling factor
-                         this_vmr_profile(s_start:s_stop) = this_vmr_profile(s_start:s_stop) * SV%svsv(SV%idx_gas(i,1))
-                      end if
-
-                      if (MCS%window(i_win)%gas_retrieve_profile(j)) then
-                         do_gas_jac = .true.
-                      end if
-
+                      this_vmr_profile(s_start(i):s_stop(i)) = this_vmr_profile(s_start(i):s_stop(i)) &
+                           * SV%svsv(SV%idx_gas(i,1))
                    end if
                 end do
 
@@ -1328,12 +1366,9 @@ contains
 
                    if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1) cycle
 
-                   s_start = SV%gas_retrieve_scale_start(i) !MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j)
-                   s_stop = SV%gas_retrieve_scale_stop(i) !MCS%window(i_win)%gas_retrieve_scale_stop(sv%gas_idx_lookup(i), j)
-
                    K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
                         * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
-                        * sum(gas_tau(:,s_start:s_stop,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
+                        * sum(gas_tau(:,s_start(i):s_stop(i)-1,SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
 
                    ! If this is a H2O Jacobian, we need to add the derivative
                    ! dtau / dsh * dsh / dh2o
@@ -1652,7 +1687,7 @@ contains
 !!$       open(file="l1b_spec.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i), solar_low(i)
+!!$               noise_work(i)!, solar_low(i)
 !!$
 !!$       end do
 !!$       close(funit)
@@ -1664,15 +1699,15 @@ contains
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
 !!$       end do
 !!$
-       write(*,*) "old, current and delta state vector, and errors"
-       write(*,*) "Iteration: ", iteration
-       do i=1, N_sv
-          write(*, '(I3.1, A25,ES15.6,ES15.6,ES15.6,ES15.6)') &
-               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
 
        if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
@@ -2211,13 +2246,12 @@ contains
                 write(*,*) " And then here..", i,j,k
 
                 write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
-                write(tmp_str, '(A, G0.1)') trim(tmp_str), &
+                write(tmp_str, '(A, G0.3)') trim(tmp_str), &
                      SV%gas_retrieve_scale_start(j)
                      !MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k)
-                write(tmp_str, '(A,A,G0.1)') trim(tmp_str), ":" , &
+                write(tmp_str, '(A,A,G0.3)') trim(tmp_str), ":" , &
                      SV%gas_retrieve_scale_stop(j)
                      !MCS%window(i_win)%gas_retrieve_scale_stop(sv%gas_idx_lookup(j), k)
-                write(*,*) trim(tmp_str)
                 results%sv_names(i) = trim(tmp_str)
 
                 k = k + 1

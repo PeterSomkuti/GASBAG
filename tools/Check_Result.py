@@ -50,8 +50,6 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
             range=(data_lower - hist_iqr, data_higher + hist_iqr),
             bins=50)
 
-
-
     ax.vlines([hist_med], ymin=ax.get_ylim()[0], ymax=ax.get_ylim()[1],
               color='red', linestyle='dashed', lw=0.5)
 

@@ -12,7 +12,7 @@ contains
        wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, need_gas_jac, &
        gas_tau, gas_tau_dpsurf, gas_tau_dvmr, gas_tau_dsh, &
-       success)
+       precompute_CS, first_time, success)
 
     implicit none
     logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
@@ -34,6 +34,8 @@ contains
     double precision, intent(inout) :: gas_tau_dvmr(:,:)
     ! dtau / dsh
     double precision, intent(inout) :: gas_tau_dsh(:,:)
+    ! Do we use precomputed CS? Is this the first call for this window?
+    logical, intent(in) :: precompute_CS, first_time
     ! Success?
     logical, intent(inout) :: success
 
@@ -56,6 +58,11 @@ contains
     double precision, allocatable :: GK_abscissae(:), GK_weights(:), G_weights(:)
     double precision, allocatable :: GK_abscissae_f(:), GK_weights_f(:), G_weights_f(:)
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
+
+    ! If we use precomputed cross sections, we can just save the values
+    ! into this array on the very first call, and later just use these.
+    double precision, allocatable, save :: CS_precomp(:,:,:)
+    logical, save :: CS_done_precomputing
 
     integer :: N_lay, N_lev, N_wl, num_active_levels
     integer :: i,j,k,l
@@ -80,6 +87,18 @@ contains
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
     N_wl = size(wl)
+
+
+    if (first_time .and. precompute_CS) then
+       if (allocated(CS_precomp)) deallocate(CS_precomp)
+    end if
+
+    if (precompute_CS) then
+       if (.not. allocated(CS_precomp)) then
+          allocate(CS_precomp(N_wl, N_sub, N_lay))
+          CS_done_precomputing = .false.
+       end if
+    end if
 
     do j=1, N_lev
        if (psurf >= p(j)) then
@@ -315,16 +334,22 @@ contains
           ! Gas CS routine works in H2O VMR rather than SH
           this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
 
-          if (log_scaling) then
-             this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), exp(this_p), &
+          if (log_scaling) this_p = exp(this_p)
+
+          if (precompute_CS .and. .not. CS_done_precomputing) then
+             CS_precomp(:,k,l) = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
                   this_T, this_H2O, wl_left_indices(:))
+             this_CS_value = CS_precomp(:,k,l)
+          else if (precompute_CS .and. CS_done_precomputing) then
+             this_CS_value = CS_precomp(:,k,l)
           else
-             this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
+             this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
                   this_T, this_H2O, wl_left_indices(:))
           end if
 
+
           if (is_H2O) then
-             H2O_corr = 1.0d0 - this_sh
+             H2O_corr = 1.0d0
           else
              H2O_corr = (1.0d0 - this_sh)
           end if
@@ -334,7 +359,7 @@ contains
 
           ! Tau for this sublayer
           if (log_scaling) then
-             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp * exp(this_p)
+             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp * this_p
           else
              gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp
           end if
@@ -375,16 +400,13 @@ contains
 
              this_H2O_pert = this_sh_pert / (1.0d0 - this_sh_pert) * SH_H2O_CONV
 
-             if (log_scaling) then
-                this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), exp(this_p_pert), &
-                     this_T_pert, this_H2O_pert, wl_left_indices(:))
-             else
-                this_CS_value =  get_CS_value_at(pre_gridded, gas, wl(:), this_p_pert, &
-                     this_T_pert, this_H2O_pert, wl_left_indices(:))
-             end if
+             if (log_scaling) this_p_pert = exp(this_p_pert)
+
+             this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p_pert, &
+                  this_T_pert, this_H2O_pert, wl_left_indices(:))
 
              if (is_H2O) then
-                H2O_corr = 1.0d0 - this_sh
+                H2O_corr = 1.0d0
              else
                 H2O_corr = (1.0d0 - this_sh_pert)
              end if
@@ -415,6 +437,9 @@ contains
     end do
 
     success = .true.
+    if (precompute_CS .and. .not. CS_done_precomputing) then
+       CS_done_precomputing = .true.
+    end if
 
   end subroutine calculate_gas_tau
 
@@ -437,7 +462,7 @@ contains
    integer :: idx_lr_T, idx_ll_T, idx_rl_T, idx_rr_T ! Temperature has two dimensions
    integer :: idx_l_H2O, idx_r_H2O
    integer :: idx_l_wl, idx_r_wl
-   double precision :: C3(0:1,0:1,0:1) ! 0 is 'left', 1 is 'right'
+   double precision :: C3(0:1, 0:1, 0:1) ! 0 is 'left', 1 is 'right'
    double precision :: C2(0:1, 0:1), C1(0:1)
    double precision :: wl_d, p_d, T_d_l, T_d_r, H2O_d
    integer :: i,j,k

@@ -44,7 +44,8 @@ module physical_model_mod
 
   type result_container
      type(string), allocatable :: sv_names(:)
-     double precision, allocatable :: sv_retrieved(:,:,:), sv_prior(:,:,:)
+     double precision, allocatable :: sv_retrieved(:,:,:), &
+          sv_prior(:,:,:), sv_uncertainty(:,:,:)
      double precision, allocatable :: xgas(:,:,:)
      double precision, allocatable, dimension(:,:) :: &
           chi2, residual_rms, dsigma_sq
@@ -120,6 +121,8 @@ module physical_model_mod
        measured_radiance, &
        noise_radiance
 
+  !
+  logical :: first_band_call
   ! State vector construct!
   type(statevector) :: SV
   ! Result container
@@ -481,12 +484,16 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 1
+       ! 
+       first_band_call = .true.
+
+       do i_fr=1, num_frames
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
              ! Do the retrieval for this particular sounding
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
+             first_band_call = .false.
              call cpu_time(cpu_time_stop)
 
              retr_count = retr_count + 1
@@ -515,9 +522,20 @@ contains
        do i=1, size(SV%svsv)
           write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
                // MCS%window(i_win)%name // "_" // results%sv_names(i)
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                results%sv_retrieved(:,:,i), out_dims2d, -9999.99d0)
+       end do
+
+       ! Save the retrieved state vector uncertainties
+       do i=1, size(SV%svsv)
+          write(tmp_str, '(A,A,A,A,A)') "/physical_retrieval_results/" &
+               // MCS%window(i_win)%name // "_" // results%sv_names(i) // "_uncertainty"
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               results%sv_uncertainty(:,:,i), out_dims2d, -9999.99d0)
        end do
 
        ! Save XGAS for each gas
@@ -754,13 +772,13 @@ contains
     ! If solar doppler-shift is needed, calculate the distance and relative
     ! velocity between point of measurement and the (fixed) sun
     call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
+
     call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
 
     solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
-
-    ! Correct for instrument doppler shift
     instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
@@ -793,7 +811,7 @@ contains
           if (i==1) then
              Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0
           else
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0 ** dble(i)
           end if
        end do
     end if
@@ -807,7 +825,8 @@ contains
     end if
 
     if (SV%num_sif > 0) then
-       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (1.0d20 ** 2)
+       ! Put SIF prior covariance at the continuum level of the band
+       Sa(SV%idx_sif(1), SV%idx_sif(1)) = percentile(radiance_l1b, 98.0d0)**2
     end if
 
     if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1000.0d0 ** 2
@@ -948,7 +967,7 @@ contains
           if (num_gases > 0) then
 
              ! An atmosphere is only required if there are gases present in the
-             ! microwindow. 
+             ! microwindow.
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
              num_levels = size(this_atm%p)
@@ -1017,7 +1036,6 @@ contains
           ! If we are retrieving surface pressure, we possibly need
           ! to re-grid the atmosphere if the surface pressure jumps to the
           ! next layer.
-
           if (SV%num_psurf == 1) then
              this_psurf = SV%svsv(SV%idx_psurf(1))
 
@@ -1178,7 +1196,9 @@ contains
                   gas_tau_dvmr(:,:,j), &
                   gas_tau_dsh(:,:,j), &
                   .true., &
-                  ((i_fp == 1) .and. (i_fr == 1)), &
+                  first_band_call, &
+                  num_gases, & ! Total number of gases (for precomputed CS)
+                  j, & ! Which gas? (for precomputed CS)
                   success_gas)
 
              if (.not. success_gas) then
@@ -1271,7 +1291,6 @@ contains
 
 
        !!!!!!!!!!!!!!!!!!!!!!!!!!!! JACOBIAN CALCULATIONS
-
        ! This probably should go into the radiance module?
        if (SV%num_albedo > 0) then
           do i=1, SV%num_albedo
@@ -1533,8 +1552,8 @@ contains
        end if
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
-       tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
-       !tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
+       !tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
+       tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
 
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
        if (.not. success_inv_mat) then
@@ -1543,13 +1562,13 @@ contains
        end if
 
        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-       tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+       !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
 
        ! Update state vector
-       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1)! - tmp_v2)
 
        ! Calculate Shat_inv
-       Shat_inv = matmul(matmul(transpose(K), Se_inv), K) + Sa_inv
+       Shat_inv = matmul(matmul(transpose(K), Se_inv), K) !+ Sa_inv
        call invert_matrix(Shat_inv, Shat, success_inv_mat)
 
        if (.not. success_inv_mat) then
@@ -1559,13 +1578,6 @@ contains
 
        ! Check delta sigma square for this iteration
        dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
-
-       ! Calculate the state vector "errors" as sqrt of the diagonal
-       ! components of Shat
-       do i=1, N_sv
-          SV%sver(i) = sqrt(Shat(i,i))
-       end do
-
 
        ! In the case of retrieving gas - we have to adjust the retrieved state vector
        ! if the retrieval wants to push it below 0.
@@ -1670,10 +1682,14 @@ contains
           end do
 
 
+          results%dsigma_sq(i_fp, i_fr) = dsigma_sq
+
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
              SV%sver(i) = sqrt(Shat(i,i))
           end do
+
+          results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
 
           ! Save retrieved CHI2
           results%chi2(i_fp, i_fr) = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / &
@@ -2048,6 +2064,7 @@ contains
 
     allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
     allocate(results%sv_prior(num_fp, num_frames, num_SV))
+    allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
     allocate(results%xgas(num_fp, num_frames, num_gas))
 
     allocate(results%chi2(num_fp, num_frames))
@@ -2080,6 +2097,7 @@ contains
     deallocate(results%sv_names)
     deallocate(results%sv_retrieved)
     deallocate(results%sv_prior)
+    deallocate(results%sv_uncertainty)
     deallocate(results%xgas)
     deallocate(results%chi2)
     deallocate(results%residual_rms)
@@ -2149,20 +2167,13 @@ contains
           if (SV%idx_gas(j,1) == i) then
 
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
-
-                write(*,*) "I am here", i,j
-
                 if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1) cycle
-
-                write(*,*) " And then here..", i,j,k
 
                 write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
                 write(tmp_str, '(A, G0.3)') trim(tmp_str), &
                      SV%gas_retrieve_scale_start(j)
-                     !MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k)
                 write(tmp_str, '(A,A,G0.3)') trim(tmp_str), ":" , &
                      SV%gas_retrieve_scale_stop(j)
-                     !MCS%window(i_win)%gas_retrieve_scale_stop(sv%gas_idx_lookup(j), k)
                 results%sv_names(i) = trim(tmp_str)
 
                 k = k + 1

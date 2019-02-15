@@ -12,7 +12,7 @@ contains
        wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, need_gas_jac, &
        gas_tau, gas_tau_dpsurf, gas_tau_dvmr, gas_tau_dsh, &
-       precompute_CS, first_time, success)
+       precompute_CS, first_time, num_gas, gas_idx, success)
 
     implicit none
     logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
@@ -36,6 +36,8 @@ contains
     double precision, intent(inout) :: gas_tau_dsh(:,:)
     ! Do we use precomputed CS? Is this the first call for this window?
     logical, intent(in) :: precompute_CS, first_time
+    ! number of total gases, and which index to use for storing precomputed CS values?
+    integer, intent(in) :: num_gas, gas_idx
     ! Success?
     logical, intent(inout) :: success
 
@@ -61,8 +63,8 @@ contains
 
     ! If we use precomputed cross sections, we can just save the values
     ! into this array on the very first call, and later just use these.
-    double precision, allocatable, save :: CS_precomp(:,:,:)
-    logical, save :: CS_done_precomputing
+    double precision, allocatable, save :: CS_precomp(:,:,:,:)
+    logical, allocatable, save :: CS_done_precomputing(:)
 
     integer :: N_lay, N_lev, N_wl, num_active_levels
     integer :: i,j,k,l
@@ -91,12 +93,16 @@ contains
 
     if (first_time .and. precompute_CS) then
        if (allocated(CS_precomp)) deallocate(CS_precomp)
+       if (allocated(CS_done_precomputing)) deallocate(CS_done_precomputing)
     end if
 
     if (precompute_CS) then
        if (.not. allocated(CS_precomp)) then
-          allocate(CS_precomp(N_wl, N_sub, N_lay))
-          CS_done_precomputing = .false.
+          allocate(CS_precomp(N_wl, N_sub, N_lay, num_gas))
+          allocate(CS_done_precomputing(num_gas))
+
+          CS_precomp(:,:,:,:) = 0.0d0
+          CS_done_precomputing(:) = .false.
        end if
     end if
 
@@ -124,68 +130,10 @@ contains
 
     ! Pre-compute the indicies of the ABSCO wavlength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
-    ! want to calculate the optical depths. A linear search is slow and
-    ! massively kills the performance of this entire subroutine. Hence this
-    ! somewhat specialised search routine. First, we calculate an average
-    ! step size of the spectroscopy wavelength grid, and then take a first
-    ! guess as to where the index might be. Then we step backwards if we went
-    ! too far (which is usally not the case as the step size is increasing,
-    ! because of the WN->WL conversion).
-    ! Lastly, we just step forwards to see if our wavelength between the
-    ! next spectroscopy wavelength grid points.
+    ! want to calculate the optical depths.
+    ! If the spectroscopy comes pre-gridded already, this step is not
+    ! needed.
 
-!!$    gas_wl_step_avg = 0.5 * ((gas%wavelength(2) - gas%wavelength(1)) &
-!!$         + (gas%wavelength(size(gas%wavelength)) - gas%wavelength(size(gas%wavelength)-1)))
-!!$    gas_wl_start = gas%wavelength(1)
-!!$
-!!$    gas_idx_fg = -1
-!!$    wl_left_indices(:) = -1
-!!$
-!!$    do j=1, size(wl)
-!!$       ! If out of range, we don't want to use any value.
-!!$       if (wl(j) < gas%wavelength(1)) then
-!!$          cycle
-!!$       elseif (wl(j) > gas%wavelength(size(gas%wavelength))) then
-!!$          cycle
-!!$       end if
-!!$
-!!$       ! Take a rough first guess as to where the wavelength fits in. We are always(?)
-!!$       ! using monotontically increasing wavelength arrays, so whatever spectroscpoy index
-!!$       ! the last wavelength was assigned to, the next one must be at least that value + 1.
-!!$       ! So after the first one has been found (j=1), we can just use that last value as
-!!$       ! a first guess for the next one.
-!!$
-!!$       if (j > 1) then
-!!$          gas_idx_fg = wl_left_indices(j-1)
-!!$       else
-!!$          gas_idx_fg = int(ceiling((wl(j) - gas_wl_start) / gas_wl_step_avg))
-!!$       end if
-!!$
-!!$       ! Now this first guess really only works if the spectroscopy file
-!!$       ! is just one "chunk", and can fail horribly for e.g. the CO2 ABSCO,
-!!$       ! where both windows are saved in one file.
-!!$
-!!$       ! If our guess is bad, start at the beginning
-!!$       if (gas_idx_fg > size(gas%wavelength)) then
-!!$          gas_idx_fg = 1
-!!$       end if
-!!$
-!!$       do while (wl(j) < gas%wavelength(gas_idx_fg))
-!!$
-!!$          gas_idx_fg = gas_idx_fg - 1
-!!$       end do
-!!$
-!!$       do k=gas_idx_fg, size(gas%wavelength, 1)-1
-!!$          if ((wl(j) >= gas%wavelength(k)) .and. (wl(j) <= gas%wavelength(k+1))) then
-!!$             wl_left_indices(j) = k
-!!$             exit
-!!$          end if
-!!$       end do
-!!$    end do
-
-
-    ! If we do not have pre-gridded spectroscopy, then we need to calculate
-    ! wavelength positions..
     if (.not. pre_gridded) then
        ! A binary search seems to be similarly quick as the odd thing we're doing above..
        do j=1, size(wl)
@@ -193,6 +141,8 @@ contains
        end do
     else
        if (size(gas%wavelength) /= size(wl)) then
+          ! This is a sanity check - the pre-gridded spectroscopy needs to have
+          ! the same size as the high-resolution wavelength grid, obviously.
           call logger%fatal(fname, "Spectroscopy wavelength size not equal to hires grid!")
           stop 1
        end if
@@ -336,12 +286,12 @@ contains
 
           if (log_scaling) this_p = exp(this_p)
 
-          if (precompute_CS .and. .not. CS_done_precomputing) then
-             CS_precomp(:,k,l) = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
+          if (precompute_CS .and. .not. CS_done_precomputing(gas_idx)) then
+             CS_precomp(:,k,l-1,gas_idx) = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
                   this_T, this_H2O, wl_left_indices(:))
-             this_CS_value = CS_precomp(:,k,l)
-          else if (precompute_CS .and. CS_done_precomputing) then
-             this_CS_value = CS_precomp(:,k,l)
+             this_CS_value = CS_precomp(:,k,l-1,gas_idx)
+          else if (precompute_CS .and. CS_done_precomputing(gas_idx)) then
+             this_CS_value = CS_precomp(:,k,l-1,gas_idx)
           else
              this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
                   this_T, this_H2O, wl_left_indices(:))
@@ -437,8 +387,8 @@ contains
     end do
 
     success = .true.
-    if (precompute_CS .and. .not. CS_done_precomputing) then
-       CS_done_precomputing = .true.
+    if (precompute_CS .and. .not. CS_done_precomputing(gas_idx)) then
+       CS_done_precomputing(gas_idx) = .true.
     end if
 
   end subroutine calculate_gas_tau

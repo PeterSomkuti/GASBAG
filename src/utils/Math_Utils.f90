@@ -389,8 +389,6 @@ contains
           return
        end if
 
-      
-
        if (idx_hires_ILS_max > size(input)) then
           success = .false.
           return

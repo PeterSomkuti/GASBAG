@@ -86,7 +86,7 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 set_source_files_properties(
   ${third-party}
   PROPERTIES
-  COMPILE_FLAGS "-w -O3"
+  COMPILE_FLAGS "-g -Og"
 )
 
 # Our code is definitely in the need of having warnings

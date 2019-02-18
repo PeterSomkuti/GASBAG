@@ -147,7 +147,7 @@ contains
     logical :: gas_found, all_gases_found
     integer :: absco_dims
 
-    integer :: num_frames, num_fp
+    integer :: num_frames, num_fp, num_spec, num_band
     integer :: i_fp, i_fr, i_pix, i_win, band
     integer :: i, j, retr_count
     logical :: this_converged
@@ -209,19 +209,23 @@ contains
        call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
        call logger%trivia(fname, "Finished reading in surface pressure.")
 
+       ! Grab the SNR coefficients for noise calculations
+       call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
+       ! Conveniently grab the number of spectral pixels and number of bands
+       num_spec = size(snr_coefs, 2)
+       num_band = size(snr_coefs, 4)
+
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-       allocate(dispersion(1016, num_fp, 3))
+       allocate(dispersion(num_spec, num_fp, num_band))
 
-       do band=1, 3
+       do band=1, num_band
           do i_fp=1, num_fp
              call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, band), &
                   dispersion(:, i_fp, band), band, i_fp)
           end do
        end do
 
-       ! Grab the SNR coefficients for noise calculations
-       call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
        ! Read in the sounding id's
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
        ! Read the time strings
@@ -761,7 +765,8 @@ contains
     ! Grab the radiance for this particular sounding
     select type(my_instrument)
     type is (oco2_instrument)
-       call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, radiance_l1b)
+       call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+            size(snr_coefs, 2), radiance_l1b)
     end select
 
     ! Dispersion array that contains the wavelenghts per pixel
@@ -1645,11 +1650,11 @@ contains
        old_chi2 = this_chi2
        this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 
-       !if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
-       !     (iteration > MCS%window(i_win)%max_iterations)) then
-
-       if ((abs(sqrt(old_chi2)-sqrt(this_chi2)) <= 0.01) .or. &
+       if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
+
+       !if ((abs(sqrt(old_chi2)-sqrt(this_chi2)) <= 0.01) .or. &
+       !     (iteration > MCS%window(i_win)%max_iterations)) then
 
           ! Stop iterating - we've either coverged to exeeded the max. number of
           ! iterations.

@@ -323,7 +323,7 @@ contains
 
         select type(my_instrument)
             type is (oco2_instrument)
-                call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, radiance_l1b)
+                call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, 1, 1016, radiance_l1b)
         end select
 
         cont_rad = percentile(radiance_l1b, 99.9d0)

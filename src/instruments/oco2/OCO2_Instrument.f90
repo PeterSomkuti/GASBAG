@@ -140,7 +140,7 @@ contains
 
     dispersion(:) = 0.0d0
 
-    do pix=1, 1016
+    do pix=1, size(dispersion)
        do order=1, 6
           dispersion(pix) = dispersion(pix) + (dble(pix) ** (order-1) * disp_coef(order))
        end do
@@ -148,7 +148,7 @@ contains
 
   end subroutine calculate_dispersion
 
-  subroutine read_one_spectrum(l1b_file_id, i_fr, i_fp, band, spectrum)
+  subroutine read_one_spectrum(l1b_file_id, i_fr, i_fp, band, N_spec, spectrum)
 
     ! Select one (!) OCO-2 sounding via HDF5 hyperslab selection and feed it
     ! into the array "spectrum". The chosen spectrum is selected by the indices
@@ -157,7 +157,7 @@ contains
     implicit none
 
     integer(hid_t) :: l1b_file_id
-    integer, intent(in) :: i_fr, i_fp, band
+    integer, intent(in) :: i_fr, i_fp, band, N_spec
     double precision, allocatable :: spectrum(:)
 
     character(len=*), parameter :: fname = "read_one_spectrum(oco2)"
@@ -194,17 +194,19 @@ contains
     hs_offset(2) = i_fp - 1
     hs_offset(3) = i_fr - 1
 
+    !! 
+
     !! We step 1016 in the spectral direction to get the full measurement,
     !! and 1 each in the frame and footprint directions (convention)
-    hs_count(1) = 1016
+    hs_count(1) = N_spec
     hs_count(2) = 1
     hs_count(3) = 1
 
     !! This is the size of the container that we will be writing the spectral
     !! data into.
-    dim_mem(1) = 1016
+    dim_mem(1) = N_spec
 
-    allocate(spectrum(1016))
+    allocate(spectrum(N_spec))
     spectrum(:) = 0.0d0
 
     !! So this is how a hyperslab selection in HDF5 works. First, get the

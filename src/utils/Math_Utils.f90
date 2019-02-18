@@ -395,8 +395,8 @@ contains
        end if
 
        output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), &
-            kernels(kernel_idx_min:kernel_idx_max, idx_pix)) &
-            / sum(kernels(kernel_idx_min:kernel_idx_max, idx_pix))
+            kernels(kernel_idx_min:kernel_idx_max, idx_pix))! &
+            !/ sum(kernels(kernel_idx_min:kernel_idx_max, idx_pix))
 
     end do
 

@@ -370,6 +370,13 @@ contains
              ils_hires_relative_response(:, i_pix, i_fp, band) = &
                   ils_hires_relative_response(:, i_pix, i_fp, band) / ils_norm_factor
 
+             ! And also divide by the sum here, such that we don't have to
+             ! re-do the sum every time during the convolution.
+
+             ils_hires_relative_response(:, i_pix, i_fp, band) = &
+                  ils_hires_relative_response(:, i_pix, i_fp, band) / &
+                  sum(ils_hires_relative_response(:, i_pix, i_fp, band))
+
           end do
        end do
        call logger%debug(fname, "Done re-gridding ILS.")
@@ -701,6 +708,7 @@ contains
     double precision, allocatable :: pwgts(:)
     ! Levenberg-Marquart gamma
     double precision :: lm_gamma
+    double precision :: old_chi2, this_chi2
     ! Iteration-related
     integer :: iteration, max_iterations
     logical :: keep_iterating
@@ -959,6 +967,8 @@ contains
     do while (keep_iterating)
 
        if (iteration == 1) then
+          !
+          this_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
           ! and the state vector is the prior (maybe we want to change that later..)
@@ -1632,7 +1642,13 @@ contains
 !!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 !!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
 
-       if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
+       old_chi2 = this_chi2
+       this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+
+       !if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
+       !     (iteration > MCS%window(i_win)%max_iterations)) then
+
+       if ((abs(sqrt(old_chi2)-sqrt(this_chi2)) <= 0.01) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
 
           ! Stop iterating - we've either coverged to exeeded the max. number of

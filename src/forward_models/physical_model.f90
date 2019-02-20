@@ -688,7 +688,7 @@ contains
     integer :: num_gases, num_levels, num_active_levels
     double precision, allocatable :: gas_tau(:,:,:), gas_tau_dvmr(:,:,:), &
          gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:,:), gas_tau_dsh(:,:,:), &
-         vmr_pert(:), this_vmr_profile(:)
+         vmr_pert(:), this_vmr_profile(:), gas_tau_total(:)
     integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
     double precision :: gas_scaling_factor
     logical :: is_H2O
@@ -1109,11 +1109,11 @@ contains
 
        if (num_gases > 0) then
 
-          allocate(gas_tau(size(this_solar, 1), num_levels-1, num_gases))
-          allocate(gas_tau_dpsurf(size(this_solar, 1), num_levels-1, num_gases))
-          allocate(gas_tau_dvmr(size(this_solar, 1), num_levels, num_gases))
-          allocate(gas_tau_dsh(size(this_solar, 1), num_levels-1, num_gases))
-          allocate(gas_tau_pert(size(this_solar, 1), num_levels-1, num_levels-1, num_gases))
+          allocate(gas_tau(N_hires, num_levels-1, num_gases))
+          allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
+          allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
+          allocate(gas_tau_dsh(N_hires, num_levels-1, num_gases))
+          allocate(gas_tau_pert(N_hires, num_levels-1, num_levels-1, num_gases))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels))
 

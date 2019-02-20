@@ -403,7 +403,7 @@ contains
 
        ! Read in the solar model - we do this for every band, the reason being
        ! the following. Since the re-gridding procedure is fairly costly, we want
-       ! to keep the solar spectrum data as small as possible. Hence we call all of this
+       ! to keep the solar spectrum data as small as possible.
 
        if (MCS%algorithm%solar_type == "toon") then
           call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
@@ -437,13 +437,14 @@ contains
        type is (oco2_instrument)
 
           ! Read in the measurement geometries - these are the same for all three bands?
+          ! TODO: this should be taking the footprint data, rather than sounding data..
           call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
                altitude, relative_velocity, &
                relative_solar_velocity)
 
-          ! Read in Spike filter data
+          ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
           if (spike_exists) then
              call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
@@ -492,6 +493,9 @@ contains
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, SV, i_win)
 
+       ! retr_count keeps track of the number of retrievals processed
+       ! so far, and the mean_duration keeps track of the average
+       ! processing time.
        retr_count = 0
        mean_duration = 0.0d0
 
@@ -507,9 +511,12 @@ contains
              call cpu_time(cpu_time_start)
              ! Do the retrieval for this particular sounding
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
+             ! After the very first call, we set first_band_call to false, 
              first_band_call = .false.
              call cpu_time(cpu_time_stop)
 
+             ! Increase the rerival count tracker and compute the average processing
+             ! time per retrieval.
              retr_count = retr_count + 1
              mean_duration = mean_duration * (retr_count)/(retr_count+1) + &
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)

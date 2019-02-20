@@ -495,7 +495,10 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       ! 
+       ! If we want to store the pre-calculated cross sections,
+       ! we first need to tell the gas_tau function that this is indeed
+       ! the very first call, and thus the cross sections need to be
+       ! computed.
        first_band_call = .true.
 
        do i_fr=1, num_frames

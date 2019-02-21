@@ -121,18 +121,18 @@ subroutine pwl_value_1d ( nd, xd, yd, ni, xi, yi )
   !
   implicit none
 
-  integer ( kind = 4 ) nd
-  integer ( kind = 4 ) ni
+  integer :: nd
+  integer :: ni
 
-  integer ( kind = 4 ) i
-  integer ( kind = 4 ) k
-  real ( kind = 8 ) t
-  real ( kind = 8 ) xd(nd)
-  real ( kind = 8 ) yd(nd)
-  real ( kind = 8 ) xi(ni)
-  real ( kind = 8 ) yi(ni)
+  integer :: i
+  integer :: k
+  double precision :: t
+  double precision :: xd(nd)
+  double precision :: yd(nd)
+  double precision :: xi(ni)
+  double precision :: yi(ni)
 
-  integer ( kind = 4 ) last_k
+  integer :: last_k
 
   yi(1:ni) = 0.0D+00
 
@@ -157,9 +157,9 @@ subroutine pwl_value_1d ( nd, xd, yd, ni, xi, yi )
 
      else
 
-        do k = last_k, nd
+        do k = 2, nd
 
-           if ( xd(k-1) <= xi(i) .and. xi(i) <= xd(k) ) then
+           if ( xd(k-1) <= xi(i) .and. xi(i) < xd(k) ) then
 
               last_k = k
 

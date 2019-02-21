@@ -67,6 +67,48 @@ contains
   end subroutine pressure_weighting_function
 
 
+  subroutine pwl_value_1d_v2(nd, xd, yd, ni, xi, yi)
+
+    implicit none
+
+    integer, intent(in) :: nd, ni
+    double precision, intent(in) :: xd(:), yd(:), xi(:)
+    double precision, intent(inout) :: yi(:)
+
+    double precision :: fac
+    integer :: i, j, d, last_d
+
+    last_d = 1
+    do i=1, ni
+
+       if (xi(i) <= xd(1)) then
+          yi(i) = yd(1)
+       else if (xi(i) >= xd(nd)) then
+          yi(i) = yd(nd)
+       else
+
+          do d=last_d, nd-1
+
+             if ((xi(i) >= xd(d)) .and. (xi(i) <= xd(d+1))) then
+
+                last_d = d
+
+                fac = (xi(i) - xd(d)) / (xd(d+1) - xd(d))
+                yi(i) = (1.0d0 - fac) * yd(d) + fac * yd(d+1)
+
+             end if
+
+          end do
+
+
+       end if
+
+    end do
+
+
+
+  end subroutine pwl_value_1d_v2
+
 
   pure function searchsorted_dp(x, val, left) result(idx)
     implicit none

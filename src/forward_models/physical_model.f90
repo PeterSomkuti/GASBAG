@@ -153,6 +153,8 @@ contains
     integer :: i, j, retr_count
     logical :: this_converged
 
+    integer :: funit
+
 
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
@@ -363,17 +365,17 @@ contains
              ! Since we have resampled the ILS, it also needs re-normalising, a simple
              ! trapezoidal integration should do.
 
-             ils_norm_factor = 0.0d0
-             do i=1, size(ils_hires_relative_response, 1)-1
-                ils_norm_factor = ils_norm_factor + &
-                     (ils_hires_relative_response(i, i_pix, i_fp, band) + &
-                     ils_hires_relative_response(i+1, i_pix, i_fp, band)) * &
-                     (ils_hires_delta_lambda(i+1, i_pix, i_fp, band) - &
-                     ils_hires_delta_lambda(i, i_pix, i_fp, band)) / 2.0d0
-             end do
+             !ils_norm_factor = 0.0d0
+             !do i=1, size(ils_hires_relative_response, 1)-1
+             !   ils_norm_factor = ils_norm_factor + &
+             !        (ils_hires_relative_response(i, i_pix, i_fp, band) + &
+             !        ils_hires_relative_response(i+1, i_pix, i_fp, band)) * &
+             !        (ils_hires_delta_lambda(i+1, i_pix, i_fp, band) - &
+             !        ils_hires_delta_lambda(i, i_pix, i_fp, band)) / 2.0d0
+             !end do
 
-             ils_hires_relative_response(:, i_pix, i_fp, band) = &
-                  ils_hires_relative_response(:, i_pix, i_fp, band) / ils_norm_factor
+             !ils_hires_relative_response(:, i_pix, i_fp, band) = &
+             !     ils_hires_relative_response(:, i_pix, i_fp, band) / ils_norm_factor
 
              ! And also divide by the sum here, such that we don't have to
              ! re-do the sum every time during the convolution.

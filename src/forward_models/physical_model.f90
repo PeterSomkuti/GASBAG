@@ -15,6 +15,7 @@ module physical_model_mod
   use statevector_mod
   use radiance_mod
   use absco_mod
+  use Rayleigh_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
 
@@ -688,7 +689,7 @@ contains
     integer :: num_gases, num_levels, num_active_levels
     double precision, allocatable :: gas_tau(:,:,:), gas_tau_dvmr(:,:,:), &
          gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:,:), gas_tau_dsh(:,:,:), &
-         vmr_pert(:), this_vmr_profile(:), gas_tau_total(:)
+         vmr_pert(:), this_vmr_profile(:), ray_tau(:,:), total_tau(:)
     integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
     double precision :: gas_scaling_factor
     logical :: is_H2O
@@ -1114,6 +1115,7 @@ contains
           allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
           allocate(gas_tau_dsh(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_pert(N_hires, num_levels-1, num_levels-1, num_gases))
+          allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels))
 
@@ -1132,6 +1134,8 @@ contains
              call logger%error(fname, "Psurf negative!")
              return
           end if
+
+          call calculate_Rayleigh_tau(hires_grid, this_atm%p, ray_tau, first_band_call)
 
           do j=1, num_gases
 
@@ -1232,6 +1236,13 @@ contains
              end if
           end do
 
+          ! Total optical depth is calculated as sum of all gas ODs
+          ! as well as the Rayleigh extinction OD, and summing over
+          ! all layers as well.
+          allocate(total_tau(N_hires))
+          total_tau(:) = 0.0d0
+          total_tau(:) = sum(sum(gas_tau, dim=2), dim=2) + sum(ray_tau, dim=2)
+
 !!$          do i=1, num_active_levels
 !!$             write(tmp_str,'(A,G0.1,A,G0.1,A)') "gas_od_iter", iteration, "layer", i, ".dat"
 !!$             open(newunit=funit, file=trim(tmp_str))
@@ -1262,7 +1273,7 @@ contains
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
        call calculate_radiance(hires_grid, SZA(i_fp, i_fr), &
-            VZA(i_fp, i_fr), albedo, gas_tau, &
+            VZA(i_fp, i_fr), albedo, total_tau, &
             radiance_calc_work_hi)
 
        ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
@@ -1755,6 +1766,8 @@ contains
        if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
        if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
+       if (allocated(ray_tau)) deallocate(ray_tau)
+       if (allocated(total_tau)) deallocate(total_tau)
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
 

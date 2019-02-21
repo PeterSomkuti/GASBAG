@@ -13,7 +13,7 @@ contains
         implicit none
         double precision, intent(in) :: wavelengths(:)
         double precision, intent(in) :: SZA, VZA, albedo(:)
-        double precision, allocatable, intent(in) :: tau(:,:,:)
+        double precision, allocatable, intent(in) :: tau(:)
         double precision, intent(inout) :: radiance(:)
         double precision :: mu0, mu
 
@@ -26,8 +26,8 @@ contains
 
         if (allocated(tau)) then
            ! Have gas absorbers in the atmosphere?
-           radiance(:) = radiance(:) * exp(-1.0d0/mu0 * sum(sum(tau, dim=3), dim=2))
-           radiance(:) = radiance(:) * exp(-1.0d0/mu * sum(sum(tau, dim=3), dim=2))
+           radiance(:) = radiance(:) * exp(-1.0d0/mu0 * tau(:))
+           radiance(:) = radiance(:) * exp(-1.0d0/mu * tau(:))
         endif
 
     end subroutine

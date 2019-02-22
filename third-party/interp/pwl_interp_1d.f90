@@ -157,7 +157,7 @@ subroutine pwl_value_1d ( nd, xd, yd, ni, xi, yi )
 
      else
 
-        do k = 2, nd
+        do k = last_k, nd
 
            if ( xd(k-1) <= xi(i) .and. xi(i) < xd(k) ) then
 

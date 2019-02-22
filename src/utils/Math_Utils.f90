@@ -323,6 +323,90 @@ contains
   end subroutine fft_convolution
 
 
+    subroutine oco_type_convolution2(wl_input, input, wl_kernels, kernels, &
+       wl_output, output, success)
+
+    !! This is an implementation of the OCO-type ILS application, which ins't
+    !! quite a convolution since we have to treat every pixel with a different
+    !! ILS. wl_output is the DESIRED output wavelength grid
+
+    ! High-resolution bits
+    double precision, intent(in) :: wl_input(:), input(:)
+    ! "Convolution" wavelengths and kernels
+    double precision, intent(in) :: wl_kernels(:,:), kernels(:,:)
+    double precision, intent(in) :: wl_output(:)
+    double precision, intent(inout) :: output(:)
+    logical, intent(out) :: success
+
+    character(len=*), parameter :: fname = "oco_type_convolution"
+    integer :: N_pix, N_ils_pix, N_wl, N_this_wl
+    integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
+    integer :: kernel_idx_min, kernel_idx_max
+    double precision :: ILS_delta_min, ILS_delta_max
+    double precision :: ILS_wl_spacing
+    double precision :: wl_diff
+
+    double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
+    double precision :: time_start, time_stop
+    integer :: i, funit
+
+    N_wl = size(wl_input)
+    N_pix = size(wl_output)
+    N_ils_pix = size(wl_kernels, 1)
+
+    ILS_wl_spacing = wl_input(2) - wl_input(1)
+
+    if (N_pix /= size(wl_kernels, 2)) then
+       call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
+       stop 1
+    end if
+
+    if (N_pix /= size(kernels, 2)) then
+       call logger%fatal(fname, "kernels or wl_output have incompatible sizes.")
+       stop 1
+    end if
+
+    ! Main loop over all (instrument) output pixels. Note that idx_pix is
+    ! RELATIVE to the array that is supplied here, which means you need to
+    ! make sure that you only pass arrays here that in wavelength (detector pixel)
+    ! space are at the same positions as the output wavelengths wl_output.
+
+    do idx_pix=1, N_pix
+
+       ! Note the ILS boundary in wavelength space. wl_kernels spans usually
+       ! some range from -lambda to +lambda.
+       ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
+       ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
+
+       idx_hires_ILS_min = searchsorted_dp(wl_input, ILS_delta_min)
+       idx_hires_ILS_max = searchsorted_dp(wl_input, ILS_delta_max)
+
+       !write(*,*) idx_pix, wl_input(idx_pix), idx_hires_ILS_min, idx_hires_ILS_max 
+
+       N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min
+       allocate(ILS_upsampled(N_this_wl + 1))
+       ILS_upsampled = 0.0d0
+
+       call pwl_value_1d( &
+            N_ils_pix, &
+            wl_output(idx_pix) + wl_kernels(:, idx_pix), kernels(:, idx_pix), &
+            N_this_wl, &
+            wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(:))
+
+       output(idx_pix) = dot_product(ILS_upsampled(:), input(idx_hires_ILS_min:idx_hires_ILS_max)) &
+            / sum(ILS_upsampled)
+
+
+       deallocate(ILS_upsampled)
+
+    end do
+
+    success = .true.
+
+
+  end subroutine oco_type_convolution2
+
+
   subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
        wl_output, output, success)
 
@@ -443,6 +527,8 @@ contains
     end do
 
     success = .true.
+
+
 
   end subroutine oco_type_convolution
 

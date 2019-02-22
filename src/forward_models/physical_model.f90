@@ -51,7 +51,7 @@ module physical_model_mod
      double precision, allocatable, dimension(:,:) :: &
           chi2, residual_rms, dsigma_sq
      integer, allocatable, dimension(:,:) :: num_iterations
-     logical, allocatable :: converged(:,:)
+     integer, allocatable :: converged(:,:) ! HDF5 does not support logical types
   end type result_container
 
 
@@ -342,7 +342,7 @@ contains
        ! of solar_grid_spacing.
        ils_hires_min_wl = hires_spacing * ceiling(ils_hires_min_wl / hires_spacing)
 
-       ! And construct the ILS hires grid using the solar grid spacing
+       ! And construct the ILS hires grid using the hires grid spacing
        do i=1, num_ils_hires
           ils_hires_grid(i) = ils_hires_min_wl + dble(i-1) * hires_spacing
        end do
@@ -354,6 +354,15 @@ contains
 
              ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
 
+!!$             open(newunit=funit, file="ils_raw.dat")
+!!$             do i=1, size(ils_delta_lambda, 1)
+!!$                write(funit, *) ils_delta_lambda(i, i_pix, i_fp, band), &
+!!$                     ils_relative_response(i, i_pix, i_fp, band)
+!!$             end do
+!!$             close(funit)
+
+
+
              ! Interpolate the ILS onto the high-resolution grid
              call pwl_value_1d( &
                   size(ils_delta_lambda, 1), &
@@ -362,28 +371,21 @@ contains
                   num_ils_hires, &
                   ils_hires_grid, ils_hires_relative_response(:, i_pix, i_fp, band) )
 
-             ! Since we have resampled the ILS, it also needs re-normalising, a simple
-             ! trapezoidal integration should do.
-
-             !ils_norm_factor = 0.0d0
-             !do i=1, size(ils_hires_relative_response, 1)-1
-             !   ils_norm_factor = ils_norm_factor + &
-             !        (ils_hires_relative_response(i, i_pix, i_fp, band) + &
-             !        ils_hires_relative_response(i+1, i_pix, i_fp, band)) * &
-             !        (ils_hires_delta_lambda(i+1, i_pix, i_fp, band) - &
-             !        ils_hires_delta_lambda(i, i_pix, i_fp, band)) / 2.0d0
-             !end do
-
-             !ils_hires_relative_response(:, i_pix, i_fp, band) = &
-             !     ils_hires_relative_response(:, i_pix, i_fp, band) / ils_norm_factor
-
              ! And also divide by the sum here, such that we don't have to
              ! re-do the sum every time during the convolution.
+
+!!$             open(newunit=funit, file="ils_hires.dat")
+!!$             do i=1, size(ils_hires_delta_lambda, 1)
+!!$                write(funit, *) ils_hires_delta_lambda(i, i_pix, i_fp, band), &
+!!$                     ils_hires_relative_response(i, i_pix, i_fp, band)
+!!$             end do
+!!$             close(funit)
 
              ils_hires_relative_response(:, i_pix, i_fp, band) = &
                   ils_hires_relative_response(:, i_pix, i_fp, band) / &
                   sum(ils_hires_relative_response(:, i_pix, i_fp, band))
 
+             !read(*,*)
           end do
        end do
        call logger%debug(fname, "Done re-gridding ILS.")
@@ -524,7 +526,7 @@ contains
              mean_duration = mean_duration * (retr_count)/(retr_count+1) + &
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
-             if (mod(retr_count, 50) == 0) then
+             if (mod(retr_count, 1) == 0) then
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " - ", mean_duration, ' - ', this_converged
                 call logger%debug(fname, trim(tmp_str))
@@ -579,6 +581,13 @@ contains
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%num_iterations(:,:), out_dims2d, -9999)
+
+       ! Save converged status
+       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
+            // MCS%window(i_win)%name // "_converged"
+       call write_INT_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%converged(:,:), out_dims2d, -9999)
 
        ! Retrieved CHI2
        write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
@@ -802,8 +811,8 @@ contains
     call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
 
-    solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
-    instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+    solar_doppler = 0.0d0 !(earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+    instrument_doppler = 0.0d0 !relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
 
     ! Set up retrieval quantities:
@@ -835,7 +844,7 @@ contains
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
           if (i==1) then
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0
           else
              Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0 ** dble(i)
           end if
@@ -1501,11 +1510,32 @@ contains
 
           ! Convolution of the TOA radiances
 
-          call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-               ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-               ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$          call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
+!!$               ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$               ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$               this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
+!!$               ILS_success)
+!!$
+          open(newunit=funit, file="pregrid_conv.dat")
+          do i=1, N_spec
+             write(funit, *) radiance_calc_work(i)
+          end do
+          close(funit)
+
+          call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
+               ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+               ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
                ILS_success)
+
+!!$          open(newunit=funit, file="classic_conv.dat")
+!!$          do i=1, N_spec
+!!$             write(funit, *) radiance_calc_work(i)
+!!$          end do
+!!$          close(funit)
+!!$
+!!$          read(*,*)
+
 
           if (.not. ILS_success) then
              call logger%error(fname, "ILS convolution error.")
@@ -1536,9 +1566,15 @@ contains
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
 
-             call oco_type_convolution(hires_grid, K_hi(:,i), &
-                  ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                  ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$             call oco_type_convolution(hires_grid, K_hi(:,i), &
+!!$                  ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$                  ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
+!!$                  ILS_success)
+
+             call oco_type_convolution2(hires_grid, K_hi(:,i), &
+                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
                   ILS_success)
 
@@ -1570,9 +1606,15 @@ contains
                 this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
 
                 ! Convolve the perturbed TOA radiance
-                call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-                     ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                     ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$                call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
+!!$                     ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$                     ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$                     this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
+!!$                     ILS_success)
+
+                call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
+                     ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
                      ILS_success)
 
@@ -1590,8 +1632,8 @@ contains
        end if
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
-       !tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
-       tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
+       tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + matmul(matmul(transpose(K), Se_inv), K)
+       !tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
 
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
        if (.not. success_inv_mat) then
@@ -1600,13 +1642,13 @@ contains
        end if
 
        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-       !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+       tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
 
        ! Update state vector
-       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1)! - tmp_v2)
+       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
 
        ! Calculate Shat_inv
-       Shat_inv = matmul(matmul(transpose(K), Se_inv), K) !+ Sa_inv
+       Shat_inv = matmul(matmul(transpose(K), Se_inv), K)+ Sa_inv
        call invert_matrix(Shat_inv, Shat, success_inv_mat)
 
        if (.not. success_inv_mat) then
@@ -1645,21 +1687,21 @@ contains
 !!$            this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
 !!$            ILS_success)
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)!, solar_low(i)
-!!$
-!!$       end do
-!!$       close(funit)
-!!$
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i)!, solar_low(i)
+
+       end do
+       close(funit)
+
 !!$       deallocate(solar_low)
-
-
+!!$
+!!$
 !!$       do i=1, num_active_levels
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
 !!$       end do
-!!$
+
 !!$       write(*,*) "old, current and delta state vector, and errors"
 !!$       write(*,*) "Iteration: ", iteration
 !!$       do i=1, N_sv
@@ -1684,8 +1726,10 @@ contains
           keep_iterating = .false.
           if (iteration <= MCS%window(i_win)%max_iterations) then
              converged = .true.
+             results%converged(i_fp, i_fr) = 1
           else
              converged = .false.
+             results%converged(i_fp, i_fr) = 0
           end if
 
           allocate(pwgts(num_active_levels))
@@ -1754,7 +1798,7 @@ contains
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", this_psurf
-          !call logger%debug(fname, trim(tmp_str))
+          call logger%debug(fname, trim(tmp_str))
 
        end if
 
@@ -2130,7 +2174,7 @@ contains
     results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
     results%num_iterations = -1
-    results%converged = .false.
+    results%converged = -1
 
   end subroutine create_result_container
 

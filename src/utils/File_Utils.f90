@@ -26,7 +26,6 @@ module file_utils_mod
      module procedure read_4D_DP_hdf_dataset
   end interface read_DP_hdf_dataset
 
-
   interface write_INT_hdf_dataset
      module procedure write_2D_INT_hdf_dataset
   end interface write_INT_hdf_dataset
@@ -34,6 +33,7 @@ module file_utils_mod
   interface read_INT_hdf_dataset
      module procedure read_3D_INT_hdf_dataset
   end interface read_INT_hdf_dataset
+
 
   interface fini_extract
      module procedure fini_extract_DP
@@ -45,13 +45,10 @@ module file_utils_mod
 
   public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims, &
        check_fini_error, fini_extract, &
-       write_DP_hdf_dataset, &
-       read_DP_hdf_dataset, read_INT_hdf_dataset
+       write_DP_hdf_dataset, read_DP_hdf_dataset, &
+       write_INT_hdf_dataset, read_INT_hdf_dataset
 
 contains
-
-
-
 
   subroutine write_2D_INT_hdf_dataset(file_id, dset_name, array, dims, fill_value)
 

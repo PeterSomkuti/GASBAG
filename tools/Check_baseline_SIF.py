@@ -85,7 +85,7 @@ if 'physical_retrieval_results' in f:
 
     fs_755 = f['physical_retrieval_results/757nm_SIF_absolute'][:,0] / 1e18
     fs_755 -= np.nanmedian(fs_755)
-   
+
     fs_755[mask_755] = np.nan
 
     fs_755_error = f['physical_retrieval_results/757nm_SIF_absolute_uncertainty'][:,0] / 1e18
@@ -111,16 +111,19 @@ if 'RetrievalResults' in f:
 
     fs_755 = f['HighLevelResults/Fluorescence/fluorescence_radiance_757nm'][:,0] / 1e18
     fs_755 -= np.nanmedian(fs_755)
+
     fs_755_error = f['HighLevelResults/Fluorescence/fluorescence_radiance_757nm_1sigma'][:,0] / 1e18
     fs_772 = f['HighLevelResults/Fluorescence/fluorescence_radiance_771nm'][:,0] / 1e18
     fs_772_error = f['HighLevelResults/Fluorescence/fluorescence_radiance_771nm_1sigma'][:,0] / 1e18
 
-    mask_755 = fs_755_error > 10
+    mask_755 = (f['HighLevelResults/Fluorescence/quality_flag'][:,0] == 1)
 
 fs_755[mask_755] = np.nan
 fs_755_error[mask_755] = np.nan
 fs_rel_755 = fs_755 / ( cont_755 - fs_755 )
 fs_rel_755[mask_755] = np.nan
+fs_rel_755[np.abs(fs_rel_755) > 1000] = np.nan
+
 #fs_rel_755[np.abs(fs_rel_755) > 0.03] = np.nan
 
 fs_rel_755_error = fs_755_error / ( cont_755 - fs_755_error )
@@ -145,14 +148,16 @@ ax = plt.subplot(gs[0, 0], projection=ccrs.Robinson())
 ax.set_title("SIF 755nm Absolute\n[$10^{18}$ ph/s/m2/sr/nm]")
 plot_map(ax, lon, lat, fs_755, -2, 2, gridsize, 'BrBG')
 
+data_range = np.nanpercentile(fs_755, [2, 98])
+
 ax = plt.subplot(gs[0, 1])
-plot_hist(ax, fs_755[land_water == 0], (-0.2, 0.2),
+plot_hist(ax, fs_755[land_water == 0], (data_range[0], data_range[1]),
           fs_755_error[land_water == 0] * 0, 100)
 ax.set_title("Land only")
 
 ax = plt.subplot(gs[0, 2])
-plot_hist(ax, fs_755[land_water == 1], (-0.2, 0.2),
-          fs_755_error[land_water == 1] * 0, 100)
+plot_hist(ax, fs_755[land_water != 3], (data_range[0], data_range[1]),
+          fs_755_error[land_water != 3] * 0, 100)
 ax.set_title("Water only")
 
 ax = plt.subplot(gs[0, 3])
@@ -168,25 +173,24 @@ ax.set_ylabel("SIF absolute\n[$10^{18}$ ph/s/m2/sr/nm]")
 ax.set_title("Water only")
 
 
-
 ax = plt.subplot(gs[1, 0], projection=ccrs.Robinson())
 ax.set_title("SIF 755nm Relative [%]")
-plot_map(ax, lon, lat, fs_rel_755 * 100.0, -0.4, 0.4, gridsize, 'BrBG')
+plot_map(ax, lon, lat, fs_rel_755 * 100.0, -0.25, 0.25, gridsize, 'BrBG')
 
 ax = plt.subplot(gs[1, 1])
-plot_hist(ax, fs_rel_755[land_water == 0] * 100, (-0.4, 0.4),
+plot_hist(ax, fs_rel_755[land_water == 0] * 100, (-1, 1),
           fs_rel_755_error[land_water == 0] * 0, 100)
 ax.set_title("Land only")
 
 ax = plt.subplot(gs[1, 2])
-plot_hist(ax, fs_rel_755[land_water == 1] * 100, (-0.4, 0.4),
-          fs_rel_755_error[land_water == 1] * 0, 100)
+plot_hist(ax, fs_rel_755[land_water != 3] * 100, (-1, 1),
+          fs_rel_755_error[land_water != 3] * 0, 100)
 ax.set_title("Water only")
 
 ax = plt.subplot(gs[1, 3])
 plot_hexbin(ax, cont_755[land_water == 0], 100 * fs_rel_755[land_water == 0])
 ax.set_xlabel("Continuum\n[$10^{18}$ ph/s/m2/sr/nm]")
-ax.set_ylabel("SIF absolute\n[$10^{18}$ ph/s/m2/sr/nm]")
+ax.set_ylabel("SIF relative [%]")
 ax.set_title("Land only")
 
 ax = plt.subplot(gs[1, 4])

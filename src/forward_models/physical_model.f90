@@ -122,7 +122,7 @@ module physical_model_mod
        measured_radiance, &
        noise_radiance
 
-  !
+  ! Is this the very first call in this window?
   logical :: first_band_call
   ! State vector construct!
   type(statevector) :: SV
@@ -510,7 +510,7 @@ contains
        ! computed.
        first_band_call = .true.
 
-       do i_fr=1, num_frames
+       do i_fr=1, num_frames, 100
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -656,7 +656,7 @@ contains
     integer, intent(in) :: i_fr, i_fp, i_win, band
     logical :: converged
 
-    !!
+    !! HDF file id handlers
     integer(hid_t) :: l1b_file_id, output_file_id
 
     !! Radiances and noise arrays
@@ -751,11 +751,15 @@ contains
     double precision :: cpu_start, cpu_end
     logical :: ILS_success
 
+    ! Take a local copy of the HDF file ID handlers
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
+    ! Do we want to do the retrieval in logspace? (NOT IMPLEMENTED)
     log_retrieval = .false.
 
+    ! What is the total number of gases in this window,
+    ! regardless of whether they are retrieved or not.
     if (allocated(MCS%window(i_win)%gases)) then
        num_gases = MCS%window(i_win)%num_gases
     else
@@ -800,7 +804,7 @@ contains
     allocate(this_dispersion_coefs(size(dispersion_coefs, 1)))
     allocate(this_dispersion_coefs_pert(size(dispersion_coefs, 1)))
 
-    ! Allocate the micro-window bounded solar and radiance arrays
+    ! Allocate the micro-window bounded solar arrays
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
 
@@ -811,15 +815,15 @@ contains
     call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
 
-    solar_doppler = 0.0d0 !(earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
-    instrument_doppler = 0.0d0 !relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+    solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+    instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
     N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
-    lm_gamma = 5.0d0
+    lm_gamma = 1.0d0
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change, while the hi-res K stays the same
@@ -841,6 +845,7 @@ contains
     Sa_inv(:,:) = 0.0d0
     Sa(:,:) = 0.0d0
 
+    ! Make th albedo essentially unconstrained
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
           if (i==1) then
@@ -884,7 +889,8 @@ contains
     end do
 
     !! If at some point we want to have non-diagonal elements in
-    !! Sa, just uncomment the lines 
+    !! Sa, just uncomment the lines below and a proper inversion is being done.
+
     !call invert_matrix(Sa, Sa_inv, success_inv_mat)
     !if (.not. success_inv_mat) then
     !   call logger%error(fname, "Failed to invert Sa")
@@ -994,7 +1000,8 @@ contains
     do while (keep_iterating)
 
        if (iteration == 1) then
-          !
+
+          ! 
           this_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
@@ -1037,7 +1044,9 @@ contains
 
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
-                call logger%error(fname, "Psurf > p(BOA)!")
+                write(tmp_str, '(A, G0.3, A, G0.3)') "Psurf at ", psurf, &
+                     " is larger than p(BOA) at ", this_atm%p(size(this_atm%p))
+                call logger%error(fname, trim(tmp_str))
                 return
              end if
 
@@ -1046,15 +1055,17 @@ contains
                    ! If H2O is needed to be retrieved, take it from the MET atmosphere
                    ! specific humidty directly, rather than the H2O column of the
                    ! atmosphere text file.
-                   this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
+                   ! this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
                 end if
              end do
 
           end if
        else
 
-          ! If this is not the first iteration, we grab values from the current
-          ! state vector.
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+          ! If this is not the first iteration, we grab forward model values from the !
+          ! current state vector.
+          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
           ! Albedo coefficients grabbed from the SV and used to construct
           ! new albedo(:) array for high-resolution grid.
@@ -1066,13 +1077,12 @@ contains
           endif
 
           ! If solar parameters are retrieved, update the solar shift and stretch from the
-          ! state vector.
+          ! state vector. Otherwise the values stay at 0/1 respectively.
           if (SV%num_solar_shift == 1) this_solar_shift = SV%svsv(SV%idx_solar_shift(1))
           if (SV%num_solar_stretch == 1) this_solar_stretch = SV%svsv(SV%idx_solar_stretch(1))
 
-          ! If we are retrieving surface pressure, we possibly need
-          ! to re-grid the atmosphere if the surface pressure jumps to the
-          ! next layer.
+          ! If we are retrieving surface pressure, we need to re-calculate the
+          ! "last" layer if the surface pressure jumps to the next layer.
           if (SV%num_psurf == 1) then
              this_psurf = SV%svsv(SV%idx_psurf(1))
 
@@ -1086,7 +1096,9 @@ contains
 
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
-                call logger%error(fname, "Psurf > p(BOA)!")
+                write(tmp_str, '(A, G0.3, A, G0.3)') "Psurf at ", psurf, &
+                     " is larger than p(BOA) at ", this_atm%p(size(this_atm%p))
+                call logger%error(fname, trim(tmp_str))
                 return
              end if
 
@@ -1146,7 +1158,7 @@ contains
              return
           end if
 
-          call calculate_Rayleigh_tau(hires_grid, this_atm%p, ray_tau, first_band_call)
+          !call calculate_Rayleigh_tau(hires_grid, this_atm%p, ray_tau, first_band_call)
 
           do j=1, num_gases
 
@@ -1172,11 +1184,11 @@ contains
                          ! where they would belong to. We also make sure it can't
                          ! go below or above the first/last level.
 
-                         s_start(i) = searchsorted_dp(this_atm%p, &
-                              SV%gas_retrieve_scale_start(i) * psurf, .false.)
+                         s_start(i) = searchsorted_dp(log(this_atm%p), &
+                              SV%gas_retrieve_scale_start(i) * log(psurf), .false.)
                          s_start(i) = max(1, s_start(i))
-                         s_stop(i) = searchsorted_dp(this_atm%p, &
-                              SV%gas_retrieve_scale_stop(i) * psurf, .false.)
+                         s_stop(i) = searchsorted_dp(log(this_atm%p), &
+                              SV%gas_retrieve_scale_stop(i) * log(psurf), .false.)
                          s_stop(i) = min(num_active_levels, s_stop(i))
 
                       end if
@@ -1198,6 +1210,7 @@ contains
                       end if
 
                    end do
+
                 end do
 
                 do i=1, SV%num_gas
@@ -1221,24 +1234,24 @@ contains
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
-                  hires_grid, &
-                  this_vmr_profile, &
-                  psurf, &
-                  this_atm%p(:), &
-                  this_atm%T(:), &
-                  this_atm%sh(:), &
-                  MCS%gas(MCS%window(i_win)%gas_index(j)), &
-                  MCS%window(i_win)%N_sublayers, &
-                  do_psurf_jac, &
-                  do_gas_jac, &
+                  hires_grid, & ! The high-resolution wavelength grid
+                  this_vmr_profile, & ! The gas VMR profile for this gas with index j
+                  psurf, & ! Surface pressure
+                  this_atm%p(:), & ! Atmospheric profile pressures
+                  this_atm%T(:), & ! Atmospheric profile temperature
+                  this_atm%sh(:), & ! Atmospheric profile humidity
+                  MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
+                  MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration 
+                  do_psurf_jac, & ! Do we require surface pressure jacobians?
+                  do_gas_jac, & ! Do we require gas OD jacobians?
                   gas_tau(:,:,j), &
                   gas_tau_dpsurf(:,:,j), &
                   gas_tau_dvmr(:,:,j), &
                   gas_tau_dsh(:,:,j), &
-                  .true., &
+                  .false., & ! Use pre-calculated gas cross section values?
                   first_band_call, &
                   num_gases, & ! Total number of gases (for precomputed CS)
-                  j, & ! Which gas? (for precomputed CS)
+                  j, & ! Which gas - as an index of MCS%window%gases? (for precomputed CS)
                   success_gas)
 
              if (.not. success_gas) then
@@ -1247,12 +1260,17 @@ contains
              end if
           end do
 
+
+!!$          do i=1, SV%num_gas
+!!$             write(*,*) s_start(i), s_stop(i), MCS%window(i_win)%gases(SV%gas_idx_lookup(i))%chars()
+!!$          end do
+
           ! Total optical depth is calculated as sum of all gas ODs
           ! as well as the Rayleigh extinction OD, and summing over
           ! all layers as well.
           allocate(total_tau(N_hires))
           total_tau(:) = 0.0d0
-          total_tau(:) = sum(sum(gas_tau, dim=2), dim=2) + sum(ray_tau, dim=2)
+          total_tau(:) = sum(sum(gas_tau, dim=2), dim=2) !+ sum(ray_tau, dim=2)
 
 !!$          do i=1, num_active_levels
 !!$             write(tmp_str,'(A,G0.1,A,G0.1,A)') "gas_od_iter", iteration, "layer", i, ".dat"
@@ -1263,13 +1281,12 @@ contains
 !!$             close(funit)
 !!$          end do
 !!$
+
 !!$          open(newunit=funit, file="gas_od_full.dat")
 !!$          do j=1, size(gas_tau, 1)
 !!$             write(funit, *) (sum(gas_tau(j,:,l)), l=1,size(gas_tau,3))
 !!$          end do
 !!$          close(funit)
-
-
 
 !!$          write(tmp_str,'(A,G0.1,A)') "gas_dvmr_iter", iteration, ".dat"
 !!$          open(newunit=funit, file=trim(tmp_str))
@@ -1516,11 +1533,11 @@ contains
 !!$               this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
 !!$               ILS_success)
 !!$
-          open(newunit=funit, file="pregrid_conv.dat")
-          do i=1, N_spec
-             write(funit, *) radiance_calc_work(i)
-          end do
-          close(funit)
+!!$          open(newunit=funit, file="pregrid_conv.dat")
+!!$          do i=1, N_spec
+!!$             write(funit, *) radiance_calc_work(i)
+!!$          end do
+!!$          close(funit)
 
           call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
                ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
@@ -1678,26 +1695,16 @@ contains
 !!$       end do
 !!$       close(funit)
 !!$
-!!$       if (allocated(solar_low)) deallocate(solar_low)
-!!$       allocate(solar_low(N_spec))
-!!$
-!!$       call oco_type_convolution(hires_grid, this_solar(:,2), &
-!!$            ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$            ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$            this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), solar_low(:), &
-!!$            ILS_success)
 
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i)!, solar_low(i)
-
-       end do
-       close(funit)
-
-!!$       deallocate(solar_low)
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i)!, solar_low(i)
 !!$
-!!$
+!!$       end do
+!!$       close(funit)
+
+
 !!$       do i=1, num_active_levels
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
 !!$       end do
@@ -1759,12 +1766,8 @@ contains
                 call pressure_weighting_function(this_atm%p(1:num_active_levels), &
                      psurf, this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor, pwgts)
 
+                ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) =  sum(pwgts(:) * this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor)
-
-!!$                do l=1, num_active_levels
-!!$                   write(*,*) l, this_atm%sh(l), this_atm%gas_vmr(l, j) * gas_scaling_factor, pwgts(l), sum(pwgts(:))
-!!$                end do
-!!$                write(*,*) "xgas:", sum(pwgts(:) * this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor)
 
              end if
           end do
@@ -2086,63 +2089,6 @@ contains
     close(funit)
 
   end subroutine read_atmosphere_file
-
-
-  function regrid_atmosphere(old_atm, psurf) result(new_atm)
-    implicit none
-    type(atmosphere), intent(in) :: old_atm
-    double precision, intent(in) :: psurf
-    type(atmosphere) :: new_atm
-
-    integer :: i, N_lev, N_lev_new, N_gases
-
-    N_lev = size(old_atm%p)
-    ! If the surface pressure lies between the last and penultimate
-    ! level, there's nothing to be done here.
-    if ((psurf < old_atm%p(N_lev)) .and. (psurf > old_atm%p(N_lev-1))) then
-       new_atm = old_atm
-       return
-    end if
-
-    ! Otherwise, loop through the atmospheric levels to see where we need to cut off
-    do i=1, N_lev-1
-       if ((psurf > old_atm%p(i)) .and. (psurf < old_atm%p(i+1))) then
-          ! Found
-          exit
-       end if
-    end do
-
-    ! Found the new number of levels
-    N_lev_new = i+1
-    N_gases = size(old_atm%gas_names)
-
-    ! Allocate new atmosphere data, and in case we have an existing object,
-    ! deallocate first
-
-    if (allocated(new_atm%p)) deallocate(new_atm%p)
-    if (allocated(new_atm%T)) deallocate(new_atm%T)
-    if (allocated(new_atm%sh)) deallocate(new_atm%sh)
-    if (allocated(new_atm%gas_names)) deallocate(new_atm%gas_names)
-    if (allocated(new_atm%gas_index)) deallocate(new_atm%gas_index)
-    if (allocated(new_atm%gas_vmr)) deallocate(new_atm%gas_vmr)
-
-    allocate(new_atm%p(N_lev_new))
-    allocate(new_atm%T(N_lev_new))
-    allocate(new_atm%sh(N_lev_new))
-    allocate(new_atm%gas_names(N_gases))
-    allocate(new_atm%gas_index(N_gases))
-    allocate(new_atm%gas_vmr(N_lev_new, N_gases))
-
-    ! And copy over old data
-    new_atm%p(:) = old_atm%p(1:N_lev_new)
-    new_atm%T(:) = old_atm%T(1:N_lev_new)
-    new_atm%sh(:) = old_atm%sh(1:N_lev_new)
-    new_atm%gas_names(:) = old_atm%gas_names(:)
-    new_atm%gas_index(:) = old_atm%gas_index(:)
-    new_atm%gas_vmr(:,:) = old_atm%gas_vmr(1:N_lev_new, :)
-
-  end function regrid_atmosphere
-
 
 
   subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas)

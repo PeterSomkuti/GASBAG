@@ -112,6 +112,7 @@ if 'physical_retrieval_results' in f:
                           title=f'{band} $\chi^2$',
                           fname=f.filename+f'_{band}_chi2.pdf')
 
+        '''
         meas = f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask]
         meas_norm = (f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask].T /
                      np.nanmax(f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask], axis=1)).T
@@ -122,7 +123,7 @@ if 'physical_retrieval_results' in f:
 
         res_relative = (conv - meas) / meas
 
-
+        
         fig, axes = plt.subplots(2, 1, figsize=(10,6), dpi=150)
         ax = axes[0]
 
@@ -140,7 +141,7 @@ if 'physical_retrieval_results' in f:
             #ax.plot(np.nanpercentile(res_relative, perc, axis=0),
                     'b-', lw=0.5)
         plt.savefig(f'{f.filename}_residuals_{band}.pdf', bbox_inches='tight')
-
+        '''
 
 
 plot_map_and_hist(lon, lat, co2_weak, gridsize=gridsize,

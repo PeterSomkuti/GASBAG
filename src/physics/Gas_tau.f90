@@ -306,7 +306,6 @@ contains
 
           C_tmp = 1.0d0 / 9.80665d0 * NA * 0.1d0 * H2O_corr
 
-
           ! Tau for this sublayer
           if (log_scaling) then
              gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp * this_p

@@ -74,6 +74,8 @@ module control_mod
        ! Location of the atmosphere file which must contain the gases mentioned
        ! in the 'gases' line
        type(string) :: atmosphere_file
+       ! Initial value for the Levenberg-Marquart damping parameter
+       double precision :: lm_gamma
     end type CS_window
 
     type, private :: CS_input
@@ -378,6 +380,14 @@ contains
                    stop 1
                 end if
 
+                call fini_extract(fini, tmp_str, 'lm_gamma', .true., fini_val)
+                if (fini_val >= 0) then
+                   MCS%window(window_nr)%lm_gamma = fini_val
+                else
+                   call logger%fatal(fname, "LM-Gamma needs to be >= 0")
+                   stop 1
+                end if
+
                 call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
                 MCS%window(window_nr)%SV_string = fini_char
 
@@ -401,6 +411,7 @@ contains
                       stop 1
                    end if
                 end if
+
 
                 call fini_extract(fini, tmp_str, 'sublayers', .false., fini_int)
                 ! We round the number of sublayers to the next odd value > 2

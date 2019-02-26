@@ -666,6 +666,7 @@ contains
          radiance_calc_work, &
          radiance_tmp_work_hi, &
          radiance_calc_work_hi, &
+         radiance_last_iteration, &
          noise_work
 
     ! The current atmosphere, dependent on surface pressure. This can change
@@ -729,15 +730,17 @@ contains
     double precision :: dsigma_sq
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:), tmp_m3(:,:)
-    double precision, allocatable :: tmp_v1(:), tmp_v2(:), old_sv(:)
+    double precision, allocatable :: tmp_v1(:), tmp_v2(:)
+    double precision, allocatable :: old_sv(:), last_successful_sv(:)
     ! Pressure weighting function
     double precision, allocatable :: pwgts(:)
     ! Levenberg-Marquart gamma
     double precision :: lm_gamma
-    double precision :: old_chi2, this_chi2
+    double precision :: old_chi2, this_chi2, linear_prediction_chi2, chi2_ratio
     ! Iteration-related
-    integer :: iteration, max_iterations
+    integer :: iteration, max_iterations, num_divergent_steps
     logical :: keep_iterating
+    logical :: divergent_step
     logical :: log_retrieval
     logical :: success_inv_mat
 
@@ -823,7 +826,7 @@ contains
     N_sv = size(SV%svap)
     N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
-    lm_gamma = 1.0d0
+    lm_gamma = MCS%window(i_win)%lm_gamma
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change, while the hi-res K stays the same
@@ -978,8 +981,10 @@ contains
 
     ! Retrival iteration loop
     iteration = 1
+    num_divergent_steps = 0
     keep_iterating = .true.
     allocate(old_sv(size(SV%svsv)))
+    allocate(last_successful_sv(size(SV%svsv)))
 
     converged = .false.
     ! Main iteration loop for the retrieval process.
@@ -987,6 +992,7 @@ contains
 
        if (iteration == 1) then
 
+          divergent_step = .false.
           ! Initialise Chi2 with an insanely large value
           this_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
@@ -1099,7 +1105,11 @@ contains
 
 
        ! Save the old state vector (iteration - 1'th state vector)
-       old_sv = SV%svsv
+       if (divergent_step) then
+          old_sv = last_successful_sv(:)
+       else
+          old_sv = SV%svsv
+       end if
 
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
@@ -1437,6 +1447,7 @@ contains
        allocate(radiance_meas_work(N_spec))
        allocate(radiance_calc_work(N_spec))
        allocate(radiance_tmp_work(N_spec))
+
        allocate(noise_work(N_spec))
 
        ! Grab a copy of the L1b radiances
@@ -1676,6 +1687,22 @@ contains
           end do
        end do
 
+
+       !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
+       !! we revert to the last state vector, and increase lm_gamma
+       if (.not. divergent_step) then
+          ! Make sure we keep the 'old' Chi2 only from a valid iteration
+          old_chi2 = this_chi2
+       end if
+       this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+
+       if (iteration == 1) then
+          chi2_ratio = 0.5d0 ! For very first iteration, we set R in the trust region
+       else
+          ! Otherwise R is ratio between linear forecast value and actual computed Chi2
+          chi2_ratio = (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
+       end if
+
 !!$       open(file="jacobian.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) (K(i, j), j=1, N_sv)
@@ -1683,59 +1710,41 @@ contains
 !!$       close(funit)
 !!$
 
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)!, solar_low(i)
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i)!, solar_low(i)
+
+       end do
+       close(funit)
 !!$
-!!$       end do
-!!$       close(funit)
+!!$
+       do i=1, num_active_levels
+          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
+       end do
+!!$
+       write(*,*) "old, current and delta state vector, and errors"
+       write(*,*) "Iteration: ", iteration
+       do i=1, N_sv
+          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
+               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+       write(*,*) "LM-Gamma: ", lm_gamma
+       write(*,*) "Ratio R: ", chi2_ratio
 
 
-!!$       do i=1, num_active_levels
-!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
-!!$       end do
 
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+       ! If we have a successful iteration, we want to store the last
+       ! successful one here as well. 
+       last_successful_sv(:) = SV%svsv(:)
 
-       old_chi2 = this_chi2
-       this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       ! Make linear prediction for the next iteration
+       radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
+       linear_prediction_chi2 = SUM(((radiance_meas_work - radiance_tmp_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 
-       !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
-       !! we revert to the last state vector, and increase lm_gamma
-
-       if (old_chi2 < this_chi2) then
-
-          lm_gamma = lm_gamma * 10.0d0
-          SV%svsv = old_sv
-
-          call logger%debug(fname, "Divergent step!")
-
-          deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-               noise_work, Se_inv, K, solar_irrad)
-
-          if (allocated(gas_tau)) deallocate(gas_tau)
-          if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
-          if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
-          if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
-          if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
-          if (allocated(ray_tau)) deallocate(ray_tau)
-          if (allocated(total_tau)) deallocate(total_tau)
-          if (allocated(vmr_pert)) deallocate(vmr_pert)
-          if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
-
-          cycle
-       else
-          lm_gamma = lm_gamma * 0.5d0
-       end if
 
        if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
@@ -1810,11 +1819,55 @@ contains
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          write(tmp_str, '(A,G3.1,A,F6.3,A,G2.1,A,F10.2)') "Iteration: ", iteration ,&
+          write(tmp_str, '(A,G3.1,A,F6.3,A,G2.1,A,F10.2,A,E10.3)') "Iteration: ", iteration ,&
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
-               ", Psurf: ", this_psurf
+               ", Psurf: ", this_psurf, &
+               ", LM-Gamma: ", lm_gamma
           call logger%debug(fname, trim(tmp_str))
+
+       else
+          ! Not converged yet - change LM-gamma according to the chi2_ratio.
+
+          if (chi2_ratio > 0.75d0) then
+             ! If fit is much better than predicted / fairly linear - decrese gamma by a bit
+             lm_gamma = lm_gamma * 0.5d0
+             divergent_step = .false.
+          else if ((chi2_ratio < 0.25d0) .and. (chi2_ratio > 1.0d-4)) then
+             ! Fit is not as good as predicted so increase gamma
+             lm_gamma = lm_gamma * 10.0d0
+             divergent_step = .false.
+          else if (chi2_ratio < 1.0d-4) then
+             ! We consider this a divergence!
+             divergent_step = .true.
+             num_divergent_steps = num_divergent_steps + 1
+
+             if (num_divergent_steps > 5) then
+                keep_iterating = .false.
+             end if
+
+             lm_gamma = lm_gamma * 10.0d0
+
+             call logger%debug(fname, "Divergent step!")
+
+!!$             deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
+!!$                  noise_work, Se_inv, K, solar_irrad)
+!!$
+!!$             if (allocated(gas_tau)) deallocate(gas_tau)
+!!$             if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
+!!$             if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
+!!$             if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
+!!$             if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
+!!$             if (allocated(ray_tau)) deallocate(ray_tau)
+!!$             if (allocated(total_tau)) deallocate(total_tau)
+!!$             if (allocated(vmr_pert)) deallocate(vmr_pert)
+!!$             if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
+
+          else
+             ! Otherweise, we are in the trust region, do nothing with gamma
+             divergent_step = .false.
+          end if
+
 
        end if
 

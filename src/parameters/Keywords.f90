@@ -94,6 +94,7 @@ contains
                 valid_options(this_idx,18) = "sublayers"
                 valid_options(this_idx,19) = "max_iterations"
                 valid_options(this_idx,20) = "solar_dispersion"
+                valid_options(this_idx,21) = "lm_gamma"
         end do
 
         ! Section for gases

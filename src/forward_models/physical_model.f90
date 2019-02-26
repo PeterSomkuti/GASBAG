@@ -510,7 +510,7 @@ contains
        ! computed.
        first_band_call = .true.
 
-       do i_fr=1, num_frames, 100
+       do i_fr=1, num_frames, 1
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -1710,30 +1710,30 @@ contains
 !!$       close(funit)
 !!$
 
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i)!, solar_low(i)
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i)!, solar_low(i)
+!!$
+!!$       end do
+!!$       close(funit)
 
-       end do
-       close(funit)
-!!$
-!!$
-       do i=1, num_active_levels
-          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
-       end do
-!!$
-       write(*,*) "old, current and delta state vector, and errors"
-       write(*,*) "Iteration: ", iteration
-       do i=1, N_sv
-          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
-               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-       write(*,*) "LM-Gamma: ", lm_gamma
-       write(*,*) "Ratio R: ", chi2_ratio
+
+!!$       do i=1, num_active_levels
+!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
+!!$       end do
+
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!!$       write(*,*) "LM-Gamma: ", lm_gamma
+!!$       write(*,*) "Ratio R: ", chi2_ratio
 
 
 

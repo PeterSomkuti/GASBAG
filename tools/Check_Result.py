@@ -63,8 +63,10 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
 
 if 'physical_retrieval_results' in f:
 
-    mask = (f['physical_retrieval_results/weak_co2_num_iterations'][:,:].flatten() <= 10)
-    mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 10)
+    #mask = (f['physical_retrieval_results/weak_co2_num_iterations'][:,:].flatten() >= 2)
+    #mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 10 )
+    mask = f['physical_retrieval_results/strong_co2_converged'][:,:].flatten() == 1
+    mask = mask & f['physical_retrieval_results/weak_co2_converged'][:,:].flatten() == 1
     #mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 5)
     #mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 5)
 
@@ -123,7 +125,6 @@ if 'physical_retrieval_results' in f:
 
         res_relative = (conv - meas) / meas
 
-        
         fig, axes = plt.subplots(2, 1, figsize=(10,6), dpi=150)
         ax = axes[0]
 

@@ -286,18 +286,28 @@ contains
 
           if (log_scaling) this_p = exp(this_p)
 
-          if (precompute_CS .and. .not. CS_done_precomputing(gas_idx)) then
+          ! We may use precomputed values for the cross sections, but only if the
+          ! layer is not the one with variable surface pressure.
+          if (precompute_CS .and. (.not. CS_done_precomputing(gas_idx)) &
+               .and. (l /= num_active_levels)) then
+             
              CS_precomp(:,k,l-1,gas_idx) = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
                   this_T, this_H2O, wl_left_indices(:))
              this_CS_value = CS_precomp(:,k,l-1,gas_idx)
-          else if (precompute_CS .and. CS_done_precomputing(gas_idx)) then
+
+          else if (precompute_CS .and. CS_done_precomputing(gas_idx) &
+               .and. (l /= num_active_levels)) then
+
+             this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
+                  this_T, this_H2O, wl_left_indices(:))
              this_CS_value = CS_precomp(:,k,l-1,gas_idx)
+
           else
              this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
                   this_T, this_H2O, wl_left_indices(:))
           end if
 
-
+ 
           if (is_H2O) then
              H2O_corr = 1.0d0
           else
@@ -386,8 +396,9 @@ contains
     end do
 
     success = .true.
-    if (precompute_CS .and. .not. CS_done_precomputing(gas_idx)) then
+    if (precompute_CS .and. (.not. CS_done_precomputing(gas_idx))) then
        CS_done_precomputing(gas_idx) = .true.
+       write(*,*) "Precomputation setting to done for ", gas_idx
     end if
 
   end subroutine calculate_gas_tau

@@ -528,7 +528,7 @@ contains
 
              if (mod(retr_count, 1) == 0) then
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
-                     "Frame/FP: ", i_fr, "/", i_fp, " - ", mean_duration, ' - ', this_converged
+                     "Frame/FP: ", i_fr, "/", i_fp, " - ", (cpu_time_stop - cpu_time_start), ' - ', this_converged
                 call logger%debug(fname, trim(tmp_str))
              end if
 
@@ -897,7 +897,6 @@ contains
     !   return
     !end if
 
-
     ! Allocate Solar continuum (irradiance) array. We do this here already,
     ! since it's handy to have it for estimating the albedo.
     allocate(solar_irrad(N_hires))
@@ -916,16 +915,6 @@ contains
             (1.0d0 * maxval(solar_irrad) * cos(DEG2RAD * SZA(i_fp, i_fr)))
 
     end select
-
-    ! Clearly, we could have an albedo that falls outside of (0,1). That does
-    ! not mean that it's all screwed up, especially if the true surface is far
-    ! away from the Lambertian assumption. Nevertheless, just spit out a quick
-    ! warning. (or not)
-
-    if (albedo_apriori > 1) then
-       write(tmp_str, '(A, F8.5)') "Albedo too large: ", albedo_apriori
-       !call logger%warning(fname, trim(tmp_str))
-    end if
 
 
     ! We can now populate the prior state vector
@@ -977,14 +966,6 @@ contains
        end do
     end if
 
-    ! Retrival iteration loop
-    iteration = 1
-    keep_iterating = .true.
-    allocate(old_sv(size(SV%svsv)))
-
-
-    ! Calculate the high-resolution modelled spectrum
-    ! High-res spectral resolution determined by solar model
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
     allocate(radiance_tmp_work_hi(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
@@ -995,13 +976,18 @@ contains
     this_solar_shift = 0.0d0
     this_solar_stretch = 1.0d0
 
+    ! Retrival iteration loop
+    iteration = 1
+    keep_iterating = .true.
+    allocate(old_sv(size(SV%svsv)))
+
     converged = .false.
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
 
        if (iteration == 1) then
 
-          ! 
+          ! Initialise Chi2 with an insanely large value
           this_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
@@ -1011,7 +997,7 @@ contains
           if (num_gases > 0) then
 
              ! An atmosphere is only required if there are gases present in the
-             ! microwindow.
+             ! microwindow. 
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
              num_levels = size(this_atm%p)
@@ -1062,10 +1048,8 @@ contains
           end if
        else
 
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
           ! If this is not the first iteration, we grab forward model values from the !
           ! current state vector.
-          !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
           ! Albedo coefficients grabbed from the SV and used to construct
           ! new albedo(:) array for high-resolution grid.
@@ -1107,10 +1091,9 @@ contains
           do i=1, num_gases
              ! Replace SH if H2O is used in atmosphere
              if (MCS%window(i_win)%gases(i) == "H2O") then
-                !   this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
+                ! this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
              end if
           end do
-
 
        endif
 
@@ -1231,6 +1214,7 @@ contains
                 is_H2O = .false.
              end if
 
+
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
@@ -1241,7 +1225,7 @@ contains
                   this_atm%T(:), & ! Atmospheric profile temperature
                   this_atm%sh(:), & ! Atmospheric profile humidity
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
-                  MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration 
+                  MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
                   do_gas_jac, & ! Do we require gas OD jacobians?
                   gas_tau(:,:,j), &
@@ -1354,7 +1338,7 @@ contains
             + this_sif_radiance
 
 
-       !!!!!!!!!!!!!!!!!!!!!!!!!!!! JACOBIAN CALCULATIONS
+       ! JACOBIAN CALCULATIONS
        ! This probably should go into the radiance module?
        if (SV%num_albedo > 0) then
           do i=1, SV%num_albedo
@@ -1404,10 +1388,10 @@ contains
                    ! dtau / dsh * dsh / dh2o
                    !if (MCS%window(i_win)%gases(sv%gas_idx_lookup(i)) == "H2O") then
 
-                      !   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
-                      !        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
-                      !        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
-                      !        dim=2)
+                   !   K_hi(:, SV%idx_gas(i,1)) = K_hi(:, SV%idx_gas(i,1)) &
+                   !        + sum(gas_tau_dsh(:,:,SV%gas_idx_lookup(i)) &
+                   !        * (SH_H2O_CONV / (SH_H2O_CONV + gas_tau(:,:,SV%gas_idx_lookup(i)))) ** 2, &
+                   !        dim=2)
                    !end if
 
                 end do
@@ -1468,6 +1452,7 @@ contains
        ! Now calculate the noise-equivalent radiances
        select type(my_instrument)
        type is (oco2_instrument)
+
           call my_instrument%calculate_noise( &
                snr_coefs, radiance_meas_work, &
                noise_work, i_fp, band, &
@@ -1479,6 +1464,8 @@ contains
           ! radiance values.
           if (allocated(spike_list)) then
              do i=1, N_spec
+                ! Remember: spike_list is in full l1b size, but noise work
+                ! is bounded by our window choice, thus needs to be offset
                 if (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) then
                    noise_work(i) = noise_work(i) * 10000.0d0
                 end if
@@ -1722,15 +1709,41 @@ contains
        old_chi2 = this_chi2
        this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 
+       !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
+       !! we revert to the last state vector, and increase lm_gamma
+
+       if (old_chi2 < this_chi2) then
+
+          lm_gamma = lm_gamma * 10.0d0
+          SV%svsv = old_sv
+
+          call logger%debug(fname, "Divergent step!")
+
+          deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
+               noise_work, Se_inv, K, solar_irrad)
+
+          if (allocated(gas_tau)) deallocate(gas_tau)
+          if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
+          if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
+          if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
+          if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
+          if (allocated(ray_tau)) deallocate(ray_tau)
+          if (allocated(total_tau)) deallocate(total_tau)
+          if (allocated(vmr_pert)) deallocate(vmr_pert)
+          if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
+
+          cycle
+       else
+          lm_gamma = lm_gamma * 0.5d0
+       end if
+
        if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
-
-       !if ((abs(sqrt(old_chi2)-sqrt(this_chi2)) <= 0.01) .or. &
-       !     (iteration > MCS%window(i_win)%max_iterations)) then
 
           ! Stop iterating - we've either coverged to exeeded the max. number of
           ! iterations.
           keep_iterating = .false.
+
           if (iteration <= MCS%window(i_win)%max_iterations) then
              converged = .true.
              results%converged(i_fp, i_fr) = 1

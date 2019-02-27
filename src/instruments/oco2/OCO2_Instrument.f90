@@ -49,7 +49,7 @@ contains
     character(len=*), parameter :: fname = "scan_l1b_file"
     character(len=999) :: msg
     integer(hid_t) :: file_id
-    integer(kind=8), allocatable :: n_fp_frames(:)
+    integer(8), allocatable :: n_fp_frames(:), dim_spec(:)
     integer :: hdferr
 
     ! Open the HDF file
@@ -73,6 +73,22 @@ contains
     ! Store the total number of soundings to be processed in the MCS. We need
     ! that later to allocate all those big arrays.
     MCS%general%N_soundings = n_fp_frames(1)*n_fp_frames(2)
+    MCS%general%N_frame = n_fp_frames(2)
+    MCS%general%N_fp = n_fp_frames(1)
+
+    ! OCO-2, we have three bands
+    MCS%general%N_bands = 3
+
+    ! And we can grab the number of pixels per band individually
+    allocate(MCS%general%N_spec(MCS%general%N_bands))
+
+    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", dim_spec)
+    MCS%general%N_spec(1) = dim_spec(1)
+    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_weak_co2", dim_spec)
+    MCS%general%N_spec(2) = dim_spec(1)
+    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
+    MCS%general%N_spec(3) = dim_spec(1)
+
   end subroutine scan_l1b_file
 
 

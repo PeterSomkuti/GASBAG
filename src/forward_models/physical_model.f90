@@ -158,40 +158,48 @@ contains
 
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
-    !! Open up the MET file
+    ! Open up the MET file
     call h5fopen_f(MCS%input%met_filename%chars(), &
          H5F_ACC_RDONLY_F, MCS%input%met_file_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening MET file: " &
          // trim(MCS%input%met_filename%chars()))
 
-    !! Store HDF file handler for more convenient access
+    ! Store HDF file handler for more convenient access
     met_file_id = MCS%input%met_file_id
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
+    ! Grab number of frames and footprints
+    num_frames = MCS%general%N_frame
+    num_fp = MCS%general%N_fp
+    ! Grab number of bands
+    num_band = MCS%general%N_bands
 
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! How many frames do we have in this file again?
-       call my_instrument%read_num_frames_and_fp(l1b_file_id, num_frames, num_fp)
-
-       !! Get the necesary MET data profiles. OCO-like MET data can have either
-       !! /Meteorology or /ECMWF (at least at the time of writing this). So we check
-       !! which one exists (priority given to /Meteorology) and take it from there
+       ! Get the necesary MET data profiles. OCO-like MET data can have either
+       ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
+       ! which one exists (priority given to /Meteorology) and take it from there
 
        call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
        if (.not. MET_exists) then
           call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
        end if
 
-       if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
+       ! Let the user know which one we picked.
+       if (MET_exists) then
+          call logger%info(fname, "Taking MET data from /Meteorology")
+       else if (ECMWF_exists) then
+          call logger%info(fname, "Taking MET data from /ECMWF")
+       else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
           ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
-          ! MET file. Can't really go on.
+          ! MET file. Can't really go on without MET data.
           call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
           stop 1
        end if
 
+       ! Read the complete MET arrays from the corresponding HDF5 fields
        if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
        if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
        call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
@@ -215,8 +223,7 @@ contains
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
        ! Conveniently grab the number of spectral pixels and number of bands
-       num_spec = size(snr_coefs, 2)
-       num_band = size(snr_coefs, 4)
+
 
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
@@ -301,6 +308,8 @@ contains
        ! largest range.
 
        band = MCS%window(i_win)%band
+       ! Grab the number of spectral pixels in this band
+       num_spec = MCS%general%N_spec(band)
 
        ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
        ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
@@ -458,9 +467,9 @@ contains
        end select
 
        ! Allocate containers to hold the retrieval results
-       allocate(final_radiance(size(dispersion, 1), num_fp, num_frames))
-       allocate(measured_radiance(size(dispersion, 1), num_fp, num_frames))
-       allocate(noise_radiance(size(dispersion, 1), num_fp, num_frames))
+       allocate(final_radiance(num_spec, num_fp, num_frames))
+       allocate(measured_radiance(num_spec, num_fp, num_frames))
+       allocate(noise_radiance(num_spec, num_fp, num_frames))
 
        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -510,7 +519,7 @@ contains
        ! computed.
        first_band_call = .true.
 
-       do i_fr=1, num_frames, 1
+       do i_fr=1, num_frames, 10
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -997,19 +1006,20 @@ contains
           this_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
-          ! and the state vector is the prior (maybe we want to change that later..)
+          ! and the first guess state vector is the prior
           SV%svsv = SV%svap
 
           if (num_gases > 0) then
 
              ! An atmosphere is only required if there are gases present in the
-             ! microwindow. 
+             ! microwindow.
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
              num_levels = size(this_atm%p)
 
-             ! And get the T and SH profiles onto our new atmosphere grid. We are
+             ! And get the T and SH MET profiles onto our new atmosphere grid. We are
              ! sampling it on a log(p) grid.
+
              call pwl_value_1d( &
                   size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
@@ -1195,6 +1205,7 @@ contains
 
                 do i=1, SV%num_gas
                    do l=1, SV%num_gas
+                      ! Skip gases if index does not match
                       if (SV%gas_idx_lookup(i) /= j) cycle
                       if (SV%gas_idx_lookup(l) /= j) cycle
 
@@ -1242,10 +1253,6 @@ contains
                   gas_tau_dpsurf(:,:,j), &
                   gas_tau_dvmr(:,:,j), &
                   gas_tau_dsh(:,:,j), &
-                  .false., & ! Use pre-calculated gas cross section values?
-                  first_band_call, &
-                  num_gases, & ! Total number of gases (for precomputed CS)
-                  j, & ! Which gas - as an index of MCS%window%gases? (for precomputed CS)
                   success_gas)
 
              if (.not. success_gas) then
@@ -1653,7 +1660,7 @@ contains
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
        if (.not. success_inv_mat) then
           call logger%error(fname, "Failed to invert K^T Se K")
-          !return
+          return
        end if
 
        tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
@@ -1668,7 +1675,7 @@ contains
 
        if (.not. success_inv_mat) then
           call logger%error(fname, "Failed to invert Shat^-1")
-          !return
+          return
        end if
 
        ! Check delta sigma square for this iteration
@@ -1687,59 +1694,6 @@ contains
           end do
        end do
 
-
-       !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
-       !! we revert to the last state vector, and increase lm_gamma
-       if (.not. divergent_step) then
-          ! Make sure we keep the 'old' Chi2 only from a valid iteration
-          old_chi2 = this_chi2
-       end if
-       this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-
-       if (iteration == 1) then
-          chi2_ratio = 0.5d0 ! For very first iteration, we set R in the trust region
-       else
-          ! Otherwise R is ratio between linear forecast value and actual computed Chi2
-          chi2_ratio = (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
-       end if
-
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
-!!$
-
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)!, solar_low(i)
-!!$
-!!$       end do
-!!$       close(funit)
-
-
-!!$       do i=1, num_active_levels
-!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
-!!$       end do
-
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!!$       write(*,*) "LM-Gamma: ", lm_gamma
-!!$       write(*,*) "Ratio R: ", chi2_ratio
-
-
-
-       ! If we have a successful iteration, we want to store the last
-       ! successful one here as well. 
-       last_successful_sv(:) = SV%svsv(:)
 
        ! Make linear prediction for the next iteration
        radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
@@ -1819,25 +1773,50 @@ contains
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          write(tmp_str, '(A,G3.1,A,F6.3,A,G2.1,A,F10.2,A,E10.3)') "Iteration: ", iteration ,&
+          write(tmp_str, '(A,G3.1,A,F6.3,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration ,&
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", this_psurf, &
-               ", LM-Gamma: ", lm_gamma
+               ", LM-Gamma: ", lm_gamma, &
+               ", SNR: ", sum(radiance_meas_work / noise_work) / dble(size(radiance_meas_work))
           call logger%debug(fname, trim(tmp_str))
 
        else
           ! Not converged yet - change LM-gamma according to the chi2_ratio.
 
+          !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
+          !! we revert to the last state vector, and increase lm_gamma
+
+          if (.not. divergent_step) then
+             ! Make sure we keep the 'old' Chi2 only from a valid iteration
+             old_chi2 = this_chi2
+          end if
+
+          this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+
+          if (iteration == 1) then
+             chi2_ratio = 0.5d0 ! For very first iteration, we set R in the trust region, so
+             ! lm_gamma will not be changed.
+          else
+             ! Otherwise R is ratio between linear forecast value and actual computed Chi2
+             chi2_ratio = (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
+          end if
+
           if (chi2_ratio > 0.75d0) then
              ! If fit is much better than predicted / fairly linear - decrese gamma by a bit
              lm_gamma = lm_gamma * 0.5d0
              divergent_step = .false.
+             ! If we have a successful iteration, we want to store the last
+             ! successful one here as well. 
+             last_successful_sv(:) = SV%svsv(:)
           else if ((chi2_ratio < 0.25d0) .and. (chi2_ratio > 1.0d-4)) then
              ! Fit is not as good as predicted so increase gamma
              lm_gamma = lm_gamma * 10.0d0
              divergent_step = .false.
-          else if (chi2_ratio < 1.0d-4) then
+             ! If we have a successful iteration, we want to store the last
+             ! successful one here as well. 
+             last_successful_sv(:) = SV%svsv(:)
+          else if (chi2_ratio <= 1.0d-4) then
              ! We consider this a divergence!
              divergent_step = .true.
              num_divergent_steps = num_divergent_steps + 1
@@ -1870,6 +1849,39 @@ contains
 
 
        end if
+
+!!$       open(file="jacobian.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) (K(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
+!!$
+       
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i)!, solar_low(i)
+!!$
+!!$       end do
+!!$       close(funit)
+
+
+!!$       do i=1, num_active_levels
+!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
+!!$       end do
+
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!!$       write(*,*) "LM-Gamma: ", lm_gamma
+!!$       write(*,*) "Ratio R: ", chi2_ratio
+
 
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.

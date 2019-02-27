@@ -12,7 +12,7 @@ contains
        wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, need_gas_jac, &
        gas_tau, gas_tau_dpsurf, gas_tau_dvmr, gas_tau_dsh, &
-       precompute_CS, first_time, num_gas, gas_idx, success)
+       success)
 
     implicit none
     logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
@@ -34,10 +34,6 @@ contains
     double precision, intent(inout) :: gas_tau_dvmr(:,:)
     ! dtau / dsh
     double precision, intent(inout) :: gas_tau_dsh(:,:)
-    ! Do we use precomputed CS? Is this the first call for this window?
-    logical, intent(in) :: precompute_CS, first_time
-    ! number of total gases, and which index to use for storing precomputed CS values?
-    integer, intent(in) :: num_gas, gas_idx
     ! Success?
     logical, intent(inout) :: success
 
@@ -60,11 +56,6 @@ contains
     double precision, allocatable :: GK_abscissae(:), GK_weights(:), G_weights(:)
     double precision, allocatable :: GK_abscissae_f(:), GK_weights_f(:), G_weights_f(:)
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
-
-    ! If we use precomputed cross sections, we can just save the values
-    ! into this array on the very first call, and later just use these.
-    double precision, allocatable, save :: CS_precomp(:,:,:,:)
-    logical, allocatable, save :: CS_done_precomputing(:)
 
     integer :: N_lay, N_lev, N_wl, num_active_levels
     integer :: i,j,k,l
@@ -89,22 +80,6 @@ contains
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
     N_wl = size(wl)
-
-
-    if (first_time .and. precompute_CS) then
-       if (allocated(CS_precomp)) deallocate(CS_precomp)
-       if (allocated(CS_done_precomputing)) deallocate(CS_done_precomputing)
-    end if
-
-    if (precompute_CS) then
-       if (.not. allocated(CS_precomp)) then
-          allocate(CS_precomp(N_wl, N_sub, N_lay, num_gas))
-          allocate(CS_done_precomputing(num_gas))
-
-          CS_precomp(:,:,:,:) = 0.0d0
-          CS_done_precomputing(:) = .false.
-       end if
-    end if
 
     do j=1, N_lev
        if (psurf >= p(j)) then
@@ -286,28 +261,9 @@ contains
 
           if (log_scaling) this_p = exp(this_p)
 
-          ! We may use precomputed values for the cross sections, but only if the
-          ! layer is not the one with variable surface pressure.
-          if (precompute_CS .and. (.not. CS_done_precomputing(gas_idx)) &
-               .and. (l /= num_active_levels)) then
-             
-             CS_precomp(:,k,l-1,gas_idx) = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
-                  this_T, this_H2O, wl_left_indices(:))
-             this_CS_value = CS_precomp(:,k,l-1,gas_idx)
+          this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
+               this_T, this_H2O, wl_left_indices(:))
 
-          else if (precompute_CS .and. CS_done_precomputing(gas_idx) &
-               .and. (l /= num_active_levels)) then
-
-             this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
-                  this_T, this_H2O, wl_left_indices(:))
-             this_CS_value = CS_precomp(:,k,l-1,gas_idx)
-
-          else
-             this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
-                  this_T, this_H2O, wl_left_indices(:))
-          end if
-
- 
           if (is_H2O) then
              H2O_corr = 1.0d0
           else
@@ -396,10 +352,6 @@ contains
     end do
 
     success = .true.
-    if (precompute_CS .and. (.not. CS_done_precomputing(gas_idx))) then
-       CS_done_precomputing(gas_idx) = .true.
-       write(*,*) "Precomputation setting to done for ", gas_idx
-    end if
 
   end subroutine calculate_gas_tau
 

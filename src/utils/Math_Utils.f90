@@ -1,18 +1,18 @@
 module math_utils_mod
 
-    use logger_mod, only: logger => master_logger
+  use logger_mod, only: logger => master_logger
 
-    implicit none
+  implicit none
 
-    double precision, parameter :: SPEED_OF_LIGHT = 299792458d0
-    double precision, parameter :: PI = 3.141592653589793d0
-    double precision, parameter :: DEG2RAD = 0.017453292519943295d0
-    double precision, parameter :: RAD2DEG = 57.29577951308232d0
-    double precision, parameter :: NA = 6.022140857d23
-    double precision, parameter :: H2Om = 0.018015422135d0
-    double precision, parameter :: DRY_AIR_MASS = 0.0289644d0
-    double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
-    double precision, parameter :: SH_H2O_CONV = DRY_AIR_MASS / H2Om
+  double precision, parameter :: SPEED_OF_LIGHT = 299792458d0
+  double precision, parameter :: PI = 3.141592653589793d0
+  double precision, parameter :: DEG2RAD = 0.017453292519943295d0
+  double precision, parameter :: RAD2DEG = 57.29577951308232d0
+  double precision, parameter :: NA = 6.022140857d23
+  double precision, parameter :: H2Om = 0.018015422135d0
+  double precision, parameter :: DRY_AIR_MASS = 0.0289644d0
+  double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
+  double precision, parameter :: SH_H2O_CONV = DRY_AIR_MASS / H2Om
 
 contains
 
@@ -80,15 +80,12 @@ contains
 
     last_d = 1
     do i=1, ni
-
        if (xi(i) <= xd(1)) then
           yi(i) = yd(1)
        else if (xi(i) >= xd(nd)) then
           yi(i) = yd(nd)
        else
-
           do d=last_d, nd-1
-
              if ((xi(i) >= xd(d)) .and. (xi(i) <= xd(d+1))) then
 
                 last_d = d
@@ -97,12 +94,8 @@ contains
                 yi(i) = (1.0d0 - fac) * yd(d) + fac * yd(d+1)
 
              end if
-
           end do
-
-
        end if
-
     end do
 
 
@@ -323,7 +316,7 @@ contains
   end subroutine fft_convolution
 
 
-    subroutine oco_type_convolution2(wl_input, input, wl_kernels, kernels, &
+  subroutine oco_type_convolution2(wl_input, input, wl_kernels, kernels, &
        wl_output, output, success)
 
     !! This is an implementation of the OCO-type ILS application, which ins't
@@ -381,8 +374,6 @@ contains
        idx_hires_ILS_min = searchsorted_dp(wl_input, ILS_delta_min)
        idx_hires_ILS_max = searchsorted_dp(wl_input, ILS_delta_max)
 
-       !write(*,*) idx_pix, wl_input(idx_pix), idx_hires_ILS_min, idx_hires_ILS_max 
-
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min
        allocate(ILS_upsampled(N_this_wl + 1))
        ILS_upsampled = 0.0d0
@@ -407,250 +398,125 @@ contains
   end subroutine oco_type_convolution2
 
 
-  subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
-       wl_output, output, success)
+  subroutine linear_upsample(x_hires, x_lowres, y_lowres, output)
 
-    !! This is an implementation of the OCO-type ILS application, which ins't
-    !! quite a convolution since we have to treat every pixel with a different
-    !! ILS. wl_output is the DESIRED output wavelength grid
-
-    ! High-resolution bits
-    double precision, intent(in) :: wl_input(:), input(:)
-    ! "Convolution" wavelengths and kernels
-    double precision, intent(in) :: wl_kernels(:,:), kernels(:,:)
-    double precision, intent(in) :: wl_output(:)
+    implicit none
+    double precision, intent(in) :: x_hires(:), x_lowres(:), y_lowres(:)
     double precision, intent(inout) :: output(:)
-    logical, intent(out) :: success
 
-    character(len=*), parameter :: fname = "oco_type_convolution"
-    integer :: N_pix, N_ils_pix, N_wl
-    integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
-    integer :: kernel_idx_min, kernel_idx_max
-    double precision :: ILS_delta_min, ILS_delta_max
-    double precision :: ILS_wl_spacing
-    double precision :: wl_diff
+    integer :: idx_closest, idx_left, idx_right
+    integer :: i,j
+    double precision :: frac_value
 
-    double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
-    double precision :: time_start, time_stop
-    integer :: i, funit
-
-    N_wl = size(wl_input)
-    N_pix = size(wl_output)
-    N_ils_pix = size(wl_kernels, 1)
-
-    ILS_wl_spacing = wl_input(2) - wl_input(1)
-
-    if (N_pix /= size(wl_kernels, 2)) then
-       call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
+    ! Output and hires arrays should be the same size!
+    if ((size(output) /= size(x_hires))) then
+       call logger%fatal("linear_upsample", "Array size mismatch!")
        stop 1
     end if
 
-    if (N_pix /= size(kernels, 2)) then
-       call logger%fatal(fname, "kernels or wl_output have incompatible sizes.")
-       stop 1
-    end if
+    do i=1, size(x_hires)
 
-    ! Main loop over all (instrument) output pixels. Note that idx_pix is
-    ! RELATIVE to the array that is supplied here, which means you need to
-    ! make sure that you only pass arrays here that in wavelength (detector pixel)
-    ! space are at the same positions as the output wavelengths wl_output.
-
-    do idx_pix=1, N_pix
-
-       ! Note the ILS boundary in wavelength space. wl_kernels spans usually
-       ! some range from -lambda to +lambda.
-       ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
-       ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
-
-       ! Again, we need to make sure that these wavelengths here ILS_delta_* are
-       ! multiples of the hires grid
-       ILS_delta_min = ILS_wl_spacing * ceiling(ILS_delta_min / ILS_wl_spacing)
-       !ILS_delta_max = ILS_wl_spacing * ceiling(ILS_delta_max / ILS_wl_spacing)
-
-       ! Find out, which index of the high-res input is closest to the
-       ! detector pixel, and also which is the center pixel
-       idx_hires_ILS_min = -1
-
-
-       if (wl_input(1) > ILS_delta_min) then
-          call logger%warning(fname, "ILS protudes out of lower wavelength range!")
-          write(*,*) wl_input(1), ILS_delta_min, wl_kernels(1, idx_pix), wl_kernels(N_ils_pix, idx_pix)
-          write(*,*) wl_output(1), wl_output(N_pix)
-          read(*,*)
-          kernel_idx_min = searchsorted_dp(wl_kernels(:, idx_pix) + wl_output(idx_pix), wl_input(1))
-          kernel_idx_max = N_ils_pix
-          idx_hires_ILS_min = 1
-          idx_hires_ILS_max = 1 + kernel_idx_max - kernel_idx_min
-       else if (wl_input(N_wl) < ILS_delta_max) then
-          call logger%warning(fname, "ILS protudes out of higher wavelength range!")
-          write(*,*) wl_input(1), ILS_delta_min, wl_kernels(1, idx_pix), wl_kernels(N_ils_pix, idx_pix)
-          write(*,*) wl_output(1), wl_output(N_pix)
-          read(*,*)
-          kernel_idx_max = searchsorted_dp(wl_kernels(:, idx_pix) + wl_output(idx_pix), wl_input(N_wl))
-          kernel_idx_min = 1
-          idx_hires_ILS_min = N_wl - (kernel_idx_max - kernel_idx_min) - 1
-          idx_hires_ILS_max = N_wl
+       ! Between which two lowres values is our hires value?
+       idx_closest = minloc(abs(x_lowres - x_hires(i)), dim=1) !find_closest_index_DP(x_lowres, x_hires(i))
+       if (x_lowres(idx_closest) < x_hires(i)) then
+          idx_right = idx_closest + 1
+          idx_left = idx_closest
        else
-          ! Normal, ILS bounds are within high-res wavelength array
-          idx_hires_ILS_min = searchsorted_dp(wl_input(:), ILS_delta_min)
-          idx_hires_ILS_max = idx_hires_ILS_min + N_ils_pix - 1
-          kernel_idx_min = 1
-          kernel_idx_max = N_ils_pix
+          idx_left = idx_closest - 1
+          idx_right = idx_closest
        end if
 
-!!$       do i=1, size(wl_input)-1
-!!$          ! The ILS should be on a high-resolution grid at the same spacing as the
-!!$          ! input radiances, so we only need to find the index at which they are
-!!$          ! essentially the same wavelength
-!!$          if (abs(ILS_delta_min - wl_input(i)) < (0.1d0 * ILS_wl_spacing)) then
-!!$             idx_hires_ILS_min = i
-!!$             exit
-!!$          end if
-!!$       end do
-
-
-       if (idx_hires_ILS_min == -1) then
-          write(*,*) "idx_hires_ILS_min is -1"
-          success = .false.
-          return
+       ! Boundary cases:
+       if (idx_left == 0) then
+          idx_left = 1
+          idx_right = 2
+       end if
+       if (idx_right > size(x_lowres)) then
+          idx_right = size(x_lowres)
+          idx_left = idx_right - 1
        end if
 
-       if (idx_hires_ILS_max > size(input)) then
-          success = .false.
-          return
-       end if
-
-       output(idx_pix) = dot_product(input(idx_hires_ILS_min:idx_hires_ILS_max), &
-            kernels(kernel_idx_min:kernel_idx_max, idx_pix))! &
-            !/ sum(kernels(kernel_idx_min:kernel_idx_max, idx_pix))
+       frac_value = (x_hires(i) - x_lowres(idx_left)) / (x_lowres(idx_right) - x_lowres(idx_left))
+       output(i) = (1.0d0 - frac_value) * y_lowres(idx_left) + frac_value * y_lowres(idx_right)
 
     end do
 
+  end subroutine linear_upsample
+
+  subroutine invert_matrix(mat_in, mat_out, success)
+
+    double precision, dimension(:,:), intent(in) :: mat_in
+    double precision, dimension(:,:), intent(out) :: mat_out
+    logical, intent(out):: success
+
+    double precision, dimension(size(mat_in,1)) :: work  ! work array for LAPACK
+    integer, dimension(size(mat_in,1)) :: ipiv   ! pivot indices
+    integer :: n, info
+
+    ! Store A in Ainv to prevent it from being overwritten by LAPACK
+    mat_out(:,:) = mat_in(:,:)
+    n = size(mat_in,1)
+
+    ! DGETRF computes an LU factorization of a general M-by-N matrix A
+    ! using partial pivoting with row interchanges.
+    call DGETRF(n, n, mat_out, n, ipiv, info)
+
+    if (info /= 0) then
+       call logger%fatal("invert_matrix", "Matrix is numerically singular!")
+       write(*,*) "DGETRF Error Code: ", info
+       success = .false.
+       return
+    end if
+
+    ! DGETRI computes the inverse of a matrix using the LU factorization
+    ! computed by DGETRF.
+    call DGETRI(n, mat_out, n, ipiv, work, n, info)
+
+    if (info /= 0) then
+       call logger%fatal("invert_matrix", "Matrix inversion failed!")
+       success = .false.
+       return
+    end if
+
     success = .true.
 
+  end subroutine invert_matrix
 
 
-  end subroutine oco_type_convolution
+  function percentile(x, perc)
 
-    subroutine linear_upsample(x_hires, x_lowres, y_lowres, output)
+    !! Calculates the percentile "perc" of a double precision array "x"
 
-        implicit none
-        double precision, intent(in) :: x_hires(:), x_lowres(:), y_lowres(:)
-        double precision, intent(inout) :: output(:)
+    implicit none
+    double precision :: percentile
 
-        integer :: idx_closest, idx_left, idx_right
-        integer :: i,j
-        double precision :: frac_value
+    double precision, dimension(:), intent(in) :: x
+    double precision, intent(in) :: perc
+    double precision, dimension(:), allocatable :: x_sort
+    double precision :: position, position_remainder
+    integer :: position_int
+    character(len=*), parameter :: fname = "percentile"
 
-        ! Output and hires arrays should be the same size!
-        if ((size(output) /= size(x_hires))) then
-            call logger%fatal("linear_upsample", "Array size mismatch!")
-            stop 1
-        end if
+    if ((perc < 0) .or. (perc > 100)) then
+       call logger%fatal(fname, "Percentile must be between 0 and 100!")
+       stop 1
+    end if
 
-        do i=1, size(x_hires)
+    allocate(x_sort(size(x)))
+    x_sort(:) = x
+    call combsort(x_sort)
 
-            ! Between which two lowres values is our hires value?
-            idx_closest = minloc(abs(x_lowres - x_hires(i)), dim=1) !find_closest_index_DP(x_lowres, x_hires(i))
-            if (x_lowres(idx_closest) < x_hires(i)) then
-                idx_right = idx_closest + 1
-                idx_left = idx_closest
-            else
-                idx_left = idx_closest - 1
-                idx_right = idx_closest
-            end if
+    position = (perc / 100) * size(x)
 
-            ! Boundary cases:
-            if (idx_left == 0) then
-                idx_left = 1
-                idx_right = 2
-            end if
-            if (idx_right > size(x_lowres)) then
-                idx_right = size(x_lowres)
-                idx_left = idx_right - 1
-            end if
+    position_int = floor(position)
+    position_remainder = position - floor(position)
 
-            frac_value = (x_hires(i) - x_lowres(idx_left)) / (x_lowres(idx_right) - x_lowres(idx_left))
-            output(i) = (1.0d0 - frac_value) * y_lowres(idx_left) + frac_value * y_lowres(idx_right)
+    percentile = (x_sort(position_int) * (1.0d0 - position_remainder)) + &
+         (x_sort(position_int + 1) * position_remainder)
 
-        end do
+  end function percentile
 
-    end subroutine
-
-    subroutine invert_matrix(mat_in, mat_out, success)
-
-      double precision, dimension(:,:), intent(in) :: mat_in
-      double precision, dimension(:,:), intent(out) :: mat_out
-      logical, intent(out):: success
-
-      double precision, dimension(size(mat_in,1)) :: work  ! work array for LAPACK
-      integer, dimension(size(mat_in,1)) :: ipiv   ! pivot indices
-      integer :: n, info
-
-      ! Store A in Ainv to prevent it from being overwritten by LAPACK
-      mat_out(:,:) = mat_in(:,:)
-      n = size(mat_in,1)
-
-      ! DGETRF computes an LU factorization of a general M-by-N matrix A
-      ! using partial pivoting with row interchanges.
-      call DGETRF(n, n, mat_out, n, ipiv, info)
-
-      if (info /= 0) then
-         call logger%fatal("invert_matrix", "Matrix is numerically singular!")
-         write(*,*) "DGETRF Error Code: ", info
-         success = .false.
-         return
-      end if
-
-      ! DGETRI computes the inverse of a matrix using the LU factorization
-      ! computed by DGETRF.
-      call DGETRI(n, mat_out, n, ipiv, work, n, info)
-
-      if (info /= 0) then
-         call logger%fatal("invert_matrix", "Matrix inversion failed!")
-         success = .false.
-         return
-      end if
-
-      success = .true.
-
-    end subroutine invert_matrix
-
-
-    function percentile(x, perc)
-
-        !! Calculates the percentile "perc" of a double precision array "x"
-
-        implicit none
-        double precision :: percentile
-
-        double precision, dimension(:), intent(in) :: x
-        double precision, intent(in) :: perc
-        double precision, dimension(:), allocatable :: x_sort
-        double precision :: position, position_remainder
-        integer :: position_int
-        character(len=*), parameter :: fname = "percentile"
-
-        if ((perc < 0) .or. (perc > 100)) then
-            call logger%fatal(fname, "Percentile must be between 0 and 100!")
-            stop 1
-        end if
-
-        allocate(x_sort(size(x)))
-        x_sort(:) = x
-        call combsort(x_sort)
-
-        position = (perc / 100) * size(x)
-
-        position_int = floor(position)
-        position_remainder = position - floor(position)
-
-        percentile = (x_sort(position_int) * (1.0d0 - position_remainder)) + &
-                     (x_sort(position_int + 1) * position_remainder)
-
-    end function
-
-    subroutine combsort(a)
+  subroutine combsort(a)
     ! Taken from Rosettacode
 
     double precision, intent(in out) :: a(:)
@@ -660,20 +526,20 @@ contains
 
     gap = size(a)
     do while (gap > 1 .or. swapped)
-      gap = gap / 1.3
-      if (gap < 1) gap = 1
-      swapped = .false.
-      do i = 1, size(a)-gap
+       gap = gap / 1.3
+       if (gap < 1) gap = 1
+       swapped = .false.
+       do i = 1, size(a)-gap
           if (a(i) > a(i+gap)) then
-              temp = a(i)
-              a(i) = a(i+gap)
-              a(i+gap) = temp;
-              swapped = .true.
+             temp = a(i)
+             a(i) = a(i+gap)
+             a(i+gap) = temp;
+             swapped = .true.
           end if
-      end do
+       end do
     end do
 
-    end subroutine combsort
+  end subroutine combsort
 
 
-end module
+end module math_utils_mod

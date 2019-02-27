@@ -1,8 +1,11 @@
-!
-! Main GeoCARB SIF Retrieval program. This is where it all starts. This main
-! program handles the command-line input via FLAP as well as setting up the
-! configuration through the text file via FINER.
-!
+!> @brief Main GeoCARB SIF Retrieval Program
+!> @file GeoCARBSIF_main.f90
+!> @author Peter Somkuti
+!>
+!! This is where it all starts. This main program calls functions to read in
+!! the command-line input via FLAP as well as setting up the configuration through
+!! through the text file via FINER.
+
 program GeoCARBSIF
 
   use logger_mod, only: logger => master_logger
@@ -22,8 +25,8 @@ program GeoCARBSIF
 
 
   type(file_ini) :: fini ! The config file structure
-  class(generic_instrument), allocatable :: my_instrument
-  integer :: hdferr
+  class(generic_instrument), allocatable :: my_instrument ! The used instrument type
+  integer :: hdferr ! HDF error variable
 
 
   ! Initilize the HDF5 library program-wide
@@ -71,7 +74,6 @@ program GeoCARBSIF
      ! Scan the L1b file - we need some info from there, mostly the
      ! number of frames, footprints, bands and spectral points
      call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
-     my_instrument%num_fp = 8
   end select
 
 

@@ -455,9 +455,6 @@ contains
     allocate(rel_vel(dset_dims(2), dset_dims(3)))
     allocate(rel_solar_vel(dset_dims(2), dset_dims(3)))
 
-    !call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_relative_velocity", rel_vel, dset_dims)
-    !call read_DP_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_solar_relative_velocity", rel_solar_vel, dset_dims)
-
   end subroutine read_sounding_location
 
   subroutine read_bad_sample_list(l1b_file_id, bad_sample_list)

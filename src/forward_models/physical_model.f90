@@ -87,7 +87,6 @@ module physical_model_mod
   double precision :: ils_hires_min_wl, ils_hires_max_wl, ils_hires_spacing
   double precision, allocatable :: ils_hires_grid(:)
   integer :: num_ils_hires
-  double precision :: ils_norm_factor
 
   ! L1B dispersion coefficients
   double precision, allocatable :: dispersion_coefs(:,:,:)
@@ -122,8 +121,6 @@ module physical_model_mod
        measured_radiance, &
        noise_radiance
 
-  ! Is this the very first call in this window?
-  logical :: first_band_call
   ! State vector construct!
   type(statevector) :: SV
   ! Result container
@@ -148,8 +145,8 @@ contains
     logical :: gas_found, all_gases_found
     integer :: absco_dims
 
-    integer :: num_frames, num_fp, num_spec, num_band
-    integer :: i_fp, i_fr, i_pix, i_win, band
+    integer :: num_frames, num_fp, num_pixel, num_band
+    integer :: i_fp, i_fr, i_win, band
     integer :: i, j, retr_count
     logical :: this_converged
 
@@ -227,7 +224,7 @@ contains
 
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-       allocate(dispersion(num_spec, num_fp, num_band))
+       allocate(dispersion(num_pixel, num_fp, num_band))
 
        do band=1, num_band
           do i_fp=1, num_fp
@@ -297,19 +294,9 @@ contains
 
        end if
 
-       ! To make the convolution operation faster, we will here interpolate the
-       ! ILS's to higher resolution for all pixels on the very first occassion,
-       ! and then we won't have to do it again for every retrieval and every
-       ! detector pixel. This obviously only works for a regular solar grid, and
-       ! the new hires ILS will be sitting on a regular grid with the same spacing.
-
-       ! Of course every pixel has a different delta_lambda range, so we are going
-       ! to create the new ILS grid in such a way that it fits the one ILS with the
-       ! largest range.
-
        band = MCS%window(i_win)%band
        ! Grab the number of spectral pixels in this band
-       num_spec = MCS%general%N_spec(band)
+       num_pixel = MCS%general%N_spec(band)
 
        ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
        ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
@@ -322,7 +309,7 @@ contains
        hires_spacing = MCS%window(i_win)%wl_spacing
 
        ! .. and construct the high-resolution grid from the supplied
-       ! microwindow range.
+       ! microwindow range. 
        N_hires = ceiling((MCS%window(i_win)%wl_max - MCS%window(i_win)%wl_min + 2*hires_pad) / hires_spacing)
 
        write(tmp_str, '(A,G0.1)') "Number of hires spectral points: ", N_hires
@@ -332,73 +319,6 @@ contains
        do i=1, N_hires
           hires_grid(i) = MCS%window(i_win)%wl_min - hires_pad + dble(i-1) * hires_spacing
        end do
-
-       ! Now that we have the appropriate high-resolution spacing, we can finish the ILS business
-       num_ils_hires = ceiling((ils_hires_max_wl - ils_hires_min_wl) / hires_spacing)
-
-       write(tmp_str, '(A,G0.1)') "Number of hires spectral points for ILS: ", num_ils_hires
-       call logger%debug(fname, trim(tmp_str))
-
-       allocate(ils_hires_grid(num_ils_hires))
-       allocate(ils_hires_delta_lambda(num_ils_hires, &
-            size(ils_delta_lambda, 2), &
-            size(ils_delta_lambda, 3), &
-            size(ils_delta_lambda, 4)))
-       allocate(ils_hires_relative_response, mold=ils_hires_delta_lambda)
-
-       ! We need to ensure that the hi-res grid and the hi-res ILS grid line
-       ! up fully, so ils_hires_min_wl needs to be shifted to the closest multiple
-       ! of solar_grid_spacing.
-       ils_hires_min_wl = hires_spacing * ceiling(ils_hires_min_wl / hires_spacing)
-
-       ! And construct the ILS hires grid using the hires grid spacing
-       do i=1, num_ils_hires
-          ils_hires_grid(i) = ils_hires_min_wl + dble(i-1) * hires_spacing
-       end do
-
-       call logger%debug(fname, "Re-gridding ILS to hi-res grid.")
-
-       do i_fp=1, num_fp
-          do i_pix=1, size(dispersion, 1)
-
-             ils_hires_delta_lambda(:, i_pix, i_fp, band) = ils_hires_grid(:)
-
-!!$             open(newunit=funit, file="ils_raw.dat")
-!!$             do i=1, size(ils_delta_lambda, 1)
-!!$                write(funit, *) ils_delta_lambda(i, i_pix, i_fp, band), &
-!!$                     ils_relative_response(i, i_pix, i_fp, band)
-!!$             end do
-!!$             close(funit)
-
-
-
-             ! Interpolate the ILS onto the high-resolution grid
-             call pwl_value_1d( &
-                  size(ils_delta_lambda, 1), &
-                  ils_delta_lambda(:, i_pix, i_fp, band), &
-                  ils_relative_response(:, i_pix, i_fp, band), &
-                  num_ils_hires, &
-                  ils_hires_grid, ils_hires_relative_response(:, i_pix, i_fp, band) )
-
-             ! And also divide by the sum here, such that we don't have to
-             ! re-do the sum every time during the convolution.
-
-!!$             open(newunit=funit, file="ils_hires.dat")
-!!$             do i=1, size(ils_hires_delta_lambda, 1)
-!!$                write(funit, *) ils_hires_delta_lambda(i, i_pix, i_fp, band), &
-!!$                     ils_hires_relative_response(i, i_pix, i_fp, band)
-!!$             end do
-!!$             close(funit)
-
-             ils_hires_relative_response(:, i_pix, i_fp, band) = &
-                  ils_hires_relative_response(:, i_pix, i_fp, band) / &
-                  sum(ils_hires_relative_response(:, i_pix, i_fp, band))
-
-             !read(*,*)
-          end do
-       end do
-       call logger%debug(fname, "Done re-gridding ILS.")
-
 
        ! For a faster gas-OD calculation, we re-grid the spectroscopy data
        ! as well, such that we do not have to interpolate in the wavelength
@@ -450,8 +370,7 @@ contains
        select type(my_instrument)
        type is (oco2_instrument)
 
-          ! Read in the measurement geometries - these are the same for all three bands?
-          ! TODO: this should be taking the footprint data, rather than sounding data..
+          ! Read in the measurement geometries
           call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
@@ -467,9 +386,9 @@ contains
        end select
 
        ! Allocate containers to hold the retrieval results
-       allocate(final_radiance(num_spec, num_fp, num_frames))
-       allocate(measured_radiance(num_spec, num_fp, num_frames))
-       allocate(noise_radiance(num_spec, num_fp, num_frames))
+       allocate(final_radiance(num_pixel, num_fp, num_frames))
+       allocate(measured_radiance(num_pixel, num_fp, num_frames))
+       allocate(noise_radiance(num_pixel, num_fp, num_frames))
 
        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -513,20 +432,13 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       ! If we want to store the pre-calculated cross sections,
-       ! we first need to tell the gas_tau function that this is indeed
-       ! the very first call, and thus the cross sections need to be
-       ! computed.
-       first_band_call = .true.
-
-       do i_fr=1, num_frames, 10
+       do i_fr=1, num_frames, 85
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
              ! Do the retrieval for this particular sounding
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
-             ! After the very first call, we set first_band_call to false, 
-             first_band_call = .false.
+             ! After the very first call, we set first_band_call to false
              call cpu_time(cpu_time_stop)
 
              ! Increase the rerival count tracker and compute the average processing
@@ -545,8 +457,7 @@ contains
        end do
 
        ! Deallocate arrays that are allocated on per-window basis
-       deallocate(solar_spectrum_regular, solar_spectrum, hires_grid, ils_hires_grid, &
-            ils_hires_delta_lambda, ils_hires_relative_response)
+       deallocate(solar_spectrum_regular, solar_spectrum, hires_grid)
 
 
        ! Set the dimensions of the arrays for saving them into the HDF file
@@ -675,7 +586,6 @@ contains
          radiance_calc_work, &
          radiance_tmp_work_hi, &
          radiance_calc_work_hi, &
-         radiance_last_iteration, &
          noise_work
 
     ! The current atmosphere, dependent on surface pressure. This can change
@@ -688,6 +598,7 @@ contains
     !! Sounding location /time stuff
     type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
+    double precision :: mu0, mu ! cos(sza) and cos(vza)
 
     !! Instrument stuff
     double precision :: instrument_doppler
@@ -714,6 +625,7 @@ contains
     integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
     double precision :: gas_scaling_factor
     logical :: is_H2O
+
     !! Albedo
     double precision :: albedo_apriori
     double precision, allocatable :: albedo(:)
@@ -726,7 +638,7 @@ contains
     double precision :: this_sif_radiance
 
     !! GASES
-    logical :: do_gas_jac, success_gas, precompute_CS
+    logical :: do_gas_jac, success_gas
 
     double precision :: continuum
 
@@ -835,7 +747,11 @@ contains
     N_sv = size(SV%svap)
     N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
+    ! Set the initial LM-Gamma parameter
     lm_gamma = MCS%window(i_win)%lm_gamma
+
+    mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
+    mu = cos(DEG2RAD * VZA(i_fp, i_fr))
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change, while the hi-res K stays the same
@@ -883,12 +799,14 @@ contains
 
     if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1000.0d0 ** 2
 
+    ! Make the dispersion prior covariance about ten times the perturbation value
     if (SV%num_dispersion > 0) then
        do i=1, SV%num_dispersion
-          Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = MCS%window(i_win)%dispersion_pert(i)**2
+          Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = (10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
        end do
     end if
 
+    ! The scale factor covariances are taken from the configuration file / MCS
     do i=1, SV%num_gas
        if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
           Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = (SV%gas_retrieve_scale_cov(i)) ** 2
@@ -913,8 +831,8 @@ contains
     ! since it's handy to have it for estimating the albedo.
     allocate(solar_irrad(N_hires))
 
-    ! Get the albedo prior
 
+    ! Get the albedo prior
     select type(my_instrument)
     type is (oco2_instrument)
 
@@ -924,7 +842,7 @@ contains
             solar_spectrum_regular(:,1), solar_irrad)
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(solar_irrad) * cos(DEG2RAD * SZA(i_fp, i_fr)))
+            (1.0d0 * maxval(solar_irrad) * mu0)
 
     end select
 
@@ -1212,9 +1130,7 @@ contains
                       if (s_start(i) == s_stop(l)) then
                          s_start(i) = s_start(i) + 1
                       end if
-
                    end do
-
                 end do
 
                 do i=1, SV%num_gas
@@ -1235,7 +1151,7 @@ contains
                 is_H2O = .false.
              end if
 
-
+             ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
@@ -1255,16 +1171,12 @@ contains
                   gas_tau_dsh(:,:,j), &
                   success_gas)
 
+             ! If the calculation goes wrong, we exit as we can't go on
              if (.not. success_gas) then
                 call logger%error(fname, "Error calculating gas optical depths.")
                 return
              end if
           end do
-
-
-!!$          do i=1, SV%num_gas
-!!$             write(*,*) s_start(i), s_stop(i), MCS%window(i_win)%gases(SV%gas_idx_lookup(i))%chars()
-!!$          end do
 
           ! Total optical depth is calculated as sum of all gas ODs
           ! as well as the Rayleigh extinction OD, and summing over
@@ -1320,8 +1232,6 @@ contains
        if ((SV%num_solar_shift == 1) .or. (SV%num_solar_stretch == 1)) then
 
           ! Sample doppler-shifted and scaled solar spectrum at hires grid
-          ! TODO: this is quite slow!! I think we need to write a fast
-          ! interpolation routine that works on sorted arrays.
           allocate(solar_tmp(N_hires))
           call pwl_value_1d( &
                N_hires, &
@@ -1354,22 +1264,14 @@ contains
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:) &
             + this_sif_radiance
 
-
        ! JACOBIAN CALCULATIONS
-       ! This probably should go into the radiance module?
-       if (SV%num_albedo > 0) then
-          do i=1, SV%num_albedo
-             K_hi(:, SV%idx_albedo(i)) = (radiance_calc_work_hi(:) - this_sif_radiance) / albedo * &
-                  ((hires_grid(:) - hires_grid(1)) ** (dble(i-1)))
-          end do
-       end if
 
        ! Surface pressure Jacobian
        if (SV%num_psurf == 1) then
           ! This equation requires the TOA radiance before SIF is added, so if we have
           ! SIF in it, take it out beforehand.
           K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance) &
-               * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+               * (1.0d0 / mu0 + 1.0d0 / mu) &
                * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
        end if
 
@@ -1390,15 +1292,15 @@ contains
        if (SV%num_gas > 0) then
           do i=1, SV%num_gas
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-                ! This is a scale-type jacobian
 
+                ! This is a scale-type jacobian
                 do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
 
                    ! Loop through all potential profile "sections", but skip the unused ones
                    if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1) cycle
 
                    K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
-                        * (1.0d0 / cos(DEG2RAD * SZA(i_fp, i_fr)) + 1.0d0 / cos(DEG2RAD * VZA(i_fp, i_fr))) &
+                        * (1.0d0 / mu0 + 1.0d0 / mu) &
                         * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
 
                    ! If this is a H2O Jacobian, we need to add the derivative
@@ -1454,7 +1356,6 @@ contains
        allocate(radiance_meas_work(N_spec))
        allocate(radiance_calc_work(N_spec))
        allocate(radiance_tmp_work(N_spec))
-
        allocate(noise_work(N_spec))
 
        ! Grab a copy of the L1b radiances
@@ -1480,6 +1381,7 @@ contains
           ! that they are not really considered in the fit. This should
           ! save otherwise good spectra with just a few distorted
           ! radiance values.
+
           if (allocated(spike_list)) then
              do i=1, N_spec
                 ! Remember: spike_list is in full l1b size, but noise work
@@ -1531,39 +1433,16 @@ contains
        type is (oco2_instrument)
 
           ! Convolution of the TOA radiances
-
-!!$          call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-!!$               ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$               ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$               this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
-!!$               ILS_success)
-!!$
-!!$          open(newunit=funit, file="pregrid_conv.dat")
-!!$          do i=1, N_spec
-!!$             write(funit, *) radiance_calc_work(i)
-!!$          end do
-!!$          close(funit)
-
           call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
                ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
                ILS_success)
 
-!!$          open(newunit=funit, file="classic_conv.dat")
-!!$          do i=1, N_spec
-!!$             write(funit, *) radiance_calc_work(i)
-!!$          end do
-!!$          close(funit)
-!!$
-!!$          read(*,*)
-
-
           if (.not. ILS_success) then
              call logger%error(fname, "ILS convolution error.")
              return
           end if
-
 
           do i=1, N_sv
 
@@ -1581,18 +1460,19 @@ contains
              ! SIF Jacobian does not need convolution, since it's just 1.0
              if (i == SV%idx_sif(1)) skip_jacobian = .true.
 
+             ! Albedo jacobians can be calculated here as well
+             do j=1, SV%num_albedo
+                if (i == SV%idx_albedo(j)) then
+                   skip_jacobian = .true.
+                end if
+             end do
+
              ! If we have any reason to skip this Jacobian index for convolution,
              ! do it.
              if (skip_jacobian) cycle
 
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
-
-!!$             call oco_type_convolution(hires_grid, K_hi(:,i), &
-!!$                  ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$                  ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
-!!$                  ILS_success)
 
              call oco_type_convolution2(hires_grid, K_hi(:,i), &
                   ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
@@ -1607,6 +1487,15 @@ contains
 
           end do
        end select
+
+       ! Calculate albedo Jacobians
+       if (SV%num_albedo > 0) then
+          do i=1, SV%num_albedo
+             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance) / albedo * &
+                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
+                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
+          end do
+       end if
 
        ! Disperion Jacobians are produced via finite differencing
        if (SV%num_dispersion > 0) then
@@ -1628,12 +1517,6 @@ contains
                 this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
 
                 ! Convolve the perturbed TOA radiance
-!!$                call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-!!$                     ils_hires_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$                     ils_hires_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$                     this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
-!!$                     ILS_success)
-
                 call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
                      ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
@@ -1828,19 +1711,6 @@ contains
              lm_gamma = lm_gamma * 10.0d0
 
              call logger%debug(fname, "Divergent step!")
-
-!!$             deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-!!$                  noise_work, Se_inv, K, solar_irrad)
-!!$
-!!$             if (allocated(gas_tau)) deallocate(gas_tau)
-!!$             if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
-!!$             if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
-!!$             if (allocated(gas_tau_dsh)) deallocate(gas_tau_dsh)
-!!$             if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
-!!$             if (allocated(ray_tau)) deallocate(ray_tau)
-!!$             if (allocated(total_tau)) deallocate(total_tau)
-!!$             if (allocated(vmr_pert)) deallocate(vmr_pert)
-!!$             if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
 
           else
              ! Otherweise, we are in the trust region, do nothing with gamma

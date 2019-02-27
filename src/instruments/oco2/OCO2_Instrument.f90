@@ -1,7 +1,7 @@
 module oco2_mod
 
   use stringifor
-  use instruments, only: generic_instrument
+  use instruments_mod, only: generic_instrument
   use control_mod, only: MCS
   use logger_mod, only: logger => master_logger
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, &

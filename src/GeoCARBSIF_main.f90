@@ -4,26 +4,32 @@
 !>
 !! This is where it all starts. This main program calls functions to read in
 !! the command-line input via FLAP as well as setting up the configuration through
-!! through the text file via FINER.
+!! the text file via FINER. The instrument is set and initialized right here, and
+!! the program goes straight into the perform_retrieval subroutine.
+!! After the retrievals are done, the remaining open HDF files are closed, and the
+!! program terminates with a zero exit code.
 
 program GeoCARBSIF
 
-  use logger_mod, only: logger => master_logger
+  !! User modules
   use startup_mod, only: initialize_config
   use version_mod, only: git_branch, git_commit_hash, git_rev_no
   use control_mod, only: MCS, populate_MCS
-  use finer, only: file_ini
+  use instruments_mod, only: generic_instrument
   use file_utils_mod, only: check_hdf_error
-  use instruments
   use oco2_mod
 
+  !! Third party modules
+  use logger_mod, only: logger => master_logger
+  use finer, only: file_ini
 
+  !! System modules
   use iso_fortran_env
   use HDF5
 
   implicit none
 
-
+  !! Local variables
   type(file_ini) :: fini ! The config file structure
   class(generic_instrument), allocatable :: my_instrument ! The used instrument type
   integer :: hdferr ! HDF error variable
@@ -94,10 +100,7 @@ program GeoCARBSIF
 
   ! Finishing touches
 
-  ! Close the HDF5 files
-  call h5fclose_f(MCS%input%l1b_file_id, hdferr)
-  call check_hdf_error(hdferr, "Main", "Error closing input HDF5 file")
-
+  ! Close the output HDF5 file
   call h5fclose_f(MCS%output%output_file_id, hdferr)
   call check_hdf_error(hdferr, "Main", "Error closing output HDF5 file")
 
@@ -105,6 +108,7 @@ program GeoCARBSIF
   call h5close_f(hdferr)
   call check_hdf_error(hdferr, "Main", "Error closing HDF5 library")
 
+  ! Say goodbye
   call logger%info("Main", "That's all, folks!")
 
 end program GeoCARBSIF

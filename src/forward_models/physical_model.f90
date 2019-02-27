@@ -8,7 +8,7 @@ module physical_model_mod
   use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
-  use instruments, only: generic_instrument
+  use instruments_mod, only: generic_instrument
   use oco2_mod
   use solar_model_mod
   use math_utils_mod

@@ -1,166 +1,170 @@
+!> @brief Startup module for initialization of the main control structure (MCS)
+!> @file Startup.f90
+!> @author Peter Somkuti
+!>
 !! Startup module. Routines in here are called during the startup-phase of the
-!! program, where we just check if the config/inputs are sane.
+!! program, where we also check if the config/inputs are sane. At this point, the
+!! logger is not yet initialized, so the various messages do not have the usual
+!! formatting as the messages later on.
 
 module startup_mod
 
     implicit none
 
     public :: initialize_config
+    private :: check_config
 
-contains
+  contains
+    !> This routine attempts to read the command-line argument that should
+    !> contain the configuration file path, and then tries to parse it. If
+    !> successful, it then initialises a logger object. The settings of the
+    !> logger object are stored in the logger module, so it can be loaded
+    !> from every other module/subroutine with the correct settings.
+    !>
+    !! @param fini FINER ini object
     subroutine initialize_config(fini)
-        ! This routine attempts to read the command-line argument that should
-        ! contain the configuration file path, and then tries to parse it. If
-        ! successful, it then initialises a logger object. The settings of the
-        ! logger object are stored in the logger module, so it can be loaded
-        ! from every other module/subroutine with the correct settings.
-
-        use iso_fortran_env
-        ! Pick up the logging module for status messages
-        use logger_mod, only: logger_init, logger => master_logger
-        ! Also load the config file parser module "Finer"
-        use finer, only: file_ini
-        ! And the CLI argument parser module
-        use flap, only: command_line_interface
-        use stringifor, only: string
-
-        use version_mod
-
-        implicit none
-
-        type(command_line_interface) :: cli ! Command line interface handler
-        type(file_ini), intent(in out) :: fini ! Config file interface handler
-        integer :: error ! Error variable
-
-        character(len=*), parameter :: fname = 'initialize_config'
-        type(string) :: version_string
-
-        character(999) :: config_file ! Path to the configuration file
-        logical :: config_file_exists ! Does the file exist?
-        integer :: config_file_size ! What size is the file?
-        logical :: config_file_OK ! Is the config OK (resonable)?
-
-        character(999) :: logfile
-        integer :: loglevel = 10
-
-        character(999) :: tmp_str
 
 
-        version_string = "[" // git_branch // " " // git_commit_hash //  &
-                       " #" // git_rev_no // "]"
+      ! User modules
+      use version_mod
+      use file_utils_mod, only: fini_extract_CHAR, fini_extract_INT
 
-        ! Initialize the CLI interface - we only really need that one option,
-        ! which is the location to the configuration file. Everything else
-        ! should be contained within that text file.
-        call cli%init(description = 'GeoCARBSIF Retrieval Algorithm', &
-                      authors='Peter Somkuti (CSU/CIRA)', &
-                      version=version_string%chars())
-
-        call cli%add(switch='--config', &
-                     switch_ab='-c', &
-                     help='Path to the configuration file', &
-                     required=.true., &
-                     act='store', &
-                     error=error)
-
-        ! Check if setting up the command line arguments worked or not.
-        if (error /= 0) then
-            write(*, '(A)') "Could not set up command line arguments."
-            stop 1
-        end if
-
-        ! Check if grabbing the command line argument worked or not.
-        call cli%get(switch='-c', val=config_file, error=error)
-        if (error /= 0) then
-            write(*, '(A)') "Could not parse command line arguments."
-            stop 1
-        end if
-
-        write(*, '(A)') "Attempting to read configuration file at: " &
-                        // trim(config_file)
-
-        ! Check if file exists, and how large it is
-        inquire(file=config_file, exist=config_file_exists, &
-                size=config_file_size)
-
-        ! End program if the file does not exist
-        if (.not. config_file_exists) then
-            write(*, '(A)') "File: " // trim(config_file) // " does not exist."
-            stop 1
-        end if
-
-        ! End program if the file is empty
-        if (config_file_size == 0) then
-            write(*, '(A)') "File: " // trim(config_file) // " seems to be empty."
-            stop 1
-        end if
-
-        ! Now try to read the config file:
-        call fini%load(filename=trim(config_file), error=error)
-
-        ! If FINER can read this fine, we are good to go
-        if (error /= 0) then
-            write(*, '(A)') "Could not parse configuration file."
-            stop 1
-        else
-            write(*, '(A)') "Parsing of configuration file successful!"
-        end if
-
-        ! We want to turn all section/option names into lowercase
+      ! Third-party modules
+      use logger_mod, only: logger_init, logger => master_logger
+      use finer, only: file_ini
+      use flap, only: command_line_interface
+      use stringifor, only: string
 
 
-        ! Check if we have any invalid sections, or invalid keywords within
-        ! those sections. Rather than allowing all keywords, we stop the
-        ! program immediately if something does not match up at this stage.
-        call check_config(fini, config_file_OK)
+      ! System modules
+      use iso_fortran_env
 
-        ! If the check failed, stop the program.
-        if (.not. config_file_OK) then
-            write(*, '(A)') "Config file " // trim(config_file) // &
-                            " has not passed the check. Aborting."
-            stop 1
-        else
-            write(*, '(A)') "Config file seems OK! Moving on."
-        end if
+      implicit none
 
-        tmp_str = "logger"
-        if (fini%has_option(option_name='logfile', section_name=tmp_str)) then
-                call fini%get(section_name='logger', option_name='logfile', &
-                              val=logfile, error=error)
-        else
-            logfile = 'dev/null'
-        endif
+      type(file_ini), intent(inout) :: fini ! Config file interface handler
 
-        if (fini%has_option(section_name=tmp_str, option_name='loglevel')) then
-                call fini%get(section_name='logger', option_name='loglevel', &
-                              val=loglevel, error=error)
+      ! Local variables
+      type(command_line_interface) :: cli ! Command line interface handler
+      integer :: error ! Error variable
 
-                ! We expect only one value for the loglevel
-                if (fini%count_values(section_name="logger", &
-                                      option_name="loglevel") /= 1) then
-                    write(*, "(A)") "Sorry, must have only one value in loglevel!"
-                    stop 1
-                end if
-        else
-            ! If not specified, just keep it at 10=debug, which shows essentially
-            ! all log messages. This will be a lot, but hey, you wanted it!
-            loglevel = 10
-        end if
+      character(len=*), parameter :: fname = 'initialize_config'
+      type(string) :: version_string
 
-        ! Initialize the logger entity with the path to the logfile and keep all
-        ! loggers at the same log-level (stdout, stderr, logfile)
-        call logger_init(trim(logfile), loglevel, loglevel, loglevel)
+      character(999) :: config_file ! Path to the configuration file
+      logical :: config_file_exists ! Does the file exist?
+      integer :: config_file_size ! What size is the file?
+      logical :: config_file_OK ! Is the config OK (resonable)?
 
-        ! From here on, NO NEED TO USE write(*,*), just use the logging commands
-        ! to get debug,info etc. outputs. It'll create timestamps and everything
-        ! nicely for you.
+      character(999) :: logfile
+      integer :: loglevel = 10
 
-        write(tmp_str, '(A, I2.0)') "Logger initialized at [" // trim(logfile) // &
-                                    "] with loglevel: ", loglevel
-        call logger%info(fname, trim(tmp_str))
+      character(999) :: tmp_str
 
-    end subroutine
+      ! Create a version string that can be displayed at the command line
+      ! if you ask it via -v or --version
+      version_string = "[" // git_branch // " " // git_commit_hash //  &
+           " #" // git_rev_no // "]"
 
+      ! Initialize the CLI interface - we only really need that one option,
+      ! which is the location to the configuration file. Everything else
+      ! should be contained within that text file.
+      call cli%init(description = 'GeoCARBSIF Retrieval Algorithm', &
+           authors='Peter Somkuti (CSU/CIRA)', &
+           version=version_string%chars())
+
+      call cli%add(switch='--config', &
+           switch_ab='-c', &
+           help='Path to the configuration file', &
+           required=.true., &
+           act='store', &
+           error=error)
+
+      ! Check if setting up the command line arguments worked or not.
+      if (error /= 0) then
+         write(*, '(A)') "Could not set up command line arguments."
+         stop 1
+      end if
+
+      ! Check if grabbing the command line argument worked or not.
+      call cli%get(switch='-c', val=config_file, error=error)
+      if (error /= 0) then
+         write(*, '(A)') "Could not parse command line arguments."
+         stop 1
+      end if
+
+      write(*, '(A)') "Attempting to read configuration file at: " &
+           // trim(config_file)
+
+      ! Check if file exists, and how large it is
+      inquire(file=config_file, exist=config_file_exists, &
+           size=config_file_size)
+
+      ! End program if the file does not exist
+      if (.not. config_file_exists) then
+         write(*, '(A)') "File: " // trim(config_file) // " does not exist."
+         stop 1
+      end if
+
+      ! End program if the file is empty
+      if (config_file_size == 0) then
+         write(*, '(A)') "File: " // trim(config_file) // " seems to be empty."
+         stop 1
+      end if
+
+      ! Now try to read the config file
+      call fini%load(filename=trim(config_file), error=error)
+
+      ! If FINER can read this fine, we are good to go
+      if (error /= 0) then
+         write(*, '(A)') "Could not parse configuration file."
+         stop 1
+      else
+         write(*, '(A)') "Parsing of configuration file successful!"
+      end if
+
+      ! Check if we have any invalid sections, or invalid keywords within
+      ! those sections. Rather than allowing all keywords, we stop the
+      ! program immediately if something does not match up at this stage.
+      call check_config(fini, config_file_OK)
+
+      ! If the check failed, stop the program.
+      if (.not. config_file_OK) then
+         write(*, '(A)') "Config file " // trim(config_file) // &
+              " has not passed the check. Aborting."
+         stop 1
+      else
+         write(*, '(A)') "Config file seems OK! Moving on."
+      end if
+
+
+      ! Extract the logfile name. This is a required field.
+      call fini_extract_CHAR(fini, 'logger', 'logfile', .true., logfile)
+
+      ! Extract the loglevel (optional)
+      call fini_extract_INT(fini, 'logger', 'loglevel', .false., loglevel)
+      ! If not specified, just keep it at 10=debug, which shows essentially
+      ! all log messages. This will be a lot, but hey, you wanted it!
+      if (loglevel == -9999) loglevel = 10
+
+      ! Initialize the logger entity with the path to the logfile and keep all
+      ! loggers at the same log-level (stdout, stderr, logfile)
+      call logger_init(trim(logfile), loglevel, loglevel, loglevel)
+
+      ! From here on, NO NEED TO USE write(*,*), just use the logging commands
+      ! to get debug,info etc. outputs. It'll create timestamps and everything
+      ! nicely for you.
+
+      write(tmp_str, '(A, I2.0)') "Logger initialized at [" // trim(logfile) // &
+           "] with loglevel: ", loglevel
+      call logger%info(fname, trim(tmp_str))
+
+    end subroutine initialize_config
+
+    !> Here we check whether the contents of the configuration file, as they
+    !> are passed into "fini" (FINER object), are sensible and without contradictions.
+    !>
+    !! @param fini FINER ini object
+    !! @param config_file_OK Is the configuration file deemed sane?
     subroutine check_config(fini, config_file_OK)
         ! This checks only whether the configuration file has any unexpected
         ! items in it. The downside - we MUST update the Kewords module anytime
@@ -174,10 +178,11 @@ contains
         use keywords_mod, only: initialize_valid_sections, valid_sections, valid_options
 
         implicit none
-        ! DUMMY ARGUMENTS
+
         type(file_ini), intent(in out) :: fini ! Config file interface handler
         logical, intent(out) :: config_file_OK ! Is the config OK?
 
+        ! Local variables
         character(len=:), allocatable :: sections(:) ! All sections in the file
         character(len=:), allocatable :: option_pairs(:) ! Options in section
         type(string) :: tmp_section, tmp_option

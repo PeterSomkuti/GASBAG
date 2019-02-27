@@ -1,12 +1,17 @@
+!> @brief Physics-based retrieval method
+!> @file physical_model.f90
+!> @author Peter Somkuti
+!>
+!! These are the subroutines required to do a physics-based retrieval. Just like the
+!! guanter_model_mod, this module sets up some module-wide variables, and then loops
+!! over all specified windows to perform the retrievals for all soundings according to
+!! the retrieval options from the config file. 
+
 module physical_model_mod
 
-  use ISO_FORTRAN_ENV
-
-  use logger_mod, only: logger => master_logger
+  ! User modules
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
-  use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
-
   use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
   use instruments_mod, only: generic_instrument
   use oco2_mod
@@ -19,13 +24,18 @@ module physical_model_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
 
+  ! Third-party modules
+  use logger_mod, only: logger => master_logger
   use mod_datetime
+
+  ! System modules
+  use ISO_FORTRAN_ENV
+  use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
-  public physical_retrieval
-
-  private
+  public :: physical_retrieval
+  private :: physical_fm, calculate_dispersion_limits
 
   ! A simple structure to keep the atmosphere data nice
   ! and tidy.
@@ -1775,7 +1785,15 @@ contains
   end function physical_FM
 
 
-
+  !> @brief Given a dispersion array "this_dispersion", in window "i_win", this
+  !> function calculates the first and last pixel indices as the boundaries in
+  !> the detector.
+  !> @param this_dispersion Wavelength per detector index
+  !> @param i_win Retrieval Window index for MCS
+  !> @param l1b_wl_idx_min Lower wavelength pixel index corresponding to
+  !> user-defined "wl_min"
+  !> @param l1b_wl_idx_min Upper wavelength pixel index corresponding to
+  !> user-defined "wl_max"
   subroutine calculate_dispersion_limits(this_dispersion, i_win, &
        l1b_wl_idx_min, l1b_wl_idx_max)
 
@@ -1789,7 +1807,8 @@ contains
     l1b_wl_idx_min = 0
     l1b_wl_idx_max = 0
 
-    ! This here grabs the boundaries of the L1b data
+    ! This here grabs the boundaries of the L1b data by simply looping over
+    ! the dispersion array and setting the l1b_wl_idx_* accordingly.
     do i=1, size(this_dispersion)
        if (this_dispersion(i) < MCS%window(i_win)%wl_min) then
           l1b_wl_idx_min = i
@@ -1808,14 +1827,18 @@ contains
        l1b_wl_idx_min = 1
     end if
 
+    ! Have to increase the higher-wavelength index by one so that we can
+    ! use the full stride l1b_wl_idx_min: l1b_wl_idx_min to access the L1b
+    ! radiance corresponding to the user-defined values.
     if (l1b_wl_idx_max < size(this_dispersion)) then
        l1b_wl_idx_max = l1b_wl_idx_max + 1
     end if
 
+    ! If the index goes past the maximal size of the array, simply
+    ! set it back to the boundary.
     if (l1b_wl_idx_max > size(this_dispersion)) then
        l1b_wl_idx_max = size(this_dispersion)
     end if
-
 
   end subroutine calculate_dispersion_limits
 

@@ -22,22 +22,27 @@ module guanter_model_mod
   ! System modules
   use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
-
-  implicit none
-
   public :: guanter_retrieval
+  private :: guanter_fm, slope_correction
 
   private
 
+  implicit none
   ! In the Guanter-scheme, dispersion is not really touched, hence we can just
-  ! keep it as a module-wide fixed set of numbers (pixel, footprint)
+  ! keep it as a module-wide fixed set of numbers (pixel, footprint, band)
+  !> \brief Dispersion array to hold the wavelength-pixel mapping
+  !> (detector pixels, footprint, band). 
   double precision, dimension(:,:,:), allocatable :: dispersion
+  !> \brief Dispersion coefficient array that holds the polynomial coefficients
+  !> required to construct the dispersion/wavelength arrays.
   double precision, allocatable :: dispersion_coefs(:,:,:)
+  !> \brief SNR coefficient array required to calculate instrument
+  !> noise equivalent radiances.
   double precision, allocatable :: snr_coefs(:,:,:,:)
 
-  ! Basisfunctions are stored as (file, spectral pixel, footprint, #SV)
+  !> \brief Basisfunctions are stored as (window, spectral pixel, footprint, #SV)
   double precision, dimension(:,:,:,:), allocatable :: basisfunctions
-  ! Sounding_ids
+  !> \brief Sounding IDs (if available)
   integer(8), dimension(:,:), allocatable :: sounding_ids
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!

@@ -7,6 +7,9 @@ module file_utils_mod
   use logger_mod, only: logger => master_logger
   use finer, only: file_ini
   use stringifor, only: string
+  use physical_model_mod, only: atmosphere
+
+  use iso_fortran_env
 
   implicit none
 
@@ -545,6 +548,221 @@ contains
 
   end subroutine check_config_files_exist
 
+  subroutine read_atmosphere_file(filename, gas_indices, gas_strings, atm)
+
+    implicit none
+    character(len=*), intent(in) :: filename
+    integer, intent(in) :: gas_indices(:)
+    type(string), intent(in) :: gas_strings(:)
+    type(atmosphere), intent(inout) :: atm
+
+    character(len=*), parameter :: fname = "read_atmosphere_file"
+    integer :: funit, iostat
+    logical :: file_exist
+    integer :: line_count, nonempty_line_count, file_start, level_count
+    integer :: idx_p, idx_t
+    character(len=999) :: dummy, tmp_str
+    double precision :: dummy_dp
+    type(string) :: dummy_string
+    type(string), allocatable :: split_string(:)
+
+    integer :: i,j,cnt
+    integer, allocatable :: this_gas_index(:)
+
+    integer :: num_gases
+
+    inquire(file=filename, exist=file_exist)
+    if (.not. file_exist) then
+       call logger%fatal(fname, "Atmosphere file does not exist: " // filename)
+       stop 1
+    else
+       call logger%debug(fname, "File does exist.")
+    end if
+
+    ! First pass: we scan the file to see how many levels our atmosphere has
+    open(newunit=funit, file=filename, iostat=iostat, action='read', status='old')
+    rewind(unit=funit, iostat=iostat)
+
+    line_count = 0
+    level_count = 0
+    nonempty_line_count = 0
+    file_start = -1
+
+    ! Loop through the file until we have reached EOF
+    do
+       read(funit, '(A)', iostat=iostat) dummy
+
+       if (iostat == iostat_end) then
+          ! End of file?
+          exit
+       end if
+
+       line_count = line_count + 1
+
+       if (scan(dummy, "!#;") > 0) then
+          ! Skip this line, as it's commented
+          cycle
+       else if (trim(dummy) == "") then
+          ! Skip empty lines
+          cycle
+       end if
+
+       nonempty_line_count = nonempty_line_count + 1
+
+       ! First non-empty line should be saved here
+       if (file_start == -1) then
+          file_start = line_count
+       else
+          if (nonempty_line_count > 1) then
+             level_count = level_count + 1
+          end if
+       end if
+
+    end do
+
+    !close(funit)
+    !open(newunit=funit, file=filename, iostat=iostat, action='read', status='old')
+
+    ! Go back to the top of the file.
+    rewind(unit=funit, iostat=iostat)
+
+    line_count = 0
+    do
+       read(funit, '(A)', iostat=iostat) dummy
+
+       line_count = line_count + 1
+
+       if (line_count < file_start) cycle
+
+       if (line_count == file_start) then
+          ! This is the proper atmosphere header that should contain
+          ! the information about the gases. So first, let's check if
+          ! the numbers match
+          dummy_string = dummy
+          call dummy_string%split(tokens=split_string, sep=' ')
+
+          ! Now that we know both the number of levels and gases, we can allocate the
+          ! arrays in the atmosphere structure.
+
+          num_gases = 0
+          idx_p = -1
+          idx_t = -1
+          do j=1, size(split_string)
+             ! Skip temp or pressure
+             if (split_string(j)%lower() == "p") then
+                idx_p = j
+                cycle
+             end if
+             if (split_string(j)%lower() == "t") then
+                idx_t = j
+                cycle
+             end if
+             num_gases = num_gases + 1
+          end do
+
+          write(tmp_str, '(A,G0.1,A,A)') "There seem to be ", num_gases, " gases in ", filename
+          call logger%info(fname, trim(tmp_str))
+
+          if (allocated(atm%p)) deallocate(atm%p)
+          if (allocated(atm%T)) deallocate(atm%T)
+          if (allocated(atm%sh)) deallocate(atm%sh)
+          if (allocated(atm%gas_names)) deallocate(atm%gas_names)
+          if (allocated(atm%gas_index)) deallocate(atm%gas_index)
+          if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
+
+          allocate(atm%T(level_count))
+          allocate(atm%p(level_count))
+          allocate(atm%sh(level_count))
+          allocate(atm%gas_names(num_gases))
+          allocate(atm%gas_vmr(level_count, num_gases))
+          allocate(atm%gas_index(num_gases))
+
+
+
+          allocate(this_gas_index(size(gas_strings)))
+
+          ! But we also want to know what gas index to use for storage
+          do i=1, size(gas_strings)
+             this_gas_index(i) = -1
+             cnt = 1
+             do j=1, size(split_string)
+                ! Skip temp or pressure
+                if (split_string(j)%lower() == "p") cycle
+                if (split_string(j)%lower() == "t") cycle
+                ! Check if gas description matches gases we know
+                if (split_string(j) == gas_strings(i)) then
+                   this_gas_index(i) = j
+                   write(tmp_str, '(A,A,A,G0.1)') "Index for atmosphere gas ", &
+                        split_string(j)%chars(), ": ", j
+                   call logger%debug(fname, trim(tmp_str))
+                   exit
+                end if
+                cnt = cnt + 1
+             end do
+          end do
+
+          ! And last check - do all required gases have a VMR column in the
+          ! atmosphere file.
+
+          do i=1, size(gas_strings)
+             if (this_gas_index(i) == -1) then
+                ! Uh-oh, gas that was speficied in the "gases" option of the window
+                ! could not be found in the atmosphere! Hard exit.
+                write(tmp_str, "(A,A)") "The following gas was not found in the atmosphere file: " &
+                     // gas_strings(i)%chars()
+                call logger%fatal(fname, trim(tmp_str))
+                stop 1
+             end if
+          end do
+
+       end if
+
+
+       if (line_count > file_start) then
+          ! Right after the header, we should have the data in rows. We
+          ! use the string split option to split the row string into substrings,
+          ! and then convert each into double precision values and feed them into
+          ! the atmosphere structure - at the right position!
+
+          dummy_string = dummy
+          ! Need to deallocate the split_string object first
+          if (allocated(split_string)) deallocate(split_string)
+          call dummy_string%split(tokens=split_string, sep=' ')
+
+          ! Now here we need to check again whether a certain line has more than
+          ! num_gases+1 columns.
+          if (size(split_string) /= (num_gases + 2)) then
+             write(tmp_str, '(A, G0.1)') "Too many values in line ", line_count
+             call logger%fatal(fname, trim(tmp_str))
+             stop 1
+          end if
+
+          ! Get the pressure value
+          tmp_str = split_string(idx_p)%chars()
+          read(tmp_str, *) dummy_dp
+          atm%p(line_count - file_start) = dummy_dp
+
+          ! Get the temperature value
+          tmp_str = split_string(idx_t)%chars()
+          read(tmp_str, *) dummy_dp
+          atm%T(line_count - file_start) = dummy_dp
+
+          ! And the gas value(s) from the other column(s)
+          do i=1, size(gas_strings)
+             tmp_str = split_string(this_gas_index(i))%chars()
+             read(tmp_str, *) dummy_dp
+             atm%gas_vmr(line_count - file_start, i) = dummy_dp
+          end do
+
+       end if
+
+       if (line_count == (file_start + level_count)) exit
+
+    end do
+
+    close(funit)
+
+  end subroutine read_atmosphere_file
 
 
 end module file_utils_mod

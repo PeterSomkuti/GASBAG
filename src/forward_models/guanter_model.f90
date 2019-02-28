@@ -22,12 +22,12 @@ module guanter_model_mod
   ! System modules
   use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
+  implicit none
+
   public :: guanter_retrieval
   private :: guanter_fm, slope_correction
 
-  private
 
-  implicit none
   ! In the Guanter-scheme, dispersion is not really touched, hence we can just
   ! keep it as a module-wide fixed set of numbers (pixel, footprint, band)
   !> \brief Dispersion array to hold the wavelength-pixel mapping

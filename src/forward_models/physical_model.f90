@@ -5,7 +5,11 @@
 !! These are the subroutines required to do a physics-based retrieval. Just like the
 !! guanter_model_mod, this module sets up some module-wide variables, and then loops
 !! over all specified windows to perform the retrievals for all soundings according to
-!! the retrieval options from the config file. 
+!! the retrieval options from the config file. All these module-wide variables are
+!! then being accessed buy the physical_fm (physical forward model) subroutine. Obviously
+!! this requires all the L1b and MET data (apart from the spectra) to be read into
+!! memory, so the memory footprint is going to be a few GB. However, this makes it also
+!! fairly fast.
 
 module physical_model_mod
 
@@ -37,132 +41,177 @@ module physical_model_mod
   public :: physical_retrieval
   private :: physical_fm, calculate_dispersion_limits
 
-  ! A simple structure to keep the atmosphere data nice
-  ! and tidy.
+  !> A simple structure to keep the atmosphere data nice and tidy
   type atmosphere
-     ! The name(s) of the gas(es)
+     !> The name(s) of the gas(es), (gas number)
      type(string), allocatable :: gas_names(:)
-     ! Gas mixing ratios
+     !> Gas mixing ratios (level, gas number)
      double precision, allocatable :: gas_vmr(:,:)
-     ! To which spectroscopy data does this gas correspond to?
+     !> To which spectroscopy data does this gas correspond to? (gas number)
      integer, allocatable :: gas_index(:)
-     ! Temperature, pressure, and specific humidity
-     double precision, allocatable :: T(:), p(:), sh(:)
+     !> Model atmosphere temperature
+     double precision, allocatable :: T(:)
+     !> Model atmosphere pressure
+     double precision, allocatable :: p(:)
+     !> Model atmosphere specific humidity
+     double precision, allocatable :: sh(:)
   end type atmosphere
 
-  ! This structure contains the result data that will be stored in the
-  ! output HDF file.
-
+  !> This structure contains the result data that will be stored in the output HDF file.
   type result_container
+     !> State vector names (SV number)
      type(string), allocatable :: sv_names(:)
-     double precision, allocatable :: sv_retrieved(:,:,:), &
-          sv_prior(:,:,:), sv_uncertainty(:,:,:)
+     !> Retrieved state vector (SV number, footprint, frame)
+     double precision, allocatable :: sv_retrieved(:,:,:)
+     !> State vector prior (SV number, footprint, frame)
+     double precision, allocatable :: sv_prior(:,:,:)
+     !> State vector posterior uncertainty (SV number, footprint, frame)
+     double precision, allocatable :: sv_uncertainty(:,:,:)
+     !> Column-average dry air mixing ratio for retrieved gases (gas number, footprint, frame)
      double precision, allocatable :: xgas(:,:,:)
-     double precision, allocatable, dimension(:,:) :: &
-          chi2, residual_rms, dsigma_sq
-     integer, allocatable, dimension(:,:) :: num_iterations
-     integer, allocatable :: converged(:,:) ! HDF5 does not support logical types
+     !> Final Chi2 (footprint, frame)
+     double precision, allocatable :: chi2(:,:)
+     !> Final residual RMS (footprint, frame)
+     double precision, allocatable :: residual_rms(:,:)
+     !> Final dsigma-squared
+     double precision, allocatable :: dsigma_sq(:,:)
+     !> Final number of iterations
+     integer, allocatable :: num_iterations(:,:)
+     !> Converged or not? (1=converged, 0=not converged, -1=not properly run)
+     integer, allocatable :: converged(:,:)
   end type result_container
 
 
-  ! High resolution wavelength grid spacing (hires_spacing), and the
-  ! padding required make sure that the ILS does not protrude
-  ! outside of the grid.
-  double precision :: hires_spacing, hires_pad
-  ! High resolution wavelength grid
+
+  !> Spacing of the high-resolution wavelength grid in um
+  double precision :: hires_spacing
+  !> Padding (left and right) of the hires wl grid to accomodate ILS
+  double precision :: hires_pad
+  !> High resolution wavelength grid in um
   double precision, allocatable :: hires_grid(:)
-  ! Number of gridpoints on the high resolution grid
+  !> Number of gridpoints on the high resolution grid
   integer :: N_hires
-  ! Dispersion/wavelength array
+  !> Dispersion/wavelength array (detector pixel, footprint, band)
   double precision, allocatable :: dispersion(:,:,:)
-  ! Sounding_ids
+  !> Sounding IDs (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
   integer(8), allocatable :: sounding_ids(:,:)
-  ! Sounding time strings
+  !> Sounding time strings
   character(len=25), allocatable :: sounding_time_strings(:,:)
-  ! Sounding scene geometry (solar and viewing zenith and azimuth)
-  double precision, dimension(:,:), allocatable :: SZA, SAA, VZA, VAA
-  ! Sounding scene location (lon, lat, altitude, rel-vel instrument-earth,
-  !                          rel-vel instrument-sun)
-  double precision, dimension(:,:), allocatable :: lon, lat, altitude, &
-       relative_velocity, &
-       relative_solar_velocity
+  !> Solar zenith angles
+  double precision, allocatable :: SZA(:,:)
+  !> Solar azimuth angles
+  double precision, allocatable :: SAA(:,:)
+  !> Viewing/satellite zenith angles
+  double precision, allocatable :: VZA(:,:)
+  !> Viewing/satellite azimuth angles
+  double precision, allocatable :: VAA(:,:)
+  !> Sounding footprint longitudes
+  double precision, allocatable :: lon(:,:)
+  !> Sounding footprint latitudes
+  double precision, allocatable :: lat(:,:)
+  !> Sounding footprint altitudes
+  double precision, allocatable :: altitude(:,:)
+  !> Relative velocities between footprint on surface and spacecraft
+  double precision, allocatable :: relative_velocity(:,:)
+  !> Relative velocities between footprint on surface and the fixed sun
+  double precision, allocatable :: relative_solar_velocity(:,:)
 
-  ! ILS data: shape: (wl, pixel, fp, band)
-  double precision, dimension(:,:,:,:), allocatable :: ils_delta_lambda, &
-       ils_relative_response
-  ! ILS mapped onto the high resolution grid for fast
-  ! ILS "convolution" calculations
-  double precision, dimension(:,:,:,:), allocatable :: ils_hires_delta_lambda, &
-       ils_hires_relative_response
-  double precision :: ils_hires_min_wl, ils_hires_max_wl, ils_hires_spacing
-  double precision, allocatable :: ils_hires_grid(:)
-  integer :: num_ils_hires
+  !> ILS spectral dimension (delta wavelength, um), shape: (wl, pixel, footprint, band)
+  double precision, allocatable :: ils_delta_lambda(:,:,:,:)
+  !> ILS amplitude, shape: (wl, pixel, footprint, band)
+  double precision, allocatable :: ils_relative_response(:,:,:,:)
 
-  ! L1B dispersion coefficients
+  !> L1B dispersion coefficients (pixel, footprint, band)
   double precision, allocatable :: dispersion_coefs(:,:,:)
-  ! L1B SNR coefficients needed for noise calculation
+  !> L1B SNR coefficients needed for noise calculation (coefficient, pixel, footprint, band)
   double precision, allocatable :: snr_coefs(:,:,:,:)
-
-  ! For OCO-2: bad sample list. Bad samples should not be counted towards
-  ! fitting results (noise inflation)
+  !> List of 'bad'-flagged detector pixels
   integer, allocatable :: bad_sample_list(:,:,:)
+  !> If required, an array to hold the spike value (pixel, footprint, band)
   integer, allocatable :: spike_list(:,:,:)
 
-  ! We grab the full MET profiles from the MET data file, for quick access
-  double precision, allocatable, dimension(:,:,:) :: met_T_profiles, &
-       met_P_levels, &
-       met_SH_profiles
-  ! MET surface pressure
+  !> MET data temperature profiles (level, footprint, frame)
+  double precision, allocatable, dimension(:,:,:) :: met_T_profiles
+  !> MET data pressure levels (level, footprint, frame)
+  double precision, allocatable, dimension(:,:,:) :: met_P_levels
+  !> MET data specific humidity profiles (level, footprint, frame)
+  double precision, allocatable, dimension(:,:,:) :: met_SH_profiles
+  !> MET data surface pressure (footprint, frame)
   double precision, allocatable :: met_psurf(:,:)
 
-  ! The initial atmosphere provided by the config file, this will stay the same
-  ! for all retrievals. Within the physical_FM function, this atmosphere is
-  ! re-gridded, depending on the surface pressure of the particular scene, but
-  ! saved into a new variable
+  ! The initial atmosphere provided by the config file, this is the basis
+  ! for all scene-dependent atmospheres. The pressure levels of initial_atm
+  ! will be used for all retrievals, but the T and SH profiles are taken from
+  ! the MET files (if they exist).
+
+  !> Initial atmosphere as read from the text file
   type(atmosphere) :: initial_atm
 
-  ! The solar spectrum (wavelength, transmission)
-  double precision, allocatable :: solar_spectrum(:,:), &
-       solar_spectrum_regular(:,:), solar_tmp(:)
+  !> The solar (pseudo-transmittance) spectrum as read in from file (wavelength, transmission)
+  double precision, allocatable :: solar_spectrum(:,:)
+  !> The solar (pseudo-transmittance) spectrum on the regular wavelength grid (wavelength, transmission)
+  double precision, allocatable :: solar_spectrum_regular(:,:)
+  !> The number of solar spectrum points (as read from the file)
   integer :: N_solar
 
-  ! Radiances
-  double precision, dimension(:,:,:), allocatable :: final_radiance, &
-       measured_radiance, &
-       noise_radiance
+  !> Final modelled radiances (pixel, footprint, frame)
+  double precision, dimension(:,:,:), allocatable :: final_radiance
+  !> Measured radiances (pixel, footprint, frame)
+  double precision, dimension(:,:,:), allocatable :: measured_radiance
+  !> Calculated noise radiances (pixel, footprint, frame)
+  double precision, dimension(:,:,:), allocatable :: noise_radiance
 
-  ! State vector construct!
+  !> State vector construct
   type(statevector) :: SV
-  ! Result container
+  !> Result container
   type(result_container) :: results
 
 
 contains
 
+  !> @brief The physical_retrieval routine reads in all the necessary L1b and MET
+  !> data and prepares for the forward model to be run.
+  !> @param my_instrument Instrument entity
   subroutine physical_retrieval(my_instrument)
 
     implicit none
     class(generic_instrument), intent(in) :: my_instrument
 
-    integer(hid_t) :: l1b_file_id, met_file_id, output_file_id, dset_id, result_gid
-    logical :: MET_exists, ECMWF_exists, spike_exists
+    ! HDF5 file handlers for the L1b file and the MET file
+    integer(hid_t) :: l1b_file_id, met_file_id, output_file_id
+    ! Variables to hold a dataset ID and a group ID
+    integer(hid_t) :: dset_id, result_gid
+    ! Do MET or ECMWF groups exist in the MET file?
+    logical :: MET_exists, ECMWF_exists
+    ! Does a spike/bad_sample data field exist?
+    logical :: spike_exists, bad_sample_exists
+    ! Fixed dimensions for the arrays to be saved into the output HDF file
     integer(hsize_t) :: out_dims2d(2), out_dims3d(3)
-    integer(hsize_t), dimension(:), allocatable :: dset_dims
+    ! Dimensions for the read-in of MET/L1b data
+    integer(hsize_t), allocatable :: dset_dims(:)
+    ! HDF error variable
     integer :: hdferr
-    character(len=999) :: dset_name, tmp_str
+    ! Holders for temporary strings and dataset names to grab L1b/MET data
+    character(len=999) :: dset_name, tmp_str, group_name
+    ! Name of this function for debugging
     character(len=*), parameter :: fname = "physical_retrieval"
-
-    logical :: gas_found, all_gases_found
+    ! What are the dimensions of the ABSCO file used?
     integer :: absco_dims
-
+    ! What are the smallest and largest values of all ILSs in the L1b file
+    ! for this given band? Needed to calculate hires_pad
+    double precision :: ils_min_wl, ils_max_wl
+    ! Number of frames, footprints, detector pixels and bands
+    ! required vor various loops
     integer :: num_frames, num_fp, num_pixel, num_band
-    integer :: i_fp, i_fr, i_win, band
-    integer :: i, j, retr_count
+    ! Loop variables
+    integer :: i, j, i_fp, i_fr, i_win, band
+    ! Retrieval count
+    integer :: retr_count
+    ! Return value of physical_fm, tells us whether this one has converged or not
     logical :: this_converged
-
+    ! File unit for debugging only..
     integer :: funit
-
-
+    ! CPU time stamps and mean duration for performance analysis
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
     ! Open up the MET file
@@ -181,6 +230,9 @@ contains
     num_fp = MCS%general%N_fp
     ! Grab number of bands
     num_band = MCS%general%N_bands
+
+    ! Read in MET and L1B data, this is instrument-dependent, so we need to
+    ! make our instrument select here as well.
 
     select type(my_instrument)
     type is (oco2_instrument)
@@ -251,20 +303,34 @@ contains
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
 
-       ! Read in bad sample list
-       !call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
+       ! Read in the measurement geometries
+       call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
+       ! Read in the measurement location
+       call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
+            altitude, relative_velocity, &
+            relative_solar_velocity)
+
+       ! Read in Spike filter data, if it exists in this file
+       call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
+       if (spike_exists) then
+          call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+       end if
+
+       ! Read in bad sample list (if it exists)
+       call h5lexists_f(met_file_id, "/InstrumentHeader/bad_sample_list", bad_sample_exists, hdferr)
+       if (bad_sample_exists) then
+          call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
+       end if
 
     end select
 
-    ! Main loop over all soundings to perform actual retrieval
-    ! footprint, frame, microwindow #, band
+
 
     ! Create the HDF group in which all the results go in the end
-    call h5gcreate_f(output_file_id, "physical_retrieval_results", &
-         result_gid, hdferr)
+    call h5gcreate_f(output_file_id, "physical_retrieval_results", result_gid, hdferr)
     call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
 
-
+    ! Loop over all potential user-defined retrieval windows.
     do i_win=1, MAX_WINDOWS
 
        ! Just skip unused windows
@@ -274,6 +340,7 @@ contains
        ! and see if a gas with the corresponding name has been defined.
        call MCS_find_gases(MCS%window, MCS%gas, i_win)
 
+       ! If we have gases, we want to read in the corresponding spectroscopy data
        if (MCS%window(i_win)%num_gases > 0) then
           ! Read in the spectroscopy data, depending on the type
           do i=1, size(MCS%window(i_win)%gases)
@@ -293,12 +360,12 @@ contains
 
           ! Read the atmosphere file (if present) and populate the initial_atm structure
           ! with the contents of said file. It is cross-referenced against the gases in the
-          ! list of gases in this window.
+          ! list of gases in this window. This is non-optional obviously, so the program is
+          ! going to stop if it cannot find the specified file.
 
           call logger%debug(fname, "Looking into atmosphere file.")
           call read_atmosphere_file(&
                MCS%window(i_win)%atmosphere_file%chars(), &
-               MCS%window(i_win)%gas_index, &
                MCS%window(i_win)%gases, &
                initial_atm)
 
@@ -308,18 +375,20 @@ contains
        ! Grab the number of spectral pixels in this band
        num_pixel = MCS%general%N_spec(band)
 
-       ils_hires_min_wl = minval(ils_delta_lambda(1,:,:,band))
-       ils_hires_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
+       ! Find the smallest and largest delta-lambda values for all ILSs
+       ! in this given band to calculate hires_pad.
+       ils_min_wl = minval(ils_delta_lambda(1,:,:,band))
+       ils_max_wl = maxval(ils_delta_lambda(size(ils_delta_lambda, 1),:,:,band))
 
        ! This is the amount by which we have to pad the hi-resolution grid in order to
        ! allow for ILS protrusion. (and add small percentage to be on the safe side)
-       hires_pad = (ils_hires_max_wl - ils_hires_min_wl) * 1.10d0
+       hires_pad = (ils_max_wl - ils_min_wl) * 1.10d0
 
        ! Grab the desired high-resolution wavelength grid spacing
        hires_spacing = MCS%window(i_win)%wl_spacing
 
        ! .. and construct the high-resolution grid from the supplied
-       ! microwindow range. 
+       ! microwindow range.
        N_hires = ceiling((MCS%window(i_win)%wl_max - MCS%window(i_win)%wl_min + 2*hires_pad) / hires_spacing)
 
        write(tmp_str, '(A,G0.1)') "Number of hires spectral points: ", N_hires
@@ -362,9 +431,8 @@ contains
                // " is not known.")
        end if
 
-       ! To make life easier, we want to keep the solar model on the regular,
-       ! evenly-spaced highres-grid in wavelength space.
-
+       ! And we also need the solar spectrum on our user-defined
+       ! high-resolution wavelength grid. 
        allocate(solar_spectrum_regular(N_hires, 2))
        solar_spectrum_regular(:,1) = hires_grid
 
@@ -377,29 +445,15 @@ contains
        call logger%debug(fname, "Finished re-gridding solar spectrum.")
        ! Note that at this point, the solar spectrum is still normalised
 
-       select type(my_instrument)
-       type is (oco2_instrument)
 
-          ! Read in the measurement geometries
-          call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
-          ! Read in the measurement location
-          call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
-               altitude, relative_velocity, &
-               relative_solar_velocity)
-
-          ! Read in Spike filter data, if it exists in this file
-          call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
-          if (spike_exists) then
-             call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
-          end if
-
-       end select
-
-       ! Allocate containers to hold the retrieval results
+       ! Allocate containers to hold the radiances and noise values
        allocate(final_radiance(num_pixel, num_fp, num_frames))
        allocate(measured_radiance(num_pixel, num_fp, num_frames))
        allocate(noise_radiance(num_pixel, num_fp, num_frames))
 
+       ! We fill these with NaNs. This makes plotting a bit easier, since
+       ! most plotting routines (at least for Matplotlib) just skip NaNs,
+       ! so you will only see the values that are populated.
        final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -442,7 +496,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 85
+       do i_fr=1, num_frames, 100
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -459,7 +513,8 @@ contains
 
              if (mod(retr_count, 1) == 0) then
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F10.5, A, L1)') &
-                     "Frame/FP: ", i_fr, "/", i_fp, " - ", (cpu_time_stop - cpu_time_start), ' - ', this_converged
+                     "Frame/FP: ", i_fr, "/", i_fp, " - ", &
+                     (cpu_time_stop - cpu_time_start), ' - ', this_converged
                 call logger%debug(fname, trim(tmp_str))
              end if
 
@@ -469,6 +524,11 @@ contains
        ! Deallocate arrays that are allocated on per-window basis
        deallocate(solar_spectrum_regular, solar_spectrum, hires_grid)
 
+       ! Create an HDF group for all windows separately
+       group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
+       call h5gcreate_f(output_file_id, trim(group_name), result_gid, hdferr)
+       call check_hdf_error(hdferr, fname, "Error. Could not create group: " &
+            // trim(group_name))
 
        ! Set the dimensions of the arrays for saving them into the HDF file
        out_dims2d(1) = num_fp
@@ -476,8 +536,7 @@ contains
 
        ! Save the retrieved state vectors
        do i=1, size(SV%svsv)
-          write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
-               // MCS%window(i_win)%name // "_" // results%sv_names(i)
+          write(tmp_str, '(A,A,A,A)') trim(group_name) // "/" // results%sv_names(i)
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -486,8 +545,7 @@ contains
 
        ! Save the retrieved state vector uncertainties
        do i=1, size(SV%svsv)
-          write(tmp_str, '(A,A,A,A,A)') "/physical_retrieval_results/" &
-               // MCS%window(i_win)%name // "_" // results%sv_names(i) // "_uncertainty"
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" // results%sv_names(i) // "_uncertainty"
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -497,8 +555,8 @@ contains
        ! Save XGAS for each gas
        do i=1,MCS%window(i_win)%num_gases
           if (MCS%window(i_win)%gas_retrieved(i)) then
-             write(tmp_str, '(A,A,A,A)') "/physical_retrieval_results/" &
-                  // MCS%window(i_win)%name // "_X" // MCS%window(i_win)%gases(i)
+             write(tmp_str, '(A,A,A,A)') trim(group_name) // "/X" // MCS%window(i_win)%gases(i)
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
                   results%xgas(:,:,i), out_dims2d, -9999.99d0)
@@ -506,50 +564,51 @@ contains
        end do
 
        ! Save number of iterations
-       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
-            // MCS%window(i_win)%name // "_num_iterations"
+
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations")
+       write(tmp_str, '(A,A,A)') trim(group_name) // "/num_iterations"
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%num_iterations(:,:), out_dims2d, -9999)
 
        ! Save converged status
-       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
-            // MCS%window(i_win)%name // "_converged"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged")
+       write(tmp_str, '(A,A,A)') trim(group_name) // "/converged"
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%converged(:,:), out_dims2d, -9999)
 
        ! Retrieved CHI2
-       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
-            // MCS%window(i_win)%name // "_retrieved_chi2"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/retrieved_chi2")
+       write(tmp_str, '(A,A,A)') trim(group_name) // "/retrieved_chi2"
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%chi2(:,:), out_dims2d, -9999.99d0)
 
        ! Dsigma_sq
-       write(tmp_str, '(A,A,A)') "/physical_retrieval_results/" &
-            // MCS%window(i_win)%name // "_final_dsigma_sq"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq")
+       write(tmp_str, '(A,A,A)') trim(group_name) // "/final_dsigma_sq"
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
        out_dims3d = shape(final_radiance)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/modelled_radiance_" &
-            // MCS%window(i_win)%name
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
+       write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             final_radiance, out_dims3d)
 
        out_dims3d = shape(measured_radiance)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/measured_radiance_" &
-            // MCS%window(i_win)%name
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance")
+       write(tmp_str, '(A,A)') trim(group_name) // "/measured_radiance"
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             measured_radiance, out_dims3d)
 
        out_dims3d = shape(noise_radiance)
-       write(tmp_str, '(A,A)') "/physical_retrieval_results/noise_radiance_" &
-            // MCS%window(i_win)%name
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance")
+       write(tmp_str, '(A,A)') trim(group_name) // "/noise_radiance"
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             noise_radiance, out_dims3d)
@@ -566,7 +625,7 @@ contains
        deallocate(measured_radiance)
        deallocate(noise_radiance)
 
-       !deallocate(bad_sample_list)
+       if (allocated(bad_sample_list)) deallocate(bad_sample_list)
        if (allocated(spike_list)) deallocate(spike_list)
 
        ! Clear and deallocate the result container
@@ -577,7 +636,18 @@ contains
 
   end subroutine physical_retrieval
 
-
+  !> @brief Physical-type forward model / retrieval
+  !> @param my_instrument Instrument instance
+  !> @param i_fp Footprint index
+  !> @param i_fr Frame index
+  !> @param i_win Window index for MCS
+  !> @param band Band number
+  !> @param converged Whether this retrieval has converged or not
+  !>
+  !> This function performs the full physical retrieval, and returns whether
+  !> it converged or not. It accesses all the L1B/MET arrays defined in the module
+  !> for fast readout and processing. The OE scheme is based on Rodgers (2000),
+  !> and so far we are doing the LM-modification to the Gauss-Newton scheme.
   function physical_FM(my_instrument, i_fp, i_fr, i_win, band) result(converged)
 
     implicit none
@@ -586,59 +656,96 @@ contains
     integer, intent(in) :: i_fr, i_fp, i_win, band
     logical :: converged
 
-    !! HDF file id handlers
+    ! HDF file id handlers for L1B and output file
     integer(hid_t) :: l1b_file_id, output_file_id
 
-    !! Radiances and noise arrays
-    double precision, dimension(:), allocatable :: radiance_l1b, &
-         radiance_tmp_work, &
-         radiance_meas_work, &
-         radiance_calc_work, &
-         radiance_tmp_work_hi, &
-         radiance_calc_work_hi, &
-         noise_work
+    ! Radiances and noise arrays. We need a few of these to hold
+    ! the TOA radiances for high and low-res calculations. And then
+    ! some 'temp' arrays to hold radiances from e.g. perturbation or
+    ! linear prediction.
+    double precision, allocatable :: radiance_l1b(:), &
+         radiance_tmp_work(:), &
+         radiance_meas_work(:), &
+         radiance_calc_work(:), &
+         radiance_tmp_work_hi(:), &
+         radiance_calc_work_hi(:), &
+         noise_work(:)
 
-    ! The current atmosphere, dependent on surface pressure. This can change
+    ! The current atmosphere. This will be a copy from the initial_atm
+    ! constructed in the physical_retrieval subroutine, but T and SH
+    ! profiles are taken on a scene-by-scene basis.
     type(atmosphere) :: this_atm
 
-    !! Dispersion indices
-    double precision :: high_res_wl_min, high_res_wl_max
-    integer :: l1b_wl_idx_min, l1b_wl_idx_max, solar_idx_min, solar_idx_max
+    ! Dispersion/wavelength indices - these tell us, where in the L1B radiance array
+    ! we can extract the spectra to match the user-defined wavelength ranges.
+    integer :: l1b_wl_idx_min, l1b_wl_idx_max
 
-    !! Sounding location /time stuff
+    ! Sounding time stuff
     type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
+    ! Sounding location variables
     double precision :: mu0, mu ! cos(sza) and cos(vza)
 
-    !! Instrument stuff
+    ! Instrument stuff
+    ! Instrument doppler shift based on relative motion between ground footprint
+    ! and spacecraft velocity.
     double precision :: instrument_doppler
-    double precision, dimension(:), allocatable :: this_dispersion, &
-         this_dispersion_tmp, &
-         this_dispersion_coefs, &
-         this_dispersion_coefs_pert
+    ! Dispersion arrays to hold the wavelength-per-pixel values, as well as the
+    ! arrays to hold the polynomial coefficents to create them. Also needs "tmp"
+    ! and "pert" versions for perturbed values if dispersion is retrieved.
+    double precision, allocatable :: this_dispersion(:), &
+         this_dispersion_tmp(:), &
+         this_dispersion_coefs(:), &
+         this_dispersion_coefs_pert(:)
 
-    !! For some SV elements, Jacobians are calculated
-    !! separately from the main Jacobian convolution loop
+    ! For some SV elements, Jacobians are calculated separately from the
+    ! main Jacobian convolution loop. This varaible indicates whether this
+    ! loop iteration should be skipped.
     logical :: skip_jacobian
 
-    !! Solar stuff
+    ! Solar stuff
+    ! Solar distance, solar relative velocity, earth relative velocity, and
+    ! solar doppler shift - which happens because of the relative motion between
+    ! the moving and rotating Earth and the fixed sun.
     double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
+    ! This solar is the full solar spectrum, i.e. the pseudo-transmittance multiplied
+    ! by the solar continuum / irradiance
     double precision, dimension(:,:), allocatable :: this_solar
-    double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_low(:)
+    ! Solar irradiance / continuum, derivative of solar spectrum with respect to wavelength
+    ! (needed for the solar shift and stretch Jacobians)
+    double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_low(:), solar_tmp(:)
+    ! Per-iteration values for the solar shift value and the solar stretch factor
     double precision :: this_solar_shift, this_solar_stretch
 
-    !! Atmosphere
+    ! Atmosphere stuff
+    ! Number of gases, total levels, and number of active levels (changes with surface pressure)
     integer :: num_gases, num_levels, num_active_levels
-    double precision, allocatable :: gas_tau(:,:,:), gas_tau_dvmr(:,:,:), &
-         gas_tau_dpsurf(:,:,:), gas_tau_pert(:,:,:,:), gas_tau_dsh(:,:,:), &
-         vmr_pert(:), this_vmr_profile(:), ray_tau(:,:), total_tau(:)
+    ! Various arrays for gas optical depths
+    double precision, allocatable :: gas_tau(:,:,:) ! Gas optical depth (spectral, layer, gas number)
+    double precision, allocatable :: gas_tau_dvmr(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
+    double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
+    double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
+    double precision, allocatable :: gas_tau_dsh(:,:,:) ! dtau / d_specific_humidity (spectral, layer, gas number)
+
+    ! Perturbed VMR profile and per-iteration-and-per-gas VMR profile for OD calculation (level)
+    double precision, allocatable :: vmr_pert(:), this_vmr_profile(:)
+    ! Rayleigh extinction optical depth (spectral, layer)
+    double precision, allocatable :: ray_tau(:,:)
+    ! Total column optical depth (spectral)
+    double precision, allocatable :: total_tau(:)
+    ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
+    ! per-iteration and per-gas scaling factor to be applied before the
+    ! gas OD calculation
     double precision :: gas_scaling_factor
+    ! Is this gas H2O?
     logical :: is_H2O
 
-    !! Albedo
+    ! Albedo
+    ! Prior albedo value estimated from the radiances
     double precision :: albedo_apriori
-    double precision, allocatable :: albedo(:)
+    ! Per-wavelength albedo for hires and low-res spectra
+    double precision, allocatable :: albedo(:), albedo_low(:)
 
     !! Surface pressure
     double precision :: psurf, this_psurf
@@ -680,7 +787,7 @@ contains
     character(len=999) :: tmp_str
     character(len=*), parameter :: fname = "physical_FM"
     integer :: N_spec, N_spec_hi, N_spec_tmp, N_sv
-    integer :: i, j, l, cnt_j, cnt_l
+    integer :: i, j, l
     integer :: funit
     double precision :: cpu_start, cpu_end
     logical :: ILS_success
@@ -1307,7 +1414,7 @@ contains
                 do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
 
                    ! Loop through all potential profile "sections", but skip the unused ones
-                   if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1) cycle
+                   if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1.0d0) cycle
 
                    K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
                         * (1.0d0 / mu0 + 1.0d0 / mu) &
@@ -1500,11 +1607,26 @@ contains
 
        ! Calculate albedo Jacobians
        if (SV%num_albedo > 0) then
+
+          allocate(albedo_low(N_spec))
+
+          ! In order to calculate the low-resolution albedo Jacobian, we also
+          ! need the low-resolution albedo, which we calculate here.
+          albedo_low(:) = 0.0d0
           do i=1, SV%num_albedo
-             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance) / albedo * &
+             albedo_low(:) = albedo_low(:) + SV%svsv(SV%idx_albedo(i)) * &
                   ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
                   this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
           end do
+
+
+          do i=1, SV%num_albedo
+             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance) / albedo_low(:) * &
+                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
+                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
+          end do
+
+          deallocate(albedo_low)
        end if
 
        ! Disperion Jacobians are produced via finite differencing
@@ -1592,7 +1714,6 @@ contains
        radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
        linear_prediction_chi2 = SUM(((radiance_meas_work - radiance_tmp_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
 
-
        if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations)) then
 
@@ -1651,9 +1772,11 @@ contains
 
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
 
-          ! Save retrieved CHI2
-          results%chi2(i_fp, i_fr) = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / &
-               (noise_work ** 2)) / (N_spec - N_sv)
+          ! Save retrieved CHI2 - this is the predicted chi2 from the 'last' linear step
+          ! that is not evaluated.
+          results%chi2(i_fp, i_fr) = linear_prediction_chi2
+          !SUM(((radiance_meas_work - radiance_calc_work) ** 2) / &
+          !     (noise_work ** 2)) / (N_spec - N_sv)
 
           ! Save statevector at last iteration
           do i=1, size(SV%svsv)
@@ -1662,7 +1785,8 @@ contains
 
           results%num_iterations(i_fp, i_fr) = iteration
 
-          final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
+          ! We save the linear-prediction radiances
+          final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_tmp_work(:) !radiance_calc_work(:)
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
@@ -1784,7 +1908,6 @@ contains
 
   end function physical_FM
 
-
   !> @brief Given a dispersion array "this_dispersion", in window "i_win", this
   !> function calculates the first and last pixel indices as the boundaries in
   !> the detector.
@@ -1842,14 +1965,172 @@ contains
 
   end subroutine calculate_dispersion_limits
 
-  subroutine read_atmosphere_file(filename, gas_indices, gas_strings, atm)
-    ! This function is a little misplaced here, I would have like to have it
-    ! in the File_utils module. However that creates a circular dependence with
-    ! the Control module, so we just stick it here instead..
+
+
+  !> @brief Creates / allocates the "results" container to hold all retrieval results
+  !> 
+  !> @param results Result container
+  !> @param num_frames Number of frames
+  !> @param num_fp Number of footprints
+  !> @param num_SV Number of state vector elements
+  !> @param num_gas Number of retrieved (!) gases
+  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas)
+    implicit none
+    type(result_container), intent(inout) :: results
+    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas
+
+    allocate(results%sv_names(num_SV))
+
+    allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
+    allocate(results%sv_prior(num_fp, num_frames, num_SV))
+    allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
+    allocate(results%xgas(num_fp, num_frames, num_gas))
+
+    allocate(results%chi2(num_fp, num_frames))
+    allocate(results%residual_rms(num_fp, num_frames))
+    allocate(results%dsigma_sq(num_fp, num_frames))
+
+    allocate(results%num_iterations(num_fp, num_frames))
+    allocate(results%converged(num_fp, num_frames))
+
+    results%sv_names = "NONE"
+
+    ! This might cause problems for some, but I find it convenient
+    ! to set 'unused' fields to NaNs. Remember this only works for
+    ! reals/double precision, but not for integers.
+    results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
+    results%num_iterations = -1
+    results%converged = -1
+
+  end subroutine create_result_container
+
+
+  !> @brief Destroys the "results" container allocated in "create_result_container"
+  !>
+  !> @param results Result container
+  subroutine destroy_result_container(results)
+    implicit none
+    type(result_container), intent(inout) :: results
+
+    deallocate(results%sv_names)
+    deallocate(results%sv_retrieved)
+    deallocate(results%sv_prior)
+    deallocate(results%sv_uncertainty)
+    deallocate(results%xgas)
+    deallocate(results%chi2)
+    deallocate(results%residual_rms)
+    deallocate(results%dsigma_sq)
+    deallocate(results%num_iterations)
+    deallocate(results%converged)
+
+  end subroutine destroy_result_container
+
+
+
+  !> @brief Creates human-readable names for state vector elements
+  !>
+  !> The idea is faily simple: we loop through all the state vector elements,
+  !> and then check for each one if there is a corresponding SV\%idx_* associated with
+  !> that element position. Based on that, we create a name for the state vector
+  !> element, which usually has the parameter number (e.g. albedo order) baked in.
+  !> @param results Result container
+  !> @param SV State vector object
+  !> @param i_win Retrieval window index for MCS
+  subroutine assign_SV_names_to_result(results, SV, i_win)
+    implicit none
+    type(result_container), intent(inout) :: results
+    type(statevector), intent(in) :: SV
+    integer, intent(in) :: i_win
+
+    character(len=999) :: tmp_str
+    integer :: i,j,k
+
+    i = 1
+    do while (i <= size(SV%svsv))
+
+       ! Albedo names
+       do j=1, SV%num_albedo
+          if (SV%idx_albedo(j) == i) then
+             write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! SIF name (really only one at this point)
+       do j=1, SV%num_sif
+          if (SV%idx_sif(j) == i) then
+             write(tmp_str, '(A)') "SIF_absolute"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Solar shift name
+       if (SV%idx_solar_shift(1) == i) then
+          write(tmp_str, '(A)') "solar_shift"
+          results%sv_names(i) = trim(tmp_str)
+       end if
+
+       ! Solar stretch name
+       if (SV%idx_solar_stretch(1) == i) then
+          write(tmp_str, '(A)') "solar_stretch"
+          results%sv_names(i) = trim(tmp_str)
+       end if
+
+       ! Surface pressure name
+       do j=1, SV%num_psurf
+          if (SV%idx_psurf(j) == i) then
+             write(tmp_str, '(A)') "psurf"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Dispersion parameter names
+       do j=1, SV%num_dispersion
+          if (SV%idx_dispersion(j) == i) then
+             write(tmp_str, '(A,G0.1)') "dispersion_coef_", j
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Retrieved gas names (scalar retrieval only so far)
+       k = 1
+       do j=1, SV%num_gas
+
+          ! Check if this SV element is a scalar retrieval
+          if (SV%idx_gas(j,1) == i) then
+
+             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
+                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
+
+                write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
+                write(tmp_str, '(A, G0.3)') trim(tmp_str), &
+                     SV%gas_retrieve_scale_start(j)
+                write(tmp_str, '(A,A,G0.3)') trim(tmp_str), ":" , &
+                     SV%gas_retrieve_scale_stop(j)
+                results%sv_names(i) = trim(tmp_str)
+
+                k = k + 1
+             end if
+
+          end if
+
+       end do
+
+       i = i+1
+    end do
+
+  end subroutine assign_SV_names_to_result
+
+  subroutine read_atmosphere_file(filename, gas_strings, atm)
 
     implicit none
     character(len=*), intent(in) :: filename
-    integer, intent(in) :: gas_indices(:)
     type(string), intent(in) :: gas_strings(:)
     type(atmosphere), intent(inout) :: atm
 
@@ -2060,156 +2341,5 @@ contains
     close(funit)
 
   end subroutine read_atmosphere_file
-
-
-  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas)
-    implicit none
-    type(result_container), intent(inout) :: results
-    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas
-
-    allocate(results%sv_names(num_SV))
-
-    allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
-    allocate(results%sv_prior(num_fp, num_frames, num_SV))
-    allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
-    allocate(results%xgas(num_fp, num_frames, num_gas))
-
-    allocate(results%chi2(num_fp, num_frames))
-    allocate(results%residual_rms(num_fp, num_frames))
-    allocate(results%dsigma_sq(num_fp, num_frames))
-
-    allocate(results%num_iterations(num_fp, num_frames))
-    allocate(results%converged(num_fp, num_frames))
-
-    results%sv_names = "NONE"
-
-    results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-
-    results%num_iterations = -1
-    results%converged = -1
-
-  end subroutine create_result_container
-
-
-
-  subroutine destroy_result_container(results)
-    implicit none
-    type(result_container), intent(inout) :: results
-
-    deallocate(results%sv_names)
-    deallocate(results%sv_retrieved)
-    deallocate(results%sv_prior)
-    deallocate(results%sv_uncertainty)
-    deallocate(results%xgas)
-    deallocate(results%chi2)
-    deallocate(results%residual_rms)
-    deallocate(results%dsigma_sq)
-    deallocate(results%num_iterations)
-    deallocate(results%converged)
-
-  end subroutine destroy_result_container
-
-
-  subroutine assign_SV_names_to_result(results, SV, i_win)
-    implicit none
-    type(result_container), intent(inout) :: results
-    type(statevector), intent(in) :: SV
-    integer, intent(in) :: i_win
-
-    character(len=999) :: tmp_str
-    integer :: i,j,k,l
-
-    i = 1
-    do while (i <= size(SV%svsv))
-
-       ! Albedo names
-       do j=1, SV%num_albedo
-          if (SV%idx_albedo(j) == i) then
-             write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       do j=1, SV%num_sif
-          if (SV%idx_sif(j) == i) then
-             write(tmp_str, '(A)') "SIF_absolute"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       if (SV%idx_solar_shift(1) == i) then
-          write(tmp_str, '(A)') "solar_shift"
-          results%sv_names(i) = trim(tmp_str)
-       end if
-
-       if (SV%idx_solar_stretch(1) == i) then
-          write(tmp_str, '(A)') "solar_stretch"
-          results%sv_names(i) = trim(tmp_str)
-       end if
-
-       do j=1, SV%num_psurf
-          if (SV%idx_psurf(j) == i) then
-             write(tmp_str, '(A)') "psurf"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       do j=1, SV%num_dispersion
-          if (SV%idx_dispersion(j) == i) then
-             write(tmp_str, '(A,G0.1)') "dispersion_coef_", j
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       k = 1
-       do j=1, SV%num_gas
-
-
-          ! Check if this SV element is a scalar retrieval
-          if (SV%idx_gas(j,1) == i) then
-
-             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
-                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1) cycle
-
-                write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
-                write(tmp_str, '(A, G0.3)') trim(tmp_str), &
-                     SV%gas_retrieve_scale_start(j)
-                write(tmp_str, '(A,A,G0.3)') trim(tmp_str), ":" , &
-                     SV%gas_retrieve_scale_stop(j)
-                results%sv_names(i) = trim(tmp_str)
-
-                k = k + 1
-             end if
-
-          end if
-
-          ! Check if it's a profile retrieval, and then loop through the profile
-          ! elements to get each name.
-          if (MCS%window(i_win)%gas_retrieve_profile(sv%gas_idx_lookup(j))) then
-             do k=1, size(SV%idx_gas, 2)
-                if (SV%idx_gas(j,k) == i) then
-
-                   write(tmp_str,'(A,A,G0.1)') MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars(), &
-                        "_profile_", k
-                   results%sv_names(i) = trim(tmp_str)
-
-                end if
-             end do
-          end if
-
-       end do
-
-       i = i+1
-    end do
-
-
-  end subroutine assign_SV_names_to_result
-
-
 
 end module physical_model_mod

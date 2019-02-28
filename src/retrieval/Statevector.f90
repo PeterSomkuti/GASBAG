@@ -83,7 +83,7 @@ contains
 
     integer :: num_albedo_parameters, num_dispersion_parameters, &
          num_sif_parameters, num_psurf_parameters, num_solar_shift_parameters, &
-         num_solar_stretch_parameters, num_retrieved_gas
+         num_solar_stretch_parameters
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
@@ -295,7 +295,7 @@ contains
                    ! Depending on the type, we must set the profile/scale retrieval
                    ! flags accordingly. The default setting is a profile retrieval.
                    if ((check_gas_retr_type == "profile") .or. (check_gas_retr_type == "")) then
-                      write(tmp_str, '(A, A, A)b') "We are retrieving gas ", check_gas_name%chars(), &
+                      write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_gas_name%chars(), &
                            " as a full profile."
                       call logger%debug(fname, trim(tmp_str))
                       MCS%window(i_win)%gas_retrieve_profile(k) = .true.

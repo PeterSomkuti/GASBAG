@@ -82,7 +82,6 @@ module physical_model_mod
   end type result_container
 
 
-
   !> Spacing of the high-resolution wavelength grid in um
   double precision :: hires_spacing
   !> Padding (left and right) of the hires wl grid to accomodate ILS
@@ -179,8 +178,8 @@ contains
 
     ! HDF5 file handlers for the L1b file and the MET file
     integer(hid_t) :: l1b_file_id, met_file_id, output_file_id
-    ! Variables to hold a dataset ID and a group ID
-    integer(hid_t) :: dset_id, result_gid
+    ! Variable to hold group ID
+    integer(hid_t) :: result_gid
     ! Do MET or ECMWF groups exist in the MET file?
     logical :: MET_exists, ECMWF_exists
     ! Does a spike/bad_sample data field exist?
@@ -703,6 +702,10 @@ contains
     ! loop iteration should be skipped.
     logical :: skip_jacobian
 
+    ! Number of spectral points for low-res and hires grid,
+    ! number of state vector elements.
+    integer :: N_spec, N_spec_hi, N_sv
+
     ! Solar stuff
     ! Solar distance, solar relative velocity, earth relative velocity, and
     ! solar doppler shift - which happens because of the relative motion between
@@ -713,7 +716,7 @@ contains
     double precision, dimension(:,:), allocatable :: this_solar
     ! Solar irradiance / continuum, derivative of solar spectrum with respect to wavelength
     ! (needed for the solar shift and stretch Jacobians)
-    double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_low(:), solar_tmp(:)
+    double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_tmp(:)
     ! Per-iteration values for the solar shift value and the solar stretch factor
     double precision :: this_solar_shift, this_solar_stretch
 
@@ -748,56 +751,77 @@ contains
     double precision, allocatable :: albedo(:), albedo_low(:)
 
     !! Surface pressure
-    double precision :: psurf, this_psurf
+    ! The surface pressure per-iteration
+    double precision :: this_psurf
+    ! Do we need/want to calculate surface pressure Jacobians?
     logical :: do_psurf_jac
 
-    !! SIF?
+    ! SIF
+    ! Per-iteration SIF radiance
     double precision :: this_sif_radiance
 
-    !! GASES
-    logical :: do_gas_jac, success_gas
+    ! Gases
+    ! Do we want to calculate gas Jacobians
+    logical :: do_gas_jac
+    ! Was the calculation of gas ODs successful?
+    logical :: success_gas
 
-    double precision :: continuum
-
-    !! Retrieval quantities
+    ! Retrieval quantities
+    ! User-defined value to scale the dsigma_sq value that essentially
+    ! controls convergence. A higher value will lead to faster convergence.
     double precision :: dsigma_scale
-    double precision, allocatable :: K_hi(:,:), K(:,:) ! Jacobian matrices
-    ! Noise covariance, prior covariance (and its inverse)
-    double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
-    double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
+    ! disgma_sq: see Rodgers Eq. 5.29 (change in SV as fraction of Shat_inv)
     double precision :: dsigma_sq
+    ! Jacobian matrices for high-res and lowres spectral grids
+    ! they have the shape (N_spec_hi, N_sv) and (N_spec, N_sv)
+    double precision, allocatable :: K_hi(:,:), K(:,:)
+    ! Noise covariance, prior covariance (and its inverse), shape: (N_sv, N_sv)
+    double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
+    ! Posterior covariance matrix and its inverse (N_sv, N_sv)
+    double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
+
     ! Temporary matrices and vectors for computation
-    double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:), tmp_m3(:,:)
+    double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
     double precision, allocatable :: tmp_v1(:), tmp_v2(:)
-    double precision, allocatable :: old_sv(:), last_successful_sv(:)
-    ! Pressure weighting function
-    double precision, allocatable :: pwgts(:)
-    ! Levenberg-Marquart gamma
-    double precision :: lm_gamma
-    double precision :: old_chi2, this_chi2, linear_prediction_chi2, chi2_ratio
-    ! Iteration-related
-    integer :: iteration, max_iterations, num_divergent_steps
-    logical :: keep_iterating
-    logical :: divergent_step
-    logical :: log_retrieval
+    ! Was the matrix inversion operation successful?
     logical :: success_inv_mat
-
-
-    !! Misc
-    character(len=999) :: tmp_str
-    character(len=*), parameter :: fname = "physical_FM"
-    integer :: N_spec, N_spec_hi, N_spec_tmp, N_sv
-    integer :: i, j, l
-    integer :: funit
-    double precision :: cpu_start, cpu_end
+    ! Was the convolution operation successful?
     logical :: ILS_success
+
+    ! The SV from last iteration, as well as last successful (non-divergent) iteration
+    ! shape (N_sv)
+    double precision, allocatable :: old_sv(:), last_successful_sv(:)
+    ! Pressure weighting function (N_sv)
+    double precision, allocatable :: pwgts(:)
+    ! Levenberg-Marquart gamma, per-iteration
+    double precision :: lm_gamma
+    ! Chi2-related variables. Chi2 of last and this current iteration,
+    ! chi2 calculated from a linear prediction, and the chi2 ratio needed
+    ! to adjust lm_gamma and determine a divergent step.
+    double precision :: old_chi2, this_chi2, linear_prediction_chi2, chi2_ratio
+
+    ! Iteration-related
+    ! Current iteration number (starts at 1), number of divergent steps allowed.
+    integer :: iteration, num_divergent_steps
+    ! Variable to determine if we keep doing the iteration loop
+    logical :: keep_iterating
+    ! Has last iteration been a divergent one?
+    logical :: divergent_step
+
+    ! Miscellaneous stuff
+    ! String to hold various names etc.
+    character(len=999) :: tmp_str
+    ! Function name
+    character(len=*), parameter :: fname = "physical_FM"
+    ! Loop variables
+    integer :: i, j, l
+    ! File unit for debugging
+    integer :: funit
+
 
     ! Take a local copy of the HDF file ID handlers
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
-
-    ! Do we want to do the retrieval in logspace? (NOT IMPLEMENTED)
-    log_retrieval = .false.
 
     ! What is the total number of gases in this window,
     ! regardless of whether they are retrieved or not.
@@ -806,13 +830,6 @@ contains
     else
        num_gases = 0
     end if
-
-    ! Create a datetime object for the current measurement
-    select type(my_instrument)
-    type is (oco2_instrument)
-       call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
-    end select
-    doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
 
     ! Use user-supplied value for convergence critertion
@@ -829,12 +846,15 @@ contains
     !write(*,*) "VAA: ", VAA(i_fp, i_fr)
     !write(*,*) "Lon: ", lon(i_fp, i_fr), " Lat: ", lat(i_fp, i_fr), "Altitude: ", altitude(i_fp, i_fr)
 
-    ! Grab the radiance for this particular sounding
     select type(my_instrument)
     type is (oco2_instrument)
        call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
             size(snr_coefs, 2), radiance_l1b)
+       call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
+
     end select
+
+    doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
     ! Dispersion array that contains the wavelenghts per pixel
     allocate(this_dispersion(size(radiance_l1b)))
@@ -867,6 +887,7 @@ contains
     ! Set the initial LM-Gamma parameter
     lm_gamma = MCS%window(i_win)%lm_gamma
 
+    ! For convenience, calculate cos(sza) and cos(vza) here
     mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
     mu = cos(DEG2RAD * VZA(i_fp, i_fr))
 
@@ -875,6 +896,7 @@ contains
     allocate(K_hi(N_spec_hi, N_sv))
     K_hi(:,:) = 0.0d0
 
+    ! Allocate OE-related matrices here
     allocate(Sa(N_sv, N_sv))
     allocate(Sa_inv(N_sv, N_sv))
     allocate(Shat_inv(N_sv, N_sv))
@@ -882,72 +904,19 @@ contains
     allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
     allocate(tmp_v1(N_sv), tmp_v2(N_sv))
 
-    ! (Inverse) prior covariance matrix Sa(_inv)
-    ! Most SV element Sa's are hardcoded for now, as
-    ! it would just blow up the config file to specify them
-    ! via the user. 
-
-    Sa_inv(:,:) = 0.0d0
-    Sa(:,:) = 0.0d0
-
-    ! Make th albedo essentially unconstrained
-    if (SV%num_albedo > 0) then
-       do i=1, SV%num_albedo
-          if (i==1) then
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0
-          else
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 100.0d0 ** dble(i)
-          end if
-       end do
-    end if
-
-    if (SV%num_solar_shift == 1) then
-       Sa(SV%idx_solar_shift(1), SV%idx_solar_shift(1)) = 1.0d0
-    end if
-
-    if (SV%num_solar_stretch == 1) then
-       Sa(SV%idx_solar_stretch(1), SV%idx_solar_stretch(1)) = 1.0d0
-    end if
-
-    if (SV%num_sif > 0) then
-       ! Put SIF prior covariance at the continuum level of the band
-       Sa(SV%idx_sif(1), SV%idx_sif(1)) = percentile(radiance_l1b, 98.0d0)**2
-    end if
-
-    if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1000.0d0 ** 2
-
-    ! Make the dispersion prior covariance about ten times the perturbation value
-    if (SV%num_dispersion > 0) then
-       do i=1, SV%num_dispersion
-          Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = (10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
-       end do
-    end if
-
-    ! The scale factor covariances are taken from the configuration file / MCS
-    do i=1, SV%num_gas
-       if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = (SV%gas_retrieve_scale_cov(i)) ** 2
-       end if
-    end do
-
-    ! At the moment, Sa will be diagonal, so inverting is trivial
-    do i=1, size(Sa, 1)
-       Sa_inv(i,i) = 1.0d0 / Sa(i,i)
-    end do
-
-    !! If at some point we want to have non-diagonal elements in
-    !! Sa, just uncomment the lines below and a proper inversion is being done.
-
-    !call invert_matrix(Sa, Sa_inv, success_inv_mat)
-    !if (.not. success_inv_mat) then
-    !   call logger%error(fname, "Failed to invert Sa")
-    !   return
-    !end if
-
     ! Allocate Solar continuum (irradiance) array. We do this here already,
     ! since it's handy to have it for estimating the albedo.
     allocate(solar_irrad(N_hires))
 
+    allocate(radiance_calc_work_hi(size(this_solar, 1)))
+    allocate(radiance_tmp_work_hi(size(this_solar, 1)))
+    allocate(albedo(size(radiance_calc_work_hi)))
+
+
+    Sa_inv(:,:) = 0.0d0
+    Sa(:,:) = 0.0d0
+    call populate_prior_covariance(SV, percentile(radiance_l1b, 98.0d0), &
+         i_win, Sa, Sa_inv)
 
     ! Get the albedo prior
     select type(my_instrument)
@@ -1013,9 +982,7 @@ contains
        end do
     end if
 
-    allocate(radiance_calc_work_hi(size(this_solar, 1)))
-    allocate(radiance_tmp_work_hi(size(this_solar, 1)))
-    allocate(albedo(size(radiance_calc_work_hi)))
+
 
     ! Regardless of whether they are retrieved or not, the solar shift and stretch
     ! are set to 'default' values here. If we retrieve them, this value is then just
@@ -1081,7 +1048,7 @@ contains
 
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
-                write(tmp_str, '(A, G0.3, A, G0.3)') "Psurf at ", psurf, &
+                write(tmp_str, '(A, G0.3, A, G0.3)') "Psurf at ", this_psurf, &
                      " is larger than p(BOA) at ", this_atm%p(size(this_atm%p))
                 call logger%error(fname, trim(tmp_str))
                 return
@@ -1131,7 +1098,7 @@ contains
 
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
-                write(tmp_str, '(A, G0.3, A, G0.3)') "Psurf at ", psurf, &
+                write(tmp_str, '(A, G0.3, A, G0.3)') "Psurf at ", this_psurf, &
                      " is larger than p(BOA) at ", this_atm%p(size(this_atm%p))
                 call logger%error(fname, trim(tmp_str))
                 return
@@ -1184,14 +1151,14 @@ contains
           ! otherwise, grab it from the MET data.
 
           if (SV%num_psurf == 1) then
-             psurf = SV%svsv(SV%idx_psurf(1))
+             this_psurf = SV%svsv(SV%idx_psurf(1))
              do_psurf_jac = .true.
           else
-             psurf = met_psurf(i_fp, i_fr)
+             this_psurf = met_psurf(i_fp, i_fr)
              do_psurf_jac = .false.
           end if
 
-          if (psurf < 0) then
+          if (this_psurf < 0) then
              call logger%error(fname, "Psurf negative!")
              return
           end if
@@ -1223,10 +1190,10 @@ contains
                          ! go below or above the first/last level.
 
                          s_start(i) = searchsorted_dp(log(this_atm%p), &
-                              SV%gas_retrieve_scale_start(i) * log(psurf), .false.)
+                              SV%gas_retrieve_scale_start(i) * log(this_psurf), .false.)
                          s_start(i) = max(1, s_start(i))
                          s_stop(i) = searchsorted_dp(log(this_atm%p), &
-                              SV%gas_retrieve_scale_stop(i) * log(psurf), .false.)
+                              SV%gas_retrieve_scale_stop(i) * log(this_psurf), .false.)
                          s_stop(i) = min(num_active_levels, s_stop(i))
 
                       end if
@@ -1274,7 +1241,7 @@ contains
                   is_H2O, & ! Is this gas H2O?
                   hires_grid, & ! The high-resolution wavelength grid
                   this_vmr_profile, & ! The gas VMR profile for this gas with index j
-                  psurf, & ! Surface pressure
+                  this_psurf, & ! Surface pressure
                   this_atm%p(:), & ! Atmospheric profile pressures
                   this_atm%T(:), & ! Atmospheric profile temperature
                   this_atm%sh(:), & ! Atmospheric profile humidity
@@ -1754,7 +1721,7 @@ contains
                 end do
 
                 call pressure_weighting_function(this_atm%p(1:num_active_levels), &
-                     psurf, this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor, pwgts)
+                     this_psurf, this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor, pwgts)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) =  sum(pwgts(:) * this_atm%gas_vmr(1:num_active_levels, j) * gas_scaling_factor)
@@ -1907,6 +1874,88 @@ contains
     end do
 
   end function physical_FM
+
+
+  !> @brief Set the entries of the prior covariance matrix (and inverse)
+  !>
+  !> @param SV State vector object
+  !> @param continuum Continuum level radiance (needed for SIF prior cov)
+  !> @param i_win Window index for MCS
+  !> @param Sa Prior covariance matrix
+  !> @param Sa_inv Inverse of prior covariance matrix
+
+  subroutine populate_prior_covariance(SV, continuum, i_win, Sa, Sa_inv)
+
+    implicit none
+
+    type(statevector), intent(in) :: SV
+    double precision, intent(in) :: continuum
+    integer, intent(in) :: i_win
+    double precision, intent(inout) :: Sa(:,:)
+    double precision, intent(inout) :: Sa_inv(:,:)
+
+    ! Local variables
+    integer :: i, j
+
+    ! Make the albedo essentially unconstrained. We keep this larger than 1, simply
+    ! because we can end up with effective albedos much larger than 1.0 due to
+    ! non-Lambertian BRDFs.
+    if (SV%num_albedo > 0) then
+       do i=1, SV%num_albedo
+          if (i==1) then
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0
+          else
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0 ** dble(i)
+          end if
+       end do
+    end if
+
+    if (SV%num_solar_shift == 1) then
+       Sa(SV%idx_solar_shift(1), SV%idx_solar_shift(1)) = 1.0d0
+    end if
+
+    if (SV%num_solar_stretch == 1) then
+       Sa(SV%idx_solar_stretch(1), SV%idx_solar_stretch(1)) = 1.0d0
+    end if
+
+    if (SV%num_sif > 0) then
+       ! Put SIF prior covariance at the continuum level of the band
+       Sa(SV%idx_sif(1), SV%idx_sif(1)) = continuum * continuum
+    end if
+
+    if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1.0d6
+
+    ! Make the dispersion prior covariance about ten times the perturbation value
+    if (SV%num_dispersion > 0) then
+       do i=1, SV%num_dispersion
+          Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = (10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
+       end do
+    end if
+
+    ! The scale factor covariances are taken from the configuration file / MCS
+    do i=1, SV%num_gas
+       if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+          Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = (SV%gas_retrieve_scale_cov(i) * SV%gas_retrieve_scale_cov(i))
+       end if
+    end do
+
+    ! At the moment, Sa will be diagonal, so inverting is trivial
+    do i=1, size(Sa, 1)
+       Sa_inv(i,i) = 1.0d0 / Sa(i,i)
+    end do
+
+    !! If at some point we want to have non-diagonal elements in
+    !! Sa, just uncomment the lines below and a proper inversion is being done.
+
+    !call invert_matrix(Sa, Sa_inv, success_inv_mat)
+    !if (.not. success_inv_mat) then
+    !   call logger%error(fname, "Failed to invert Sa")
+    !   return
+    !end if
+
+  end subroutine populate_prior_covariance
+
+
 
   !> @brief Given a dispersion array "this_dispersion", in window "i_win", this
   !> function calculates the first and last pixel indices as the boundaries in

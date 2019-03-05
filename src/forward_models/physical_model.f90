@@ -1562,6 +1562,7 @@ contains
 
              ! SIF Jacobian does not need convolution, since it's just 1.0
              if (i == SV%idx_sif(1)) skip_jacobian = .true.
+             if (i == SV%idx_zlo(1)) skip_jacobian = .true.
 
              ! Albedo jacobians can be calculated here as well
              do j=1, SV%num_albedo
@@ -1872,6 +1873,8 @@ contains
        write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
        write(*,*) "LM-Gamma: ", lm_gamma
        write(*,*) "Ratio R: ", chi2_ratio
+       write(*,*) this_sif_radiance
+       write(*,*) this_zlo_radiance
 
 
        ! These quantities are all allocated within the iteration loop, and

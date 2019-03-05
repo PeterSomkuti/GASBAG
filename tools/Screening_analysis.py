@@ -195,9 +195,14 @@ plot_sampling_density(lon[mask_idp][clear_idp[mask_idp]],
                       lat[mask_idp][clear_idp[mask_idp]], projection, 2.0, 20, 'IDP_clear.pdf')
 
 calculate_statistics(clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 0),
-                     (~clear_idp[mask_idp]) & (abp_cloudflag[mask_idp] == 1),
+                     ~(clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 0)),
                      clear_true[mask_idp],
-                     nonclear_true[mask_idp], "IDP + ABP")
+                     nonclear_true[mask_idp], "IDP + ABP clear")
+
+calculate_statistics(~(~clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 1)),
+                     (~clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 1)),
+                     clear_true[mask_idp],
+                     nonclear_true[mask_idp], "IDP + ABP cloudy")
 
 plot_sampling_density(lon[mask_idp][(clear_idp & (abp_cloudflag == 0))[mask_idp]],
                       lat[mask_idp][(clear_idp & (abp_cloudflag == 0))[mask_idp]],
@@ -210,6 +215,7 @@ tree_data = np.vstack([
     co2_ratio_lower,
     #co2_ratio,
     h2o_ratio,
+    #new['physical_retrieval_results/strong_co2/num_iterations'][:,0],
     #land_water,
     #new['physical_retrieval_results/strong_co2/converged'][:,0]
     #new['physical_retrieval_results/weak_co2/SIF_absolute'][:,0],
@@ -225,10 +231,10 @@ tree_target = np.zeros(len(clear_true))
 tree_target[clear_true] = 1
 tree_target[nonclear_true] = -1
 
-clear_weight = 2 * clear_true.sum() / len(clear_true)
+clear_weight = 3 * clear_true.sum() / len(clear_true)
 nonclear_weight = 1.0 - clear_weight
 
-tree_clf = tree.DecisionTreeClassifier(max_depth=3,
+tree_clf = tree.DecisionTreeClassifier(max_depth=15,
                                        #min_samples_split=int(0.05 * sum(mask_new)),
                                        #min_samples_leaf=0.05,
                                        criterion='entropy',
@@ -243,6 +249,7 @@ try:
                                         'co2_ratio_lower',
                                         #'co2_ratio',
                                         'h2o_ratio',
+                                        #'num_iterations_sco2',
                                         #'land_water',
                                         #'albedo_weak',
                                         #'albedo_strong',
@@ -266,15 +273,33 @@ calculate_statistics(tree_clear, tree_nonclear,
 plot_sampling_density(lon[mask_new][tree_clear], lat[mask_new][tree_clear], projection, 2.0, 20, 'Tree_clear.pdf')
 
 calculate_statistics(tree_clear & (abp_cloudflag[mask_new] == 0),
-                     tree_nonclear & (abp_cloudflag[mask_new] == 1),
+                     ~(tree_clear & (abp_cloudflag[mask_new] == 0)),
                      clear_true[mask_new], nonclear_true[mask_new],
-                     "Decision tree + ABP")
+                     "Decision tree + ABP clear")
+
+calculate_statistics(~(tree_nonclear & (abp_cloudflag[mask_new] == 1)),
+                     (tree_nonclear & (abp_cloudflag[mask_new] == 1)),
+                     clear_true[mask_new], nonclear_true[mask_new],
+                     "Decision tree + ABP cloudy")
 
 calculate_statistics(abp_cloudflag == 0,
                      abp_cloudflag == 1,
                      clear_true[abp_cloudflag != -1],
                      nonclear_true[abp_cloudflag != -1], "ABP")
 
+
+plt.hist(total_od_1, alpha=0.5, bins=200, range=(0, 7.5),
+         label="All", log=True, histtype='step');
+plt.hist(total_od_1[mask_new][tree_clear], alpha=0.5, bins=200,
+         range=(0, 7.5), label="Decision Tree only", log=True, histtype='step');
+plt.hist(total_od_1[clear_idp], alpha=0.5, bins=200,
+         range=(0, 7.5), label="IDP only", log=True, histtype='step');
+plt.hist(total_od_1[abp_cloudflag == 0], alpha=0.5, bins=200,
+         range=(0, 7.5), label="ABP only", log=True, histtype='step');
+plt.ylim(3, 10000)
+plt.vlines([0.4], ymin=3, ymax=10000)
+plt.xlabel("Total $\\tau$ in Band 1")
+plt.legend()
 
 '''
 neigh = KNeighborsClassifier(n_neighbors=10)

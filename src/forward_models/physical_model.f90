@@ -494,7 +494,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 100
+       do i_fr=1, num_frames
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -959,7 +959,8 @@ contains
     if (SV%num_sif > 0) then
        SV%svap(SV%idx_sif(1)) = 0.0d0
     end if
-
+ 
+    ! ZLO starts with zero too
     if (SV%num_zlo > 0) then
        SV%svap(SV%idx_zlo(1)) = 0.0d0
     end if
@@ -1075,7 +1076,6 @@ contains
           end if
        else
 
-
           ! Save the old state vector (iteration - 1'th state vector)
           if (divergent_step) then
              old_sv(:) = last_successful_sv(:)
@@ -1083,7 +1083,6 @@ contains
           else
              old_sv = SV%svsv
           end if
-
 
           ! If this is not the first iteration, we grab forward model values from the !
           ! current state vector.
@@ -1142,6 +1141,7 @@ contains
           this_sif_radiance = 0.0d0
        end if
 
+       ! Same for ZLO
        if (SV%num_zlo > 0) then
           this_zlo_radiance = SV%svsv(SV%idx_zlo(1))
        else
@@ -1464,6 +1464,10 @@ contains
        if (SV%num_sif > 0) then
           ! Plug in the Jacobians (SIF is easy)
           K(:, SV%idx_sif(1)) = 1.0d0
+       end if
+
+       if (SV%num_zlo > 0) then
+          K(:, SV%idx_zlo(1)) = 1.0d0
        end if
 
 
@@ -1856,18 +1860,18 @@ contains
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
 !!$       end do
 
-!!$       write(*,*) "old, current and delta state vector, and errors"
+       write(*,*) "old, current and delta state vector, and errors"
 
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!!$       write(*,*) "LM-Gamma: ", lm_gamma
-!!$       write(*,*) "Ratio R: ", chi2_ratio
+       write(*,*) "Iteration: ", iteration
+       do i=1, N_sv
+          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
+               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+       write(*,*) "LM-Gamma: ", lm_gamma
+       write(*,*) "Ratio R: ", chi2_ratio
 
 
        ! These quantities are all allocated within the iteration loop, and
@@ -1886,7 +1890,7 @@ contains
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
 
 
-       !read(*,*)
+       read(*,*)
     end do
 
   end function physical_FM

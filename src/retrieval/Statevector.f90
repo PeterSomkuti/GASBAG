@@ -246,7 +246,7 @@ contains
 
        ! We are retrieving ZLO! (this is the SAME as SIF essentially)
        if (split_string(i)%lower() == "zlo") then
-          num_sif_parameters = 1
+          num_zlo_parameters = 1
        end if
 
        ! We are retrieving surface pressure!
@@ -448,7 +448,7 @@ contains
     end if
 
     if (sv%num_zlo > 0) then
-       write(tmp_str, '(A, G0.1)') "Number of ZLO SV elements: ", sv%num_sif
+       write(tmp_str, '(A, G0.1)') "Number of ZLO SV elements: ", sv%num_zlo
        call logger%info(fname, trim(tmp_str))
 
        allocate(sv%idx_zlo(sv%num_zlo))

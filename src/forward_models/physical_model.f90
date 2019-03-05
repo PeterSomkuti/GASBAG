@@ -310,9 +310,9 @@ contains
 
        ! Read in Spike filter data, if it exists in this file
        call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
-       if (spike_exists) then
-          call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
-       end if
+       !if (spike_exists) then
+       !   call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+       !end if
 
        ! Read in bad sample list (if it exists)
        call h5lexists_f(met_file_id, "/InstrumentHeader/bad_sample_list", bad_sample_exists, hdferr)
@@ -494,7 +494,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 1
+       do i_fr=1, num_frames, 100
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)

@@ -486,7 +486,7 @@ contains
        call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_strong_co2", &
             spike_list, dset_dims)
     else
-       call logger%fatal("read_spike_list", "Sorry - I only know bands 1 through 3!")
+       call logger%fatal("read_spike_filter(oco2)", "Sorry - I only know bands 1 through 3!")
        stop 1
     end if
 

@@ -36,6 +36,7 @@ contains
     if (allocated(SV%idx_psurf)) deallocate(SV%idx_psurf)
     if (allocated(SV%idx_solar_shift)) deallocate(SV%idx_solar_shift)
     if (allocated(SV%idx_solar_stretch)) deallocate(SV%idx_solar_stretch)
+    if (allocated(SV%idx_zlo)) deallocate(SV%idx_zlo)
 
     if (allocated(SV%svap)) deallocate(SV%svap)
     if (allocated(SV%svsv)) deallocate(SV%svsv)

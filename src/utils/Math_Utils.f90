@@ -16,6 +16,18 @@ module math_utils_mod
 
 contains
 
+  pure function calculate_chi2(array1, array2, std_dev, dof) result(chi2)
+    implicit none
+    double precision, intent(in) :: array1(:), array2(:), std_dev(:)
+    integer, intent(in) :: dof
+
+    double precision :: chi2
+
+    chi2 = sum(((array1 - array2) * (array1 - array2)) / (std_dev * std_dev)) / dble(dof)
+
+  end function calculate_chi2
+
+
   subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
     implicit none
     double precision, intent(in) :: p_levels(:), psurf, vmrs(:)

@@ -6,21 +6,17 @@ module Rayleigh_mod
 
 contains
 
-  subroutine calculate_rayleigh_tau(wl, p_levels, ray_tau, first_call)
+  subroutine calculate_rayleigh_tau(wl, p_levels, ray_tau)
 
     implicit none
     double precision, intent(in) :: wl(:), p_levels(:)
     double precision, intent(inout) :: ray_tau(:,:)
-    logical, intent(in) :: first_call
-
     double precision, allocatable, save :: ray_CS(:)
     integer :: i, j
 
     ray_tau(:,:) = 0.0d0
 
-    if (first_call) then
-       if (allocated(ray_CS)) deallocate(ray_CS)
-    end if
+    if (allocated(ray_CS)) deallocate(ray_CS)
 
     ! Calculate the rayleigh CS
     if (.not. allocated(ray_CS)) then

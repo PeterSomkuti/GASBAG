@@ -24,7 +24,6 @@ module physical_model_mod
   use statevector_mod
   use radiance_mod
   use absco_mod
-  use Rayleigh_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
 
@@ -495,7 +494,7 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames, 100
+       do i_fr=1, num_frames, 1
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -591,6 +590,7 @@ contains
             trim(tmp_str), &
             results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
+       ! Save the radiances
        out_dims3d = shape(final_radiance)
        call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
        write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
@@ -759,6 +759,8 @@ contains
     ! SIF
     ! Per-iteration SIF radiance
     double precision :: this_sif_radiance
+    ! ZLO - same as SIF essentially
+    double precision :: this_zlo_radiance
 
     ! Gases
     ! Do we want to calculate gas Jacobians
@@ -958,6 +960,10 @@ contains
        SV%svap(SV%idx_sif(1)) = 0.0d0
     end if
 
+    if (SV%num_zlo > 0) then
+       SV%svap(SV%idx_zlo(1)) = 0.0d0
+    end if
+
     ! Dispersion
     if (SV%num_dispersion > 0) then
        ! Start with the L1b dispersion values as priors
@@ -1010,6 +1016,9 @@ contains
           albedo(:) = albedo_apriori
           ! and the first guess state vector is the prior
           SV%svsv = SV%svap
+          !
+          last_successful_sv(:) = SV%svap
+          old_sv(:) = SV%svap
 
           if (num_gases > 0) then
 
@@ -1059,12 +1068,22 @@ contains
                    ! If H2O is needed to be retrieved, take it from the MET atmosphere
                    ! specific humidty directly, rather than the H2O column of the
                    ! atmosphere text file.
-                   ! this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
+                   this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
                 end if
              end do
 
           end if
        else
+
+
+          ! Save the old state vector (iteration - 1'th state vector)
+          if (divergent_step) then
+             old_sv(:) = last_successful_sv(:)
+             SV%svsv(:) = old_sv(:)
+          else
+             old_sv = SV%svsv
+          end if
+
 
           ! If this is not the first iteration, we grab forward model values from the !
           ! current state vector.
@@ -1115,20 +1134,18 @@ contains
 
        endif
 
-
-       ! Save the old state vector (iteration - 1'th state vector)
-       if (divergent_step) then
-          old_sv = last_successful_sv(:)
-       else
-          old_sv = SV%svsv
-       end if
-
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
        if (SV%num_sif > 0) then
           this_sif_radiance = SV%svsv(SV%idx_sif(1))
        else
           this_sif_radiance = 0.0d0
+       end if
+
+       if (SV%num_zlo > 0) then
+          this_zlo_radiance = SV%svsv(SV%idx_zlo(1))
+       else
+          this_zlo_radiance = 0.0d0
        end if
 
 
@@ -1162,8 +1179,6 @@ contains
              call logger%error(fname, "Psurf negative!")
              return
           end if
-
-          !call calculate_Rayleigh_tau(hires_grid, this_atm%p, ray_tau, first_band_call)
 
           do j=1, num_gases
 
@@ -1267,7 +1282,7 @@ contains
           ! all layers as well.
           allocate(total_tau(N_hires))
           total_tau(:) = 0.0d0
-          total_tau(:) = sum(sum(gas_tau, dim=2), dim=2) !+ sum(ray_tau, dim=2)
+          total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
 
 !!$          do i=1, num_active_levels
 !!$             write(tmp_str,'(A,G0.1,A,G0.1,A)') "gas_od_iter", iteration, "layer", i, ".dat"
@@ -1346,7 +1361,7 @@ contains
 
        ! Multiply with the solar spectrum for physical units and add SIF contributions
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:) &
-            + this_sif_radiance
+            + this_sif_radiance + this_zlo_radiance
 
        ! JACOBIAN CALCULATIONS
 
@@ -1354,20 +1369,20 @@ contains
        if (SV%num_psurf == 1) then
           ! This equation requires the TOA radiance before SIF is added, so if we have
           ! SIF in it, take it out beforehand.
-          K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance) &
+          K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
                * (1.0d0 / mu0 + 1.0d0 / mu) &
                * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
        end if
 
        ! Solar shift jacobian
        if (SV%num_solar_shift == 1) then
-          K_hi(:, SV%idx_solar_shift(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+          K_hi(:, SV%idx_solar_shift(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
                / this_solar(:,2) * dsolar_dlambda(:)
        end if
 
        ! Solar stretch jacobian
        if (SV%num_solar_stretch == 1) then
-          K_hi(:, SV%idx_solar_stretch(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+          K_hi(:, SV%idx_solar_stretch(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
                / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
        end if
 
@@ -1383,7 +1398,7 @@ contains
                    ! Loop through all potential profile "sections", but skip the unused ones
                    if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1.0d0) cycle
 
-                   K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance) &
+                   K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
                         * (1.0d0 / mu0 + 1.0d0 / mu) &
                         * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
 
@@ -1588,7 +1603,7 @@ contains
 
 
           do i=1, SV%num_albedo
-             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance) / albedo_low(:) * &
+             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance - this_zlo_radiance) / albedo_low(:) * &
                   ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
                   this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
           end do
@@ -1679,10 +1694,11 @@ contains
 
        ! Make linear prediction for the next iteration
        radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
-       linear_prediction_chi2 = SUM(((radiance_meas_work - radiance_tmp_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       linear_prediction_chi2 = calculate_chi2(radiance_meas_work, radiance_tmp_work, noise_work, N_spec - N_sv)
 
        if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
-            (iteration > MCS%window(i_win)%max_iterations)) then
+            (iteration > MCS%window(i_win)%max_iterations) .or. &
+            (num_divergent_steps > 1)) then
 
           ! Stop iterating - we've either coverged to exeeded the max. number of
           ! iterations.
@@ -1757,7 +1773,7 @@ contains
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
 
-          write(tmp_str, '(A,G3.1,A,F6.3,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration ,&
+          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration ,&
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", this_psurf, &
@@ -1776,7 +1792,7 @@ contains
              old_chi2 = this_chi2
           end if
 
-          this_chi2 = SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+          this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, noise_work, N_spec - N_sv)
 
           if (iteration == 1) then
              chi2_ratio = 0.5d0 ! For very first iteration, we set R in the trust region, so
@@ -1805,10 +1821,6 @@ contains
              divergent_step = .true.
              num_divergent_steps = num_divergent_steps + 1
 
-             if (num_divergent_steps > 5) then
-                keep_iterating = .false.
-             end if
-
              lm_gamma = lm_gamma * 10.0d0
 
              call logger%debug(fname, "Divergent step!")
@@ -1818,7 +1830,10 @@ contains
              divergent_step = .false.
           end if
 
+       end if
 
+       if (.not. divergent_step) then
+          iteration = iteration + 1
        end if
 
 !!$       open(file="jacobian.dat", newunit=funit)
@@ -1827,7 +1842,7 @@ contains
 !!$       end do
 !!$       close(funit)
 !!$
-       
+!!$
 !!$       open(file="l1b_spec.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
@@ -1835,13 +1850,14 @@ contains
 !!$
 !!$       end do
 !!$       close(funit)
-
-
+!!$
+!!$
 !!$       do i=1, num_active_levels
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
 !!$       end do
 
 !!$       write(*,*) "old, current and delta state vector, and errors"
+
 !!$       write(*,*) "Iteration: ", iteration
 !!$       do i=1, N_sv
 !!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
@@ -1869,7 +1885,7 @@ contains
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
 
-       iteration = iteration + 1
+
        !read(*,*)
     end do
 
@@ -1911,7 +1927,7 @@ contains
     end if
 
     if (SV%num_solar_shift == 1) then
-       Sa(SV%idx_solar_shift(1), SV%idx_solar_shift(1)) = 1.0d0
+       Sa(SV%idx_solar_shift(1), SV%idx_solar_shift(1)) = 1.0d-2
     end if
 
     if (SV%num_solar_stretch == 1) then
@@ -1921,6 +1937,11 @@ contains
     if (SV%num_sif > 0) then
        ! Put SIF prior covariance at the continuum level of the band
        Sa(SV%idx_sif(1), SV%idx_sif(1)) = continuum * continuum
+    end if
+
+    if (SV%num_zlo > 0) then
+       ! Put ZLO prior covariance at the continuum level of the band
+       Sa(SV%idx_zlo(1), SV%idx_zlo(1)) = continuum * continuum
     end if
 
     if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1.0d6
@@ -2115,6 +2136,13 @@ contains
        do j=1, SV%num_sif
           if (SV%idx_sif(j) == i) then
              write(tmp_str, '(A)') "SIF_absolute"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       do j=1, SV%num_zlo
+          if (SV%idx_zlo(j) == i) then
+             write(tmp_str, '(A)') "ZLO"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do

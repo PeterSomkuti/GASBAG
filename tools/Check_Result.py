@@ -63,10 +63,12 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
 
 if 'physical_retrieval_results' in f:
 
-    mask = (f['physical_retrieval_results/weak_co2/num_iterations'][:,:].flatten() >= 2)
+    mask = (f['physical_retrieval_results/weak_co2/num_iterations'][:,:].flatten() >= 0)
+    mask = mask & (f['physical_retrieval_results/weak_co2/XCO2'][:,:].flatten() > 200e-6)
+    mask = mask & (f['physical_retrieval_results/strong_co2/XCO2'][:,:].flatten() > 200e-6)
     #mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 10 )
-    mask = mask & f['physical_retrieval_results/strong_co2/converged'][:,:].flatten() == 1
-    mask = mask & f['physical_retrieval_results/weak_co2/converged'][:,:].flatten() == 1
+    #mask = mask & f['physical_retrieval_results/strong_co2/converged'][:,:].flatten() == 1
+    #mask = mask & f['physical_retrieval_results/weak_co2/converged'][:,:].flatten() == 1
     #mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 5)
     #mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 5)
 
@@ -85,14 +87,16 @@ if 'physical_retrieval_results' in f:
 
 if 'HighLevelResults' in f:
 
-    lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[::10]
-    lat =  f['SoundingGeometry/sounding_latitude'][:,:].flatten()[::10]
+    mask = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::10] != 0
 
-    co2_ratio = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::10]
-    h2o_ratio = f['HighLevelResults/CloudScreen/h2o_ratio'][:,:].flatten()[::10]
+    lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[::10][mask]
+    lat = f['SoundingGeometry/sounding_latitude'][:,:].flatten()[::10][mask]
 
-    co2_weak = f['HighLevelResults/CO2_bands/co2_vcd_weakBand'][:,:].flatten()[::10]
-    co2_strong = f['HighLevelResults/CO2_bands/co2_vcd_strongBand'][:,:].flatten()[::10]
+    co2_ratio = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::10][mask]
+    h2o_ratio = f['HighLevelResults/CloudScreen/h2o_ratio'][:,:].flatten()[::10][mask]
+
+    co2_weak = f['HighLevelResults/CO2_bands/co2_vcd_weakBand'][:,:].flatten()[::10][mask]
+    co2_strong = f['HighLevelResults/CO2_bands/co2_vcd_strongBand'][:,:].flatten()[::10][mask]
 
 if 'physical_retrieval_results' in f:
     plot_map_and_hist(lon, lat, h2o_strong, gridsize=gridsize,
@@ -115,12 +119,10 @@ if 'physical_retrieval_results' in f:
                           fname=f.filename+f'_{band}_chi2.pdf')
 
         '''
-        meas = f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask]
-        meas_norm = (f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask].T /
-                     np.nanmax(f[f'physical_retrieval_results/measured_radiance_{band}_co2'][:,0][mask], axis=1)).T
-        conv = f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0][mask]
-        conv_norm = (f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0][mask].T /
-                     np.nanmax(f[f'physical_retrieval_results/modelled_radiance_{band}_co2'][:,0][mask], axis=1)).T
+        meas = f[f'physical_retrieval_results/{band}_co2/measured_radiance'][:,0][mask]
+        meas_norm = (meas.T / np.nanmax(f[f'physical_retrieval_results/{band}_co2/measured_radiance'][:,0][mask], axis=1)).T
+        conv = f[f'physical_retrieval_results/{band}_co2/modelled_radiance'][:,0][mask]
+        conv_norm = (conv.T / np.nanmax(f[f'physical_retrieval_results/{band}_co2/modelled_radiance'][:,0][mask], axis=1)).T
 
 
         res_relative = (conv - meas) / meas

@@ -95,6 +95,11 @@ contains
 
     end do
 
+    if (abs(sum(pwgts(:)) - 1.0d0) > 1.0d-5) then
+       call logger%warning("pressure_weighting_function", &
+            "Pressure weighting function does not sum up to 1.0")
+    end if
+
 
   end subroutine pressure_weighting_function
 
@@ -436,7 +441,6 @@ contains
        output(idx_pix) = dot_product(ILS_upsampled(:), input(idx_hires_ILS_min:idx_hires_ILS_max)) &
             / sum(ILS_upsampled)
 
-
        deallocate(ILS_upsampled)
 
     end do
@@ -445,52 +449,6 @@ contains
 
 
   end subroutine oco_type_convolution2
-
-
-  subroutine linear_upsample(x_hires, x_lowres, y_lowres, output)
-
-    implicit none
-    double precision, intent(in) :: x_hires(:), x_lowres(:), y_lowres(:)
-    double precision, intent(inout) :: output(:)
-
-    integer :: idx_closest, idx_left, idx_right
-    integer :: i,j
-    double precision :: frac_value
-
-    ! Output and hires arrays should be the same size!
-    if ((size(output) /= size(x_hires))) then
-       call logger%fatal("linear_upsample", "Array size mismatch!")
-       stop 1
-    end if
-
-    do i=1, size(x_hires)
-
-       ! Between which two lowres values is our hires value?
-       idx_closest = minloc(abs(x_lowres - x_hires(i)), dim=1) !find_closest_index_DP(x_lowres, x_hires(i))
-       if (x_lowres(idx_closest) < x_hires(i)) then
-          idx_right = idx_closest + 1
-          idx_left = idx_closest
-       else
-          idx_left = idx_closest - 1
-          idx_right = idx_closest
-       end if
-
-       ! Boundary cases:
-       if (idx_left == 0) then
-          idx_left = 1
-          idx_right = 2
-       end if
-       if (idx_right > size(x_lowres)) then
-          idx_right = size(x_lowres)
-          idx_left = idx_right - 1
-       end if
-
-       frac_value = (x_hires(i) - x_lowres(idx_left)) / (x_lowres(idx_right) - x_lowres(idx_left))
-       output(i) = (1.0d0 - frac_value) * y_lowres(idx_left) + frac_value * y_lowres(idx_right)
-
-    end do
-
-  end subroutine linear_upsample
 
   subroutine invert_matrix(mat_in, mat_out, success)
 

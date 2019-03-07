@@ -439,7 +439,7 @@ contains
        end if
 
        ! And we also need the solar spectrum on our user-defined
-       ! high-resolution wavelength grid. 
+       ! high-resolution wavelength grid.
        allocate(solar_spectrum_regular(N_hires, 2))
        solar_spectrum_regular(:,1) = hires_grid
 
@@ -573,7 +573,6 @@ contains
        end do
 
        ! Save number of iterations
-
        call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations")
        write(tmp_str, '(A,A,A)') trim(group_name) // "/num_iterations"
        call write_INT_hdf_dataset(output_file_id, &
@@ -612,7 +611,7 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%continuum, out_dims2d)
 
-       ! Save the radiances
+       ! Save the radiances (this should be made optional!)
        out_dims3d = shape(final_radiance)
        call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
        write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
@@ -1390,9 +1389,14 @@ contains
        end if
 
 
-       ! Multiply with the solar spectrum for physical units and add SIF contributions
-       radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:) &
-            + this_sif_radiance + this_zlo_radiance
+       ! Multiply with the solar spectrum for physical units and add SIF contributions. For
+       ! various Jacobian calculations we also need the radiance MINUS the additive contributions,
+       ! so we store them in a separate array.
+       radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
+       radiance_tmp_work_hi(:) = radiance_calc_work_hi(:) !* (1.0d0 / mu0 + 1.0d0 / mu)
+       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
+
+
 
        ! JACOBIAN CALCULATIONS
 
@@ -1400,26 +1404,27 @@ contains
        if (SV%num_psurf == 1) then
           ! This equation requires the TOA radiance before SIF is added, so if we have
           ! SIF in it, take it out beforehand.
-          K_hi(:, SV%idx_psurf(1)) = (radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
+          K_hi(:, SV%idx_psurf(1)) = radiance_tmp_work_hi(:) &
                * (1.0d0 / mu0 + 1.0d0 / mu) &
                * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
        end if
 
        ! Solar shift jacobian
        if (SV%num_solar_shift == 1) then
-          K_hi(:, SV%idx_solar_shift(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
+          K_hi(:, SV%idx_solar_shift(1)) = -radiance_tmp_work_hi(:) &
                / this_solar(:,2) * dsolar_dlambda(:)
        end if
 
        ! Solar stretch jacobian
        if (SV%num_solar_stretch == 1) then
-          K_hi(:, SV%idx_solar_stretch(1)) = -(radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
+          K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_work_hi(:) &
                / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
        end if
 
 
        ! Gas jacobians
        if (SV%num_gas > 0) then
+
           do i=1, SV%num_gas
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
 
@@ -1429,8 +1434,7 @@ contains
                    ! Loop through all potential profile "sections", but skip the unused ones
                    if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1.0d0) cycle
 
-                   K_hi(:, SV%idx_gas(i,1)) = -(radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) &
-                        * (1.0d0 / mu0 + 1.0d0 / mu) &
+                   K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * (1.0d0 / mu0 + 1.0d0 / mu) &
                         * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
 
                    ! If this is a H2O Jacobian, we need to add the derivative

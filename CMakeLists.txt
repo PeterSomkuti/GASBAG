@@ -42,7 +42,7 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=medium")
+  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=large")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
@@ -61,7 +61,7 @@ endif()
 set(CMAKE_Fortran_FLAGS "${dialect}")
 set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} -fcheck=all -fbacktrace")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
-set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg")
+set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
@@ -69,7 +69,6 @@ find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran HL)
 find_package(NETCDF REQUIRED COMPONENTS Fortran)
-#find_package(Gperftools)
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 
@@ -85,7 +84,7 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 set_source_files_properties(
   ${third-party}
   PROPERTIES
-  COMPILE_FLAGS "-g -Og"
+  COMPILE_FLAGS "${opt}"
 )
 
 # Our code is definitely in the need of having warnings
@@ -102,9 +101,6 @@ add_executable(GeoCARBSIF ${sources} ${third-party} ${generated})
 message(STATUS "HDF5-HL Libraries at -- " ${HDF5_Fortran_HL_LIBRARIES})
 message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
-message(STATUS "GPERFTOOLS: " ${GPERFTOOLS_PROFILER_LIBRARIES})
-message(STATUS "GPERFTOOLS: " ${GPERFTOOLS_PROFILER})
-
 # HDF5 needs to be included at compile time already
 target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS}
 #${GPERFTOOLS_INCLUDE_DIR}
@@ -112,7 +108,7 @@ target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5
 target_link_libraries(GeoCARBSIF
 ${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
 #-L/usr/lib -llapack -lblas
-${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES} ${GPERFTOOLS_PROFILER})
+${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES})
 
 # This is needed for Gperfmonitor (or the profiler portion of it) to work
 # properly on Mac's as the have some memory address randomization going on..

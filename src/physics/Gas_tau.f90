@@ -386,18 +386,19 @@ contains
    ! it, but for now the performance increase is totally worth it!
 
    ! Get the pressure indices
-   if (p <= gas%p(1)) then
-      idx_l_p = 1
-   else if (p >= gas%p(size(gas%p))) then
-      idx_l_p = size(gas%p) - 1
-   else
-      do i=1, size(gas%p)-1
-         if ((p >= gas%p(i)) .and. (p < gas%p(i+1))) then
-            idx_l_p = i
-            exit
-         end if
-      end do
-   end if
+!!$   if (p <= gas%p(1)) then
+!!$      idx_l_p = 1
+!!$   else if (p >= gas%p(size(gas%p))) then
+!!$      idx_l_p = size(gas%p) - 1
+!!$   else
+!!$      do i=1, size(gas%p)-1
+!!$         if ((p >= gas%p(i)) .and. (p < gas%p(i+1))) then
+!!$            idx_l_p = i
+!!$            exit
+!!$         end if
+!!$      end do
+!!$   end if
+   idx_l_p = searchsorted_dp(gas%p(:), p)
    idx_r_p = idx_l_p + 1
 
    ! Get the temperature indices, which depend on P - so we have two
@@ -405,48 +406,51 @@ contains
    ! corresponds to the left index of pressure (idx_l_p), the other set
    ! (idx_r(l,r)_T) corresponds to the right index of pressure (idx_r_p).
 
-   if (T <= gas%T(1, idx_l_p)) then
-      idx_ll_T = 1
-   else if (T >= gas%T(size(gas%T, 1), idx_l_p)) then
-      idx_ll_T = size(gas%T, 1) - 1
-   else
-      do i=1, size(gas%T, 1)-1
-         if ((T > gas%T(i, idx_l_p)) .and. (T <= gas%T(i+1, idx_l_p))) then
-            idx_ll_T = i
-            exit
-         end if
-      end do
-   end if
+!!$   if (T <= gas%T(1, idx_l_p)) then
+!!$      idx_ll_T = 1
+!!$   else if (T >= gas%T(size(gas%T, 1), idx_l_p)) then
+!!$      idx_ll_T = size(gas%T, 1) - 1
+!!$   else
+!!$      do i=1, size(gas%T, 1)-1
+!!$         if ((T > gas%T(i, idx_l_p)) .and. (T <= gas%T(i+1, idx_l_p))) then
+!!$            idx_ll_T = i
+!!$            exit
+!!$         end if
+!!$      end do
+!!$   end if
+   idx_ll_T = searchsorted_dp(gas%T(:, idx_l_p), T)
    idx_lr_T = idx_ll_T + 1
 
-   if (T <= gas%T(1, idx_r_p)) then
-      idx_rl_T = 1
-   else if (T >= gas%T(size(gas%T, 1), idx_r_p)) then
-      idx_rl_T = size(gas%T, 1) - 1
-   else
-      do i=1, size(gas%T, 1)-1
-         if ((T >= gas%T(i, idx_r_p)) .and. (T < gas%T(i+1, idx_r_p))) then
-            idx_rl_T = i
-            exit
-         end if
-      end do
-   end if
+!!$   if (T <= gas%T(1, idx_r_p)) then
+!!$      idx_rl_T = 1
+!!$   else if (T >= gas%T(size(gas%T, 1), idx_r_p)) then
+!!$      idx_rl_T = size(gas%T, 1) - 1
+!!$   else
+!!$      do i=1, size(gas%T, 1)-1
+!!$         if ((T >= gas%T(i, idx_r_p)) .and. (T < gas%T(i+1, idx_r_p))) then
+!!$            idx_rl_T = i
+!!$            exit
+!!$         end if
+!!$      end do
+!!$   end if
+   idx_rl_T = searchsorted_dp(gas%T(:, idx_r_p), T)
    idx_rr_T = idx_rl_T + 1
 
    ! Get the water vapor indices
    if (gas%has_H2O) then
-      if (H2O <= gas%H2O(1)) then
-         idx_l_H2O = 1
-      else if (H2O >= gas%H2O(size(gas%H2O, 1))) then
-         idx_l_H2O = size(gas%H2O, 1) - 1
-      else
-         do i=1, size(gas%H2O) - 1
-            if ((H2O > gas%H2O(i)) .and. (H2O <= gas%H2O(i+1))) then
-               idx_l_H2O = i
-               exit
-            end if
-         end do
-      end if
+!!$      if (H2O <= gas%H2O(1)) then
+!!$         idx_l_H2O = 1
+!!$      else if (H2O >= gas%H2O(size(gas%H2O, 1))) then
+!!$         idx_l_H2O = size(gas%H2O, 1) - 1
+!!$      else
+!!$         do i=1, size(gas%H2O) - 1
+!!$            if ((H2O > gas%H2O(i)) .and. (H2O <= gas%H2O(i+1))) then
+!!$               idx_l_H2O = i
+!!$               exit
+!!$            end if
+!!$         end do
+!!$      end if
+      idx_l_H2O = searchsorted_dp(gas%H2O, H2O)
       idx_r_H2O = idx_l_H2O + 1
    else
       ! If the cross sections have no water vapour dependence,
@@ -461,7 +465,6 @@ contains
    ! Remember, we store the CS grid in the following way:
    ! wavelength, h2o, temperature, pressure
    ! .. so we order the vertices of our polytope in the same way.
-
    p_d = (p - gas%p(idx_l_p)) / (gas%p(idx_r_p) - gas%p(idx_l_p))
    if (gas%has_H2O) then
       H2O_d = (H2O - gas%H2O(idx_l_H2O)) / (gas%H2O(idx_r_H2O) - gas%H2O(idx_l_H2O))
@@ -501,7 +504,7 @@ contains
 
          C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
               + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
- 
+
          C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
               + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
 
@@ -545,8 +548,8 @@ contains
 
       ! Finally, we interpolate along pressure, which is the final result that
       ! we pass back. If below zero, set to zero.
-      CS_value(i) = C1(0) * (1.0d0 - p_d) + C1(1) * p_d
-      if (CS_value(i) < 0.0d0) CS_value(i) = 0.0d0
+      CS_value(i) = max(C1(0) * (1.0d0 - p_d) + C1(1) * p_d, 0.0d0)
+      !if (CS_value(i) < 0.0d0) CS_value(i) = 0.0d0
 
    end do
 

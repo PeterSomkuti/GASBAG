@@ -116,4 +116,4 @@ ${HDF5_Fortran_LIBRARIES} ${HDF5_Fortran_HL_LIBRARIES} ${GPERFTOOLS_PROFILER})
 
 # This is needed for Gperfmonitor (or the profiler portion of it) to work
 # properly on Mac's as the have some memory address randomization going on..
-#set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)
+set (CMAKE_EXE_LINKER_FLAGS -Wl,-no_pie)

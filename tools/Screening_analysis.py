@@ -86,7 +86,7 @@ def calculate_statistics(positive, negative, ref_positive, ref_negative, name=""
 projection = ccrs.Robinson()
 
 # Read in all the data
-new = h5py.File('cloudy.h5', 'r')
+new = h5py.File('cloudy_zlo.h5', 'r')
 abp = h5py.File('/Users/petersomkuti/Work/OCO-3-Sims/oco3_SimABPr154_cloudy_fluor-on_surf-polBRDF_noise-off_2012_01.hdf', 'r')
 idp = h5py.File('/Users/petersomkuti/Work/OCO-3-Sims/oco3_SimIDPb7_cloudy_fluor-on_surf-polBRDF_noise-on_2012_01_absco5-0-SCO2-1.004.nc', 'r')
 log = open('/Users/petersomkuti/Work/OCO-3-Sims/OCO3_sim_r93_intensity_cloudy_fluor-on_surf-polBRDF_noise-on_2012_01.log', 'r').readlines()
@@ -135,34 +135,62 @@ total_od_2 += truth['Tau_water_2'] + truth['Tau_aerosol_2'] + truth['Tau_ice_2']
 total_od_3 = np.zeros_like(truth['Frame'])
 total_od_3 += truth['Tau_water_3'] + truth['Tau_aerosol_3'] + truth['Tau_ice_3']
 
-CLEAR_THRESHOLD = 0.4
+
+
+#####################
+#####################
+CLEAR_THRESHOLD = 1.5
 clear_true = (total_od_1 <= CLEAR_THRESHOLD) & (total_od_2 <= CLEAR_THRESHOLD) & (total_od_3 <= CLEAR_THRESHOLD)
+clear_true = (truth['Tau_ice_1'] < 0.1) & (total_od_1 <= CLEAR_THRESHOLD)
 nonclear_true = (~clear_true)
+#####################
+#####################
+
+
+
 
 # Ratios
 h2o_ratio = new['physical_retrieval_results/weak_co2/XH2O'][:,0] / new['physical_retrieval_results/strong_co2/XH2O'][:,0]
 h2o_ratio_lower = new['physical_retrieval_results/weak_co2/H2O_scale_0.850:1.00'][:,0] / new['physical_retrieval_results/strong_co2/H2O_scale_0.850:1.00'][:,0]
+h2o_ratio_mid = new['physical_retrieval_results/weak_co2/H2O_scale_0.00:0.850'][:,0] / new['physical_retrieval_results/strong_co2/H2O_scale_0.00:0.850'][:,0]
 
 co2_ratio = new['physical_retrieval_results/weak_co2/XCO2'][:,0] / new['physical_retrieval_results/strong_co2/XCO2'][:,0]
 co2_ratio_mid = new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700'][:,0] / new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700'][:,0]
 co2_ratio_lower = new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00'][:,0] / new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00'][:,0]
 
+co2_ratio_mid_uncert = co2_ratio_mid * np.sqrt((new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700_uncertainty'][:,0] /
+                                                new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700'][:,0])**2 +
+                                               (new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700_uncertainty'][:,0] /
+                                                new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700'][:,0])**2)
+
+co2_ratio_lower_uncert = co2_ratio_lower * np.sqrt((new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00_uncertainty'][:,0] /
+                                                    new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00'][:,0])**2 +
+                                                   (new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00_uncertainty'][:,0] /
+                                                    new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00'][:,0])**2)
+
+if ('ZLO' in new['physical_retrieval_results/strong_co2']):
+    zlo_strong = new['physical_retrieval_results/strong_co2/ZLO'][:,0]
+else:
+    zlo_strong = np.zeros_like(co2_ratio)
+
 # Try a simple new threshold-based classification
 clear_new = (
-    (co2_ratio_lower > 0.80) & (co2_ratio_lower < 1.04) &
-    (co2_ratio_mid > 0.8) & (co2_ratio_mid < 2.0) &
-    (h2o_ratio > 0.90) & (h2o_ratio < 2.0)
+    (co2_ratio_lower > 1.00) & (co2_ratio_lower < 1.04) &
+    (co2_ratio_mid > 0.8) & (co2_ratio_mid < 1.2) &
+    (h2o_ratio_lower > 0.96) & (h2o_ratio_lower < 1.02)
+    # (zlo_strong > 0) & (zlo_strong < 1e17)
 )
 
 mask_new = (
     np.isfinite(co2_ratio_lower) &
     np.isfinite(co2_ratio_mid) &
     np.isfinite(h2o_ratio) &
+    #(land_water == 1) & 
     (new['physical_retrieval_results/strong_co2/converged'][:,0] != -1) &
     (new['physical_retrieval_results/weak_co2/converged'][:,0] != -1)
     )
 
-#calculate_statistics(clear_new[mask_new], ~clear_new[mask_new], clear_true[mask_new], nonclear_true[mask_new])
+calculate_statistics(clear_new[mask_new], ~clear_new[mask_new], clear_true[mask_new], nonclear_true[mask_new])
 
 co2_ratio_idp = idp['HighLevelResults/CloudScreen/co2_ratio'][:,0]
 h2o_ratio_idp = idp['HighLevelResults/CloudScreen/h2o_ratio'][:,0]
@@ -197,12 +225,12 @@ plot_sampling_density(lon[mask_idp][clear_idp[mask_idp]],
 calculate_statistics(clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 0),
                      ~(clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 0)),
                      clear_true[mask_idp],
-                     nonclear_true[mask_idp], "IDP + ABP clear")
+                     nonclear_true[mask_idp], "IDP & ABP clear")
 
-calculate_statistics(~(~clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 1)),
-                     (~clear_idp[mask_idp] & (abp_cloudflag[mask_idp] == 1)),
+calculate_statistics(~((~clear_idp[mask_idp]) | (abp_cloudflag[mask_idp] == 1)),
+                     ((~clear_idp[mask_idp]) | (abp_cloudflag[mask_idp] == 1)),
                      clear_true[mask_idp],
-                     nonclear_true[mask_idp], "IDP + ABP cloudy")
+                     nonclear_true[mask_idp], "IDP | ABP cloudy")
 
 plot_sampling_density(lon[mask_idp][(clear_idp & (abp_cloudflag == 0))[mask_idp]],
                       lat[mask_idp][(clear_idp & (abp_cloudflag == 0))[mask_idp]],
@@ -212,9 +240,14 @@ plot_sampling_density(lon[mask_idp][(clear_idp & (abp_cloudflag == 0))[mask_idp]
 # Try a decision tree classifier using all the retrieval results
 tree_data = np.vstack([
     co2_ratio_mid,
+    #co2_ratio_mid_uncert,
     co2_ratio_lower,
+    #co2_ratio_lower_uncert,
     #co2_ratio,
-    h2o_ratio,
+    #h2o_ratio,
+    h2o_ratio_mid,
+    h2o_ratio_lower,
+    zlo_strong,
     #new['physical_retrieval_results/strong_co2/num_iterations'][:,0],
     #land_water,
     #new['physical_retrieval_results/strong_co2/converged'][:,0]
@@ -222,7 +255,7 @@ tree_data = np.vstack([
     #new['physical_retrieval_results/strong_co2/SIF_absolute'][:,0],
     #new['physical_retrieval_results/strong_co2/albedo_order_0'][:,0],
     #new['physical_retrieval_results/weak_co2/albedo_order_0'][:,0],
-    #dp_abp
+    dp_abp
     #new['physical_retrieval_results/strong_co2/retrieved_chi2'][:,0],
     #new['physical_retrieval_results/weak_co2/retrieved_chi2'][:,0],
     ]).T
@@ -231,10 +264,10 @@ tree_target = np.zeros(len(clear_true))
 tree_target[clear_true] = 1
 tree_target[nonclear_true] = -1
 
-clear_weight = 3 * clear_true.sum() / len(clear_true)
+clear_weight = 1 * clear_true.sum() / len(clear_true)
 nonclear_weight = 1.0 - clear_weight
 
-tree_clf = tree.DecisionTreeClassifier(max_depth=15,
+tree_clf = tree.DecisionTreeClassifier(max_depth=3,
                                        #min_samples_split=int(0.05 * sum(mask_new)),
                                        #min_samples_leaf=0.05,
                                        criterion='entropy',
@@ -246,14 +279,21 @@ try:
     dot_data = tree.export_graphviz(tree_fit, out_file='graph.dot',
                                     feature_names=[
                                         'co2_ratio_mid',
+                                        #'co2_ratio_mid_uncert',
                                         'co2_ratio_lower',
+                                        #'co2_ratio_lower_uncert',
                                         #'co2_ratio',
-                                        'h2o_ratio',
+                                        #'h2o_ratio',
+                                        'h2o_ratio_mid',
+                                        'h2o_ratio_lower',
+                                        'zlo_strong',
                                         #'num_iterations_sco2',
                                         #'land_water',
                                         #'albedo_weak',
                                         #'albedo_strong',
-                                        #'dpsurf'
+                                        'dpsurf'
+                                        #'weak_chi2',
+                                        #'strong_chi2'
                                 ],
                                     class_names=['nonclear', 'clear'],
                                     filled=True, rounded=True,
@@ -275,12 +315,12 @@ plot_sampling_density(lon[mask_new][tree_clear], lat[mask_new][tree_clear], proj
 calculate_statistics(tree_clear & (abp_cloudflag[mask_new] == 0),
                      ~(tree_clear & (abp_cloudflag[mask_new] == 0)),
                      clear_true[mask_new], nonclear_true[mask_new],
-                     "Decision tree + ABP clear")
+                     "Decision tree clear & ABP clear")
 
 calculate_statistics(~(tree_nonclear & (abp_cloudflag[mask_new] == 1)),
                      (tree_nonclear & (abp_cloudflag[mask_new] == 1)),
                      clear_true[mask_new], nonclear_true[mask_new],
-                     "Decision tree + ABP cloudy")
+                     "Decision tree nonclear & ABP cloudy")
 
 calculate_statistics(abp_cloudflag == 0,
                      abp_cloudflag == 1,
@@ -288,23 +328,46 @@ calculate_statistics(abp_cloudflag == 0,
                      nonclear_true[abp_cloudflag != -1], "ABP")
 
 
+# Look at OD clear!
+fig = plt.figure(figsize=(10, 6))
 plt.hist(total_od_1, alpha=0.5, bins=200, range=(0, 7.5),
-         label="All", log=True, histtype='step');
+         label="All", log=True, histtype='step', lw=2.0);
 plt.hist(total_od_1[mask_new][tree_clear], alpha=0.5, bins=200,
-         range=(0, 7.5), label="Decision Tree only", log=True, histtype='step');
+         range=(0, 7.5), label="Decision Tree clear only", log=True, histtype='step');
+plt.hist(total_od_1[mask_new][tree_clear & (abp_cloudflag[mask_new] == 0)], alpha=0.5, bins=200,
+         range=(0, 7.5), label="Decision Tree clear + ABP clear", log=True, histtype='step');
 plt.hist(total_od_1[clear_idp], alpha=0.5, bins=200,
-         range=(0, 7.5), label="IDP only", log=True, histtype='step');
+         range=(0, 7.5), label="IDP clear only", log=True, histtype='step');
 plt.hist(total_od_1[abp_cloudflag == 0], alpha=0.5, bins=200,
-         range=(0, 7.5), label="ABP only", log=True, histtype='step');
-plt.ylim(3, 10000)
-plt.vlines([0.4], ymin=3, ymax=10000)
+         range=(0, 7.5), label="ABP clear only", log=True, histtype='step');
+plt.ylim(1, 10000)
+plt.vlines([0.4], ymin=1, ymax=10000)
 plt.xlabel("Total $\\tau$ in Band 1")
 plt.legend()
+plt.savefig("OD_histogram_clear.pdf", bbox_inches='tight')
+
+# Look at OD cloudy
+fig = plt.figure(figsize=(10, 6))
+plt.hist(total_od_1, alpha=0.5, bins=200, range=(0, 7.5),
+         label="All", log=True, histtype='step', lw=2.0);
+plt.hist(total_od_1[mask_new][~tree_clear], alpha=0.5, bins=200,
+         range=(0, 7.5), label="Decision Tree nonclear only", log=True, histtype='step');
+plt.hist(total_od_1[mask_new][(~tree_clear) | (abp_cloudflag[mask_new] == 1)], alpha=0.5, bins=200,
+         range=(0, 7.5), label="Decision Tree nonclear + ABP nonclear", log=True, histtype='step');
+plt.hist(total_od_1[~clear_idp], alpha=0.5, bins=200,
+         range=(0, 7.5), label="IDP nonclear only", log=True, histtype='step');
+plt.hist(total_od_1[abp_cloudflag == 1], alpha=0.5, bins=200,
+         range=(0, 7.5), label="ABP nonclear only", log=True, histtype='step');
+plt.ylim(1, 10000)
+plt.vlines([0.4], ymin=1, ymax=10000)
+plt.xlabel("Total $\\tau$ in Band 1")
+plt.legend()
+plt.savefig("OD_histogram_nonclear.pdf", bbox_inches='tight')
 
 '''
-neigh = KNeighborsClassifier(n_neighbors=10)
-neigh.fit(tree_data[mask_new], tree_target[mask_new])
-neigh_predict = neigh.predict(tree_data[mask_new])
+neigh = SVC(gamma=0.001)
+nfit = neigh.fit(tree_data[mask_new], tree_target[mask_new])
+neigh_predict = nfit.predict(tree_data[mask_new])
 neigh_clear = neigh_predict == 1
 neigh_nonclear = neigh_predict == -1
 
@@ -313,4 +376,69 @@ calculate_statistics(neigh_clear, neigh_nonclear,
                      "KNeigh")
 '''
 
+
+
+for od_type in ['water', 'ice', 'aerosol', 'total']:
+    if od_type == 'total':
+        this_od = total_od_1
+    else:
+        this_od = truth[f'Tau_{od_type}_1']
+
+    fig = plt.figure(figsize=(10, 4))
+    lbins = np.logspace(-2, 1, 40)
+
+    abp_clear = abp_cloudflag.copy()
+    abp_clear[abp_cloudflag != 0] = 0
+    abp_clear[abp_cloudflag == 0] = 1
+
+    binres = sps.binned_statistic(this_od, abp_clear,
+                                  statistic='mean', bins=lbins)
+    binres2 = sps.binned_statistic(this_od[mask_new],
+                                   clear_new[mask_new].astype(int),
+                                   statistic='mean', bins=lbins)
+    binres3 = sps.binned_statistic(this_od[mask_new],
+                                   (clear_new[mask_new] & (abp_cloudflag[mask_new] == 0)).astype(int),
+                                   statistic='mean', bins=lbins)
+    binres4 = sps.binned_statistic(this_od[mask_idp],
+                                   clear_idp[mask_idp].astype(int),
+                                   statistic='mean', bins=lbins)
+    binres5 = sps.binned_statistic(this_od[mask_new],
+                                   tree_clear.astype(int),
+                                   statistic='mean', bins=lbins)
+
+    ax1 = plt.gca()
+
+    ax1.semilogx((binres[1][1:] + binres[1][:-1]) * 0.5, binres[0],
+                 label='ABP Clear ({:.1f}%)'.format(100 * (abp_cloudflag == 0).sum() / len(abp_cloudflag)),
+                 color='blue')
+    ax1.semilogx((binres4[1][1:] + binres4[1][:-1]) * 0.5, binres4[0],
+                 label='IDP Clear ({:.1f}%)'.format(100 * clear_idp[mask_idp].sum() / len(clear_idp[mask_idp])),
+                 color='orange')
+    ax1.semilogx((binres2[1][1:] + binres2[1][:-1]) * 0.5, binres2[0],
+                 label='Eyeballing Clear ({:.1f}%)'.format(100 * clear_new.sum() / len(clear_new)),
+                 color='lightgreen')
+    ax1.semilogx((binres5[1][1:] + binres5[1][:-1]) * 0.5, binres5[0],
+                 label='Decisition Tree Clear ({:.1f}%)'.format(100 * tree_clear.sum() / len(tree_clear)),
+                 color='green')
+    ax1.semilogx((binres3[1][1:] + binres3[1][:-1]) * 0.5, binres3[0],
+                 label='ABP Clear & Eyeballing Clear ({:.1f}%)'
+                 .format(100 * (clear_new[mask_new] & (abp_cloudflag[mask_new] == 0)).sum() / len(tree_clear)),
+                 color='black')
+
+    ax2 = plt.twinx()
+
+    ax2.hist(this_od, bins=lbins, alpha=0.85, log=True, zorder=-99, color='grey')
+
+    ax1.set_zorder(ax2.get_zorder()+1)
+    ax1.patch.set_visible(False) 
+    ax1.legend()
+    ax1.set_xlabel("Total $\\tau$")
+    ax1.set_ylabel("Fraction Clear")
+    if od_type == 'total':
+        ax1.vlines([0.4], ymin=0, ymax=1, linestyle='dashed')
+    ax2.set_ylabel("Total Scenes")
+    ax1.set_title(od_type.capitalize())
+    ax2.set_ylim(1, 1e5)
+
+    plt.savefig(f"{od_type}_tommyplot.pdf", bbox_inches='tight')
 

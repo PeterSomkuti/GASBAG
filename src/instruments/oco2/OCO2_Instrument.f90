@@ -373,12 +373,13 @@ contains
     integer, intent(in) :: band
     double precision, dimension(:,:), allocatable, intent(out) :: SZA, SAA, VZA, VAA
 
-    character(len=*), parameter :: fname = "read_sounding_geometry"
+    character(len=*), parameter :: fname = "read_sounding_geometry(oco2)"
     integer :: hdferr
     integer(hid_t) :: dset_id
     integer(hsize_t), dimension(:), allocatable :: dset_dims
     double precision, dimension(:,:,:), allocatable :: tmp_array
 
+    call logger%debug(fname, "Trying to allocate sounding location arrays.")
 
     ! FootprintGeometry fields are (Band, FP, Frame)
     call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_zenith", tmp_array, dset_dims)

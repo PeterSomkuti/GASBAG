@@ -301,13 +301,6 @@ contains
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
 
-       ! Read in the measurement geometries
-       call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
-       ! Read in the measurement location
-       call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
-            altitude, relative_velocity, &
-            relative_solar_velocity)
-
        ! Read in Spike filter data, if it exists in this file
        call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
        !if (spike_exists) then
@@ -370,6 +363,16 @@ contains
        end if
 
        band = MCS%window(i_win)%band
+
+       select type(my_instrument)
+       type is (oco2_instrument)
+          ! Read in the measurement geometries - per band
+          call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
+          ! Read in the measurement location
+          call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
+               altitude, relative_velocity, &
+               relative_solar_velocity)
+       end select
        ! Grab the number of spectral pixels in this band
        num_pixel = MCS%general%N_spec(band)
 
@@ -623,6 +626,9 @@ contains
        deallocate(final_radiance)
        deallocate(measured_radiance)
        deallocate(noise_radiance)
+
+       deallocate(SZA, SAA, VZA, VAA)
+       deallocate(lon, lat, altitude, relative_velocity, relative_solar_velocity)
 
        if (allocated(bad_sample_list)) deallocate(bad_sample_list)
        if (allocated(spike_list)) deallocate(spike_list)
@@ -998,7 +1004,7 @@ contains
     this_solar_stretch = 1.0d0
 
     ! Retrival iteration loop
-    iteration = 1
+    iteration = 0
     num_divergent_steps = 0
     keep_iterating = .true.
     allocate(old_sv(size(SV%svsv)))
@@ -1007,6 +1013,10 @@ contains
     converged = .false.
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
+
+       if (.not. divergent_step) then
+          iteration = iteration + 1
+       end if
 
        if (iteration == 1) then
 
@@ -1074,8 +1084,9 @@ contains
              end do
 
           end if
-       else
 
+       else
+          ! This is not the very first iteration!
           ! Save the old state vector (iteration - 1'th state vector)
           if (divergent_step) then
              old_sv(:) = last_successful_sv(:)
@@ -1696,14 +1707,11 @@ contains
           end do
        end do
 
-
-       ! Make linear prediction for the next iteration
-       radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
-       linear_prediction_chi2 = calculate_chi2(radiance_meas_work, radiance_tmp_work, noise_work, N_spec - N_sv)
-
-       if ((dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
+       if ( &
+            (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
-            (num_divergent_steps > 1)) then
+            (num_divergent_steps > 1) &
+            ) then
 
           ! Stop iterating - we've either coverged to exeeded the max. number of
           ! iterations.
@@ -1749,7 +1757,6 @@ contains
 
              end if
           end do
-
 
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
 
@@ -1806,6 +1813,11 @@ contains
              ! Otherwise R is ratio between linear forecast value and actual computed Chi2
              chi2_ratio = (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
           end if
+          
+          ! Make linear prediction of CHI2 for the next iteration
+          radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
+          linear_prediction_chi2 = calculate_chi2(radiance_meas_work, radiance_tmp_work, noise_work, N_spec - N_sv)
+
 
           if (chi2_ratio > 0.75d0) then
              ! If fit is much better than predicted / fairly linear - decrese gamma by a bit
@@ -1837,10 +1849,6 @@ contains
 
        end if
 
-       if (.not. divergent_step) then
-          iteration = iteration + 1
-       end if
-
 !!$       open(file="jacobian.dat", newunit=funit)
 !!$       do i=1, N_spec
 !!$          write(funit,*) (K(i, j), j=1, N_sv)
@@ -1861,20 +1869,20 @@ contains
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2))
 !!$       end do
 
-       write(*,*) "old, current and delta state vector, and errors"
-
-       write(*,*) "Iteration: ", iteration
-       do i=1, N_sv
-          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
-               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-       write(*,*) "LM-Gamma: ", lm_gamma
-       write(*,*) "Ratio R: ", chi2_ratio
-       write(*,*) this_sif_radiance
-       write(*,*) this_zlo_radiance
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!!$       write(*,*) "LM-Gamma: ", lm_gamma
+!!$       write(*,*) "Ratio R: ", chi2_ratio
+!!$       write(*,*) this_sif_radiance
+!!$       write(*,*) this_zlo_radiance
 
 
        ! These quantities are all allocated within the iteration loop, and
@@ -1891,7 +1899,6 @@ contains
        if (allocated(total_tau)) deallocate(total_tau)
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
-
 
        read(*,*)
     end do

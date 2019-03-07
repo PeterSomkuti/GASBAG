@@ -157,7 +157,7 @@ contains
     dispersion(:) = 0.0d0
 
     do pix=1, size(dispersion)
-       do order=1, 6
+       do order=1, size(disp_coef)
           dispersion(pix) = dispersion(pix) + (dble(pix) ** (order-1) * disp_coef(order))
        end do
     end do

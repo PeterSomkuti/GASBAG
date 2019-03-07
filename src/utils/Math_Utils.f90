@@ -1,6 +1,7 @@
 module math_utils_mod
 
   use logger_mod, only: logger => master_logger
+  use, intrinsic:: ieee_arithmetic, only: ieee_is_nan
 
   implicit none
 
@@ -26,6 +27,25 @@ contains
     chi2 = sum(((array1 - array2) * (array1 - array2)) / (std_dev * std_dev)) / dble(dof)
 
   end function calculate_chi2
+
+  pure function mean(array) result(mean_value)
+    implicit none
+    double precision, intent(in) :: array(:)
+    double precision :: mean_value
+
+    mean_value = sum(array) / dble(size(array))
+
+  end function mean
+
+  pure function std(array) result(std_value)
+    implicit none
+    double precision, intent(in) :: array(:)
+    double precision :: mean_value, std_value
+
+    mean_value = mean(array)
+    std_value = sqrt(sum((array - mean_value) * (array - mean_value)) / dble(size(array) - 1))
+
+  end function std
 
 
   subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
@@ -359,6 +379,8 @@ contains
     N_pix = size(wl_output)
     N_ils_pix = size(wl_kernels, 1)
 
+    success = .false.
+
     ILS_wl_spacing = wl_input(2) - wl_input(1)
 
     if (N_pix /= size(wl_kernels, 2)) then
@@ -369,6 +391,21 @@ contains
     if (N_pix /= size(kernels, 2)) then
        call logger%fatal(fname, "kernels or wl_output have incompatible sizes.")
        stop 1
+    end if
+
+    if (any(ieee_is_nan(wl_input))) then
+       call logger%fatal(fname, "NaN(s) in wl_input")
+       return
+    end if
+
+    if (any(ieee_is_nan(wl_output))) then
+       call logger%fatal(fname, "NaN(s) in wl_output")
+       return
+    end if
+
+    if (any(ieee_is_nan(wl_kernels))) then
+       call logger%fatal(fname, "NaN(s) in wl_kernels")
+       return
     end if
 
     ! Main loop over all (instrument) output pixels. Note that idx_pix is

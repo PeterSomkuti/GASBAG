@@ -78,6 +78,12 @@ module physical_model_mod
      integer, allocatable :: num_iterations(:,:)
      !> Converged or not? (1=converged, 0=not converged, -1=not properly run)
      integer, allocatable :: converged(:,:)
+     !> SNR estimate (mean of per-pixel SNR)
+     double precision, allocatable :: SNR(:,:)
+     !> SNR standard deviation (std of per-pixel SNR)
+     double precision, allocatable :: SNR_std(:,:)
+     !> Continuum level radiance estimate
+     double precision, allocatable :: continuum(:,:)
   end type result_container
 
 
@@ -497,7 +503,9 @@ contains
        retr_count = 0
        mean_duration = 0.0d0
 
-       do i_fr=1, num_frames
+       call logger%info(fname, "Starting main retrieval loop!")
+
+       do i_fr=1, 100 !num_frames
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -569,29 +577,40 @@ contains
        call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations")
        write(tmp_str, '(A,A,A)') trim(group_name) // "/num_iterations"
        call write_INT_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            results%num_iterations(:,:), out_dims2d, -9999)
+            trim(tmp_str), results%num_iterations(:,:), out_dims2d, -9999)
 
        ! Save converged status
        call logger%info(fname, "Writing out: " // trim(group_name) // "/converged")
        write(tmp_str, '(A,A,A)') trim(group_name) // "/converged"
        call write_INT_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            results%converged(:,:), out_dims2d, -9999)
+            trim(tmp_str), results%converged(:,:), out_dims2d, -9999)
 
        ! Retrieved CHI2
        call logger%info(fname, "Writing out: " // trim(group_name) // "/retrieved_chi2")
        write(tmp_str, '(A,A,A)') trim(group_name) // "/retrieved_chi2"
        call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            results%chi2(:,:), out_dims2d, -9999.99d0)
+            trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
 
        ! Dsigma_sq
        call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq")
        write(tmp_str, '(A,A,A)') trim(group_name) // "/final_dsigma_sq"
        call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
+            trim(tmp_str), results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
+
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/SNR")
+       write(tmp_str, '(A,A)') trim(group_name) // "/SNR"
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), results%SNR, out_dims2d)
+
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/SNR_std")
+       write(tmp_str, '(A,A)') trim(group_name) // "/SNR_std"
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), results%SNR_std, out_dims2d)
+
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum")
+       write(tmp_str, '(A,A)') trim(group_name) // "/continuum"
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), results%continuum, out_dims2d)
 
        ! Save the radiances
        out_dims3d = shape(final_radiance)
@@ -634,9 +653,10 @@ contains
        if (allocated(spike_list)) deallocate(spike_list)
 
        ! Clear and deallocate the result container
+       call logger%info(fname, "Clearing up results container.")
        call destroy_result_container(results)
 
-       ! End the loop over windows
+       ! End of loop over windows
     end do
 
   end subroutine physical_retrieval
@@ -839,7 +859,6 @@ contains
        num_gases = 0
     end if
 
-
     ! Use user-supplied value for convergence critertion
     dsigma_scale = MCS%window(i_win)%dsigma_scale
     if (dsigma_scale < 0.0d0) dsigma_scale = 1.0d0
@@ -884,8 +903,10 @@ contains
     call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
 
-    solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
-    instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+    solar_doppler = 0.0d0
+    instrument_doppler = 0.0d0
+    !solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+    !instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
 
     ! Set up retrieval quantities:
@@ -975,7 +996,7 @@ contains
     if (SV%num_dispersion > 0) then
        ! Start with the L1b dispersion values as priors
        do i=1, SV%num_dispersion
-          SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i,i_fp,band)
+          SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i, i_fp, band)
        end do
     end if
 
@@ -1005,6 +1026,7 @@ contains
     iteration = 0
     num_divergent_steps = 0
     keep_iterating = .true.
+    divergent_step = .false.
     allocate(old_sv(size(SV%svsv)))
     allocate(last_successful_sv(size(SV%svsv)))
 
@@ -1168,7 +1190,7 @@ contains
           allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
           allocate(gas_tau_dsh(N_hires, num_levels-1, num_gases))
-          allocate(gas_tau_pert(N_hires, num_levels-1, num_levels-1, num_gases))
+          !allocate(gas_tau_pert(N_hires, num_levels-1, num_levels-1, num_gases))
           allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels))
@@ -1434,6 +1456,7 @@ contains
 
        ! Grab a copy of the dispersion coefficients from the L1B
        this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
+
        ! .. and if required, replace L1B dispersion coefficients by state vector
        ! elements from the retrieval process
        if (SV%num_dispersion > 0) then
@@ -1454,6 +1477,7 @@ contains
 
        ! Here we grab the index limits for the radiances for
        ! the choice of our microwindow and the given dispersion relation
+
        call calculate_dispersion_limits(this_dispersion, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
 
        ! Number of spectral points in the output resolution
@@ -1488,6 +1512,11 @@ contains
                snr_coefs, radiance_meas_work, &
                noise_work, i_fp, band, &
                l1b_wl_idx_min, l1b_wl_idx_max)
+
+          if (any(ieee_is_nan(noise_work))) then
+             call logger%error(fname, "NaNs in noise-equivalent-radiance.")
+             return
+          end if
 
           ! Pixels flagged with a spike need noise inflation, so
           ! that they are not really considered in the fit. This should
@@ -1556,6 +1585,12 @@ contains
              return
           end if
 
+          if (any(ieee_is_nan(radiance_calc_work))) then
+             call logger%error(fname, "NaNs in convolved radiance.")
+             return
+          end if
+
+          ! Convolution of any high-res Jacobians
           do i=1, N_sv
 
              skip_jacobian = .false.
@@ -1768,8 +1803,13 @@ contains
           ! Save retrieved CHI2 - this is the predicted chi2 from the 'last' linear step
           ! that is not evaluated.
           results%chi2(i_fp, i_fr) = linear_prediction_chi2
-          !SUM(((radiance_meas_work - radiance_calc_work) ** 2) / &
-          !     (noise_work ** 2)) / (N_spec - N_sv)
+
+          ! Get an SNR (mean and std) estimate
+          results%SNR(i_fp, i_fr) = mean(radiance_meas_work / noise_work)
+          results%SNR_std(i_fp, i_fr) = std(radiance_meas_work / noise_work)
+
+          ! Save also the continuum level radiance
+          results%continuum(i_fp, i_fr) = percentile(radiance_meas_work, 99.0d0)
 
           ! Save statevector at last iteration
           do i=1, size(SV%svsv)
@@ -1778,7 +1818,6 @@ contains
 
           results%num_iterations(i_fp, i_fr) = iteration
 
-          ! We save the linear-prediction radiances
           final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_tmp_work(:) !radiance_calc_work(:)
           measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
           noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
@@ -1788,7 +1827,7 @@ contains
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", this_psurf, &
                ", LM-Gamma: ", lm_gamma, &
-               ", SNR: ", sum(radiance_meas_work / noise_work) / dble(size(radiance_meas_work))
+               ", SNR: ", results%SNR(i_fp, i_fr)
           call logger%debug(fname, trim(tmp_str))
 
        else
@@ -1898,7 +1937,7 @@ contains
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
 
-       read(*,*)
+!       read(*,*)
     end do
 
   end function physical_FM
@@ -2071,6 +2110,9 @@ contains
     allocate(results%chi2(num_fp, num_frames))
     allocate(results%residual_rms(num_fp, num_frames))
     allocate(results%dsigma_sq(num_fp, num_frames))
+    allocate(results%SNR(num_fp, num_frames))
+    allocate(results%SNR_std(num_fp, num_frames))
+    allocate(results%continuum(num_fp, num_frames))
 
     allocate(results%num_iterations(num_fp, num_frames))
     allocate(results%converged(num_fp, num_frames))
@@ -2086,6 +2128,9 @@ contains
     results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%SNR = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%SNR_std = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%continuum = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
     results%num_iterations = -1
     results%converged = -1
@@ -2108,6 +2153,9 @@ contains
     deallocate(results%chi2)
     deallocate(results%residual_rms)
     deallocate(results%dsigma_sq)
+    deallocate(results%SNR)
+    deallocate(results%SNR_std)
+    deallocate(results%continuum)
     deallocate(results%num_iterations)
     deallocate(results%converged)
 
@@ -2328,6 +2376,8 @@ contains
           end do
 
           write(tmp_str, '(A,G0.1,A,A)') "There seem to be ", num_gases, " gases in ", filename
+          call logger%info(fname, trim(tmp_str))
+          write(tmp_str, '(A, G0.1)') "The number of atmospheric levels is: ", level_count
           call logger%info(fname, trim(tmp_str))
 
           if (allocated(atm%p)) deallocate(atm%p)

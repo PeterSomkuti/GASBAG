@@ -362,6 +362,7 @@ contains
 
        end if
 
+       ! The currently used band / spectrometer number
        band = MCS%window(i_win)%band
 
        select type(my_instrument)
@@ -370,8 +371,7 @@ contains
           call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
-               altitude, relative_velocity, &
-               relative_solar_velocity)
+               altitude, relative_velocity, relative_solar_velocity)
        end select
        ! Grab the number of spectral pixels in this band
        num_pixel = MCS%general%N_spec(band)
@@ -965,7 +965,7 @@ contains
     if (SV%num_sif > 0) then
        SV%svap(SV%idx_sif(1)) = 0.0d0
     end if
- 
+
     ! ZLO starts with zero too
     if (SV%num_zlo > 0) then
        SV%svap(SV%idx_zlo(1)) = 0.0d0
@@ -987,11 +987,9 @@ contains
     ! Gases. Scale factors are set to one in the beginning.
     if (SV%num_gas > 0) then
        do i=1, SV%num_gas
-
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,1)) = 1.0d0
           end if
-
        end do
     end if
 
@@ -1434,9 +1432,9 @@ contains
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:)
        K_hi(:,:) = K_hi(:,:)
 
-       ! Grab the dispersion coefficients from the L1B .. 
+       ! Grab a copy of the dispersion coefficients from the L1B
        this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
-       ! .. and if required, replace L1b dispersion coefficients by state vector
+       ! .. and if required, replace L1B dispersion coefficients by state vector
        ! elements from the retrieval process
        if (SV%num_dispersion > 0) then
           do i=1, SV%num_dispersion

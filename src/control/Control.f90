@@ -90,6 +90,7 @@ module control_mod
   type, private :: CS_output
      type(string) :: output_filename ! Where does the ouptut HDF file go?
      integer(hid_t) :: output_file_id
+     logical :: save_radiances ! Do we want to save radiances?
   end type CS_output
 
   type :: CS_gas
@@ -331,6 +332,23 @@ contains
     ! Outputs section ------------------------------------------------------
     call fini_extract(fini, 'output', 'output_file', .true., fini_char)
     MCS%output%output_filename = trim(fini_char)
+
+    call fini_extract(fini, 'output', 'save_radiances', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%output%save_radiances = .false.
+    else
+       if (fini_string%lower() == "true") then
+          MCS%output%save_radiances = .true.
+       else if (fini_string%lower() == "false") then
+          MCS%output%save_radiances = .false.
+       else
+          call logger%fatal(fname, "Sorry, -save_radiances- option accepts " &
+               // "only T/true or F/false.")
+          stop 1
+       end if
+    end if
 
     ! ----------------------------------------------------------------------
 

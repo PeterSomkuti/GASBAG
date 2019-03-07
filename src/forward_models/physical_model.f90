@@ -453,17 +453,19 @@ contains
        ! Note that at this point, the solar spectrum is still normalised
 
 
-       ! Allocate containers to hold the radiances and noise values
-       allocate(final_radiance(num_pixel, num_fp, num_frames))
-       allocate(measured_radiance(num_pixel, num_fp, num_frames))
-       allocate(noise_radiance(num_pixel, num_fp, num_frames))
+       ! Allocate containers to hold the radiances and noise values - if requested!
+       if (MCS%output%save_radiances) then
+          allocate(final_radiance(num_pixel, num_fp, num_frames))
+          allocate(measured_radiance(num_pixel, num_fp, num_frames))
+          allocate(noise_radiance(num_pixel, num_fp, num_frames))
 
-       ! We fill these with NaNs. This makes plotting a bit easier, since
-       ! most plotting routines (at least for Matplotlib) just skip NaNs,
-       ! so you will only see the values that are populated.
-       final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-       measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-       noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          ! We fill these with NaNs. This makes plotting a bit easier, since
+          ! most plotting routines (at least for Matplotlib) just skip NaNs,
+          ! so you will only see the values that are populated.
+          final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       end if
 
        ! Set up state vector structure here
 
@@ -612,26 +614,33 @@ contains
             trim(tmp_str), results%continuum, out_dims2d)
 
        ! Save the radiances (this should be made optional!)
-       out_dims3d = shape(final_radiance)
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
-       write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            final_radiance, out_dims3d)
+       if (MCS%output%save_radiances) then
+          out_dims3d = shape(final_radiance)
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
+          write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               final_radiance, out_dims3d)
 
-       out_dims3d = shape(measured_radiance)
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance")
-       write(tmp_str, '(A,A)') trim(group_name) // "/measured_radiance"
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            measured_radiance, out_dims3d)
+          out_dims3d = shape(measured_radiance)
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance")
+          write(tmp_str, '(A,A)') trim(group_name) // "/measured_radiance"
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               measured_radiance, out_dims3d)
 
-       out_dims3d = shape(noise_radiance)
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance")
-       write(tmp_str, '(A,A)') trim(group_name) // "/noise_radiance"
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            noise_radiance, out_dims3d)
+          out_dims3d = shape(noise_radiance)
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance")
+          write(tmp_str, '(A,A)') trim(group_name) // "/noise_radiance"
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               noise_radiance, out_dims3d)
+
+          ! Also deallocate containers holding the radiances
+          deallocate(final_radiance)
+          deallocate(measured_radiance)
+          deallocate(noise_radiance)
+       end if
 
        ! Clear and deallocate the SV structure to be ready for the next window.
        ! We really shouldn't need to check if this is deallocated already or not,
@@ -640,10 +649,7 @@ contains
        call clear_SV(SV)
        call logger%info(fname, "Clearing up SV structure")
 
-       ! Also deallocate containers holding the radiances
-       deallocate(final_radiance)
-       deallocate(measured_radiance)
-       deallocate(noise_radiance)
+
 
        deallocate(SZA, SAA, VZA, VAA)
        deallocate(lon, lat, altitude, relative_velocity, relative_solar_velocity)
@@ -1822,9 +1828,11 @@ contains
 
           results%num_iterations(i_fp, i_fr) = iteration
 
-          final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_tmp_work(:) !radiance_calc_work(:)
-          measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
-          noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+          if (MCS%output%save_radiances) then
+             final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
+             measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
+             noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+          end if
 
           write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration ,&
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
@@ -1848,13 +1856,14 @@ contains
           this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, noise_work, N_spec - N_sv)
 
           if (iteration == 1) then
-             chi2_ratio = 0.5d0 ! For very first iteration, we set R in the trust region, so
+             chi2_ratio = 0.5d0
+             ! For very first iteration, we set R in the trust region, so
              ! lm_gamma will not be changed.
           else
              ! Otherwise R is ratio between linear forecast value and actual computed Chi2
              chi2_ratio = (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
           end if
-          
+
           ! Make linear prediction of CHI2 for the next iteration
           radiance_tmp_work(:) = radiance_calc_work(:) + matmul(K, SV%svsv(:) - old_sv(:))
           linear_prediction_chi2 = calculate_chi2(radiance_meas_work, radiance_tmp_work, noise_work, N_spec - N_sv)

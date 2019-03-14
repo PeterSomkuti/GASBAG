@@ -2,6 +2,9 @@ from matplotlib import rcParams
 rcParams['font.family'] = 'monospace'
 rcParams['font.serif'] = 'Iosevka Term'
 
+import matplotlib as mpl
+mpl.use('pdf')
+
 import h5py
 import numpy as np
 import scipy as sp
@@ -10,6 +13,8 @@ from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 import sys
 from cartopy import crs as ccrs
+
+from IPython import embed
 
 from sklearn import tree
 from sklearn.svm import LinearSVC, SVC
@@ -86,10 +91,14 @@ def calculate_statistics(positive, negative, ref_positive, ref_negative, name=""
 projection = ccrs.Robinson()
 
 # Read in all the data
-new = h5py.File('cloudy_zlo.h5', 'r')
-abp = h5py.File('/Users/petersomkuti/Work/OCO-3-Sims/oco3_SimABPr154_cloudy_fluor-on_surf-polBRDF_noise-off_2012_01.hdf', 'r')
-idp = h5py.File('/Users/petersomkuti/Work/OCO-3-Sims/oco3_SimIDPb7_cloudy_fluor-on_surf-polBRDF_noise-on_2012_01_absco5-0-SCO2-1.004.nc', 'r')
-log = open('/Users/petersomkuti/Work/OCO-3-Sims/OCO3_sim_r93_intensity_cloudy_fluor-on_surf-polBRDF_noise-on_2012_01.log', 'r').readlines()
+new = h5py.File('/data6/psomkuti/OCO3_RUNS/SBAS_OCO3_sim_r93_intensity_cloudy_fluor-on_surf-polBRDF_noise-on_2012_02.h5', 'r')
+
+root = "/data8/ttaylor/data_ttaylor/sim_archive/OCO3_orbit_simulations/r93_g04/cloudy_fluor-on_surf-polBRDF_noise-off/intensity/2012_02"
+
+abp = h5py.File(root+'/oco3_SimABPr154_cloudy_fluor-on_surf-polBRDF_noise-off_2012_02.hdf', 'r')
+idp = h5py.File(root+'/oco3_SimIDPb7_cloudy_fluor-on_surf-polBRDF_noise-off_2012_02_absco4-2.nc', 'r')
+
+log = open('/data8/ttaylor/data_ttaylor/sim_archive/OCO3_orbit_simulations/r93_g04/meteorology_and_scene/intensity/2012_02/OCO3_scene_r5_intensity_v05222017_2012_02.log', 'r').readlines()
 
 
 # Read in the logfile first and turn into usable data
@@ -97,21 +106,22 @@ for cnt, line in enumerate(log):
     if "Frame" in line:
         frame_line = line
         frame_line_cnt = cnt
-        labels_raw = frame_line.split('   ')
+        labels_raw = frame_line.split('  ')
         labels = [x.lstrip().rstrip() for x in labels_raw if x != '']
         labels.pop(0)
         break
 
-dtype = [(x, '<f4') for x in labels]
+dtype = [(x, '<f4') for x in labels[:-2]]
 
 array_list = []
-for line in log[frame_line_cnt+3:]:
-    array_list.append(line.split())
+for line in log[frame_line_cnt+4:]:
+    array_list.append(line.split()[:-2])
 
 truth_raw = np.array(array_list)
+
 truth = np.empty(truth_raw.shape[0], dtype=dtype)
 
-for cnt, label in enumerate(labels):
+for cnt, label in enumerate(labels[:-2]):
     truth[label] = truth_raw[:,cnt].astype(truth[label].dtype)
 
 # These are the same for all files (hopefully)
@@ -129,19 +139,15 @@ abp_cloudflag = abp['ABandRetrieval/cloud_flag_abp'][:,0]
 
 # Total Scene OD
 total_od_1 = np.zeros_like(truth['Frame'])
-total_od_1 += truth['Tau_water_1'] + truth['Tau_aerosol_1'] + truth['Tau_ice_1']
-total_od_2 = np.zeros_like(truth['Frame'])
-total_od_2 += truth['Tau_water_2'] + truth['Tau_aerosol_2'] + truth['Tau_ice_2']
-total_od_3 = np.zeros_like(truth['Frame'])
-total_od_3 += truth['Tau_water_3'] + truth['Tau_aerosol_3'] + truth['Tau_ice_3']
+total_od_1 += truth['Cloud water'] + truth['Cloud ice']
 
 
 
 #####################
 #####################
 CLEAR_THRESHOLD = 1.5
-clear_true = (total_od_1 <= CLEAR_THRESHOLD) & (total_od_2 <= CLEAR_THRESHOLD) & (total_od_3 <= CLEAR_THRESHOLD)
-clear_true = (truth['Tau_ice_1'] < 0.1) & (total_od_1 <= CLEAR_THRESHOLD)
+clear_true = (total_od_1 <= CLEAR_THRESHOLD)
+#clear_true = (truth['Tau_ice_1'] < 0.1) & (total_od_1 <= CLEAR_THRESHOLD)
 nonclear_true = (~clear_true)
 #####################
 #####################
@@ -378,11 +384,11 @@ calculate_statistics(neigh_clear, neigh_nonclear,
 
 
 
-for od_type in ['water', 'ice', 'aerosol', 'total']:
+for od_type in ['water', 'ice']: #, 'aerosol', 'total']:
     if od_type == 'total':
         this_od = total_od_1
     else:
-        this_od = truth[f'Tau_{od_type}_1']
+        this_od = truth[f'Cloud {od_type}']
 
     fig = plt.figure(figsize=(10, 4))
     lbins = np.logspace(-2, 1, 40)

@@ -214,7 +214,7 @@ contains
     ! required vor various loops
     integer :: num_frames, num_fp, num_pixel, num_band
     ! Loop variables
-    integer :: i, j, k, i_fp, i_fr, i_win, band
+    integer :: i, j, i_fp, i_fr, i_win, band
     ! Retrieval count
     integer :: retr_count
     ! Return value of physical_fm, tells us whether this one has converged or not
@@ -811,8 +811,8 @@ contains
     integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
     ! Is this gas H2O?
     logical :: is_H2O
-    ! Number of moles of dry air per cm^2
-    double precision, allocatable :: ndry(:)
+    ! Number of molecules of dry air per m^2
+    double precision, allocatable :: ndry(:), ndry_tmp(:)
 
     ! Albedo
     ! Prior albedo value estimated from the radiances
@@ -1250,7 +1250,7 @@ contains
           allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels))
-          allocate(ndry(num_levels))
+          allocate(ndry(num_levels), ndry_tmp(num_levels))
 
           ! If we retrieve surface pressure, grab it from the state vector,
           ! otherwise, grab it from the MET data.
@@ -1360,8 +1360,13 @@ contains
                   gas_tau(:,:,j), & ! Output: Gas ODs
                   gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
                   gas_tau_dvmr(:,:,j), & ! Output: dTau/dVMR
-                  ndry, & ! Output: ndry moles per cm2
+                  ndry_tmp, & ! Output: ndry molecules per m2
                   success_gas) ! Output: Was the calculation successful?
+
+             ! Only copy ndry over if it's a non-H2O gas
+             if (.not. is_H2O) then
+                ndry(:) = ndry_tmp(:)
+             end if
 
              ! If the calculation goes wrong, we exit as we can't go on
              if (.not. success_gas) then
@@ -1709,7 +1714,7 @@ contains
                   this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
           end do
 
-
+          ! And calculate the derivative ..
           do i=1, SV%num_albedo
              K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance - this_zlo_radiance) / albedo_low(:) * &
                   ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
@@ -1761,7 +1766,10 @@ contains
        end if
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
+
+       ! K^T Se K
        KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
+       ! (1+gamma) * Sa^-1 + (K^T Se K) 
        tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
        !tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
 
@@ -1808,7 +1816,7 @@ contains
             (num_divergent_steps > 1) &
             ) then
 
-          ! Stop iterating - we've either coverged to exeeded the max. number of
+          ! Stop iterating - we've either coverged or exeeded the max. number of
           ! iterations or max. number of divergences.
           keep_iterating = .false.
 
@@ -1843,12 +1851,13 @@ contains
                       this_vmr_profile(s_start(i):s_stop(i)) = this_vmr_profile(s_start(i):s_stop(i)) &
                            * SV%svsv(SV%idx_gas(i,1))
 
-                      ! We also want to have the corresponding number of moles of dry air
+                      ! We also want to have the corresponding number of molecules of dry air
                       ! for the various sections of the atmopshere.
                       results%ndry(i_fp, i_fr, i) = sum(ndry(s_start(i):s_stop(i)))
                    end if
                 end do
 
+                ! Based on this 'current' VMR profile
                 call pressure_weighting_function( &
                      this_atm%p(1:num_active_levels), &
                      this_psurf, &
@@ -2023,6 +2032,7 @@ contains
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
        if (allocated(ndry)) deallocate(ndry)
+       if (allocated(ndry_tmp)) deallocate(ndry_tmp)
 
        !read(*,*)
     end do
@@ -2356,6 +2366,16 @@ contains
 
   end subroutine assign_SV_names_to_result
 
+  !> @brief Reads in the atmosphere file, which contains column-based profiles.
+  !>
+  !> @param filename Path to the atmosphere file
+  !> @param Array of 'strings' containing names of required gases
+  !> @param Atmosphere object that will be populated by this function
+  !>
+  !> @detail We supply here a filename, a list of gas strings and the
+  !> atmosphere-object. The function checks whether all required gases
+  !> are present in the atmosphere file, and will throw a fatal error if
+  !> that is not the case.
   subroutine read_atmosphere_file(filename, gas_strings, atm)
 
     implicit none
@@ -2363,21 +2383,34 @@ contains
     type(string), intent(in) :: gas_strings(:)
     type(atmosphere), intent(inout) :: atm
 
+    ! Function name
     character(len=*), parameter :: fname = "read_atmosphere_file"
+    ! File handler and IO stat variable
     integer :: funit, iostat
+    ! Whether file exists
     logical :: file_exist
+    ! Various counting variables to figure out where the
+    ! contents of the atmosphere file start.
     integer :: line_count, nonempty_line_count, file_start, level_count
+    ! Indices which tell us which columns are pressure and temperature
     integer :: idx_p, idx_t
+    ! Character variables to store lines
     character(len=999) :: dummy, tmp_str
+    ! This dummy is for reading in numerical values
     double precision :: dummy_dp
+    ! This dummy is for reading in strings
     type(string) :: dummy_string
+    ! Lines will be split using this dummy variable
     type(string), allocatable :: split_string(:)
-
-    integer :: i,j,cnt
+    ! Various loop counters
+    integer :: i, j, cnt
+    ! Too keep track of whether we have found the required gases, and
+    ! at which position/column they are.
     integer, allocatable :: this_gas_index(:)
 
     integer :: num_gases
 
+    ! Check whether the file exists or not.
     inquire(file=filename, exist=file_exist)
     if (.not. file_exist) then
        call logger%fatal(fname, "Atmosphere file does not exist: " // filename)
@@ -2395,7 +2428,7 @@ contains
     nonempty_line_count = 0
     file_start = -1
 
-    ! Loop through the file until we have reached EOF
+    ! Loop through the file until we have reached the end
     do
        read(funit, '(A)', iostat=iostat) dummy
 
@@ -2404,6 +2437,7 @@ contains
           exit
        end if
 
+       ! Keep track of how many lines we have traversed
        line_count = line_count + 1
 
        if (scan(dummy, "!#;") > 0) then
@@ -2414,9 +2448,11 @@ contains
           cycle
        end if
 
+       ! And keep track of now many lines are non-empty
        nonempty_line_count = nonempty_line_count + 1
 
-       ! First non-empty line should be saved here
+       ! First non-empty line should be saved here.
+       ! file_start is where the real file contents begin
        if (file_start == -1) then
           file_start = line_count
        else
@@ -2427,35 +2463,37 @@ contains
 
     end do
 
-    !close(funit)
-    !open(newunit=funit, file=filename, iostat=iostat, action='read', status='old')
-
     ! Go back to the top of the file.
     rewind(unit=funit, iostat=iostat)
 
+    ! Reset the line counter since we're starting from the top again.
     line_count = 0
     do
+       ! Read the line
        read(funit, '(A)', iostat=iostat) dummy
-
        line_count = line_count + 1
 
+       ! .. and immediately skip until we are at the
+       ! beginning of the contents of the file.
        if (line_count < file_start) cycle
 
        if (line_count == file_start) then
           ! This is the proper atmosphere header that should contain
           ! the information about the gases. So first, let's check if
           ! the numbers match
+
+          ! Read the line into a string object and split it by whitespaces
           dummy_string = dummy
           call dummy_string%split(tokens=split_string, sep=' ')
 
           ! Now that we know both the number of levels and gases, we can allocate the
           ! arrays in the atmosphere structure.
-
           num_gases = 0
           idx_p = -1
           idx_t = -1
           do j=1, size(split_string)
-             ! Skip temp or pressure
+             ! Skip temp or pressure - this requires the pressure and temperature
+             ! columns to be explicitly labeled p/P and t/T
              if (split_string(j)%lower() == "p") then
                 idx_p = j
                 cycle
@@ -2467,11 +2505,13 @@ contains
              num_gases = num_gases + 1
           end do
 
+          ! Let the user know how many gases and levels we have found
           write(tmp_str, '(A,G0.1,A,A)') "There seem to be ", num_gases, " gases in ", filename
           call logger%info(fname, trim(tmp_str))
           write(tmp_str, '(A, G0.1)') "The number of atmospheric levels is: ", level_count
           call logger%info(fname, trim(tmp_str))
 
+          ! If the atmosphere structure was already allocated, deallocate it first
           if (allocated(atm%p)) deallocate(atm%p)
           if (allocated(atm%T)) deallocate(atm%T)
           if (allocated(atm%sh)) deallocate(atm%sh)
@@ -2479,14 +2519,13 @@ contains
           if (allocated(atm%gas_index)) deallocate(atm%gas_index)
           if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
 
+          ! Allocate according to the file structure
           allocate(atm%T(level_count))
           allocate(atm%p(level_count))
           allocate(atm%sh(level_count))
           allocate(atm%gas_names(num_gases))
           allocate(atm%gas_vmr(level_count, num_gases))
           allocate(atm%gas_index(num_gases))
-
-
 
           allocate(this_gas_index(size(gas_strings)))
 

@@ -95,6 +95,7 @@ contains
                 valid_options(this_idx,19) = "max_iterations"
                 valid_options(this_idx,20) = "solar_dispersion"
                 valid_options(this_idx,21) = "lm_gamma"
+                valid_options(this_idx,22) = "allow_divergences"
         end do
 
         ! Section for gases

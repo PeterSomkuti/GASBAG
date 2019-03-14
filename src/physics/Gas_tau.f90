@@ -11,8 +11,8 @@ contains
   subroutine calculate_gas_tau(pre_gridded, is_H2O, &
        wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, need_gas_jac, &
-       gas_tau, gas_tau_dpsurf, gas_tau_dvmr, gas_tau_dsh, &
-       success)
+       gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
+       ndry, success)
 
     implicit none
     logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
@@ -32,8 +32,8 @@ contains
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
     ! dtau / dvmr
     double precision, intent(inout) :: gas_tau_dvmr(:,:)
-    ! dtau / dsh
-    double precision, intent(inout) :: gas_tau_dsh(:,:)
+    ! dry air mass per layer
+    double precision, intent(inout) :: ndry(:)
     ! Success?
     logical, intent(inout) :: success
 
@@ -102,6 +102,7 @@ contains
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
     gas_tau_dvmr(:,:) = 0.0d0
+    ndry(:) = 0.0d0
 
     ! Pre-compute the indicies of the ABSCO wavlength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
@@ -177,35 +178,32 @@ contains
        sh_higher = sh(l-1)
        VMR_higher = gas_vmr(l-1)
 
-       ! Should the perturbed surface pressure actually fall onto the next-higher level, we need to make
-       ! a small adjustment, otherwise, we end up dividing by zero later on.
+       ! Should the perturbed surface pressure actually fall onto the next-higher level,
+       ! we need to make a small adjustment, otherwise, we end up dividing by zero later on.
        if (need_psurf_jac) then
-          if (abs(p_lower_pert - p_higher) < 1d-3) p_lower_pert = p_lower_pert + PSURF_PERTURB/10.0d0
+          if (abs(p_lower_pert - p_higher) < 1d-3) then
+             p_lower_pert = p_lower_pert + PSURF_PERTURB/10.0d0
+          end if
        end if
 
 
        ! Map the GK abscissae and weights from [0,1] to symmetric [-1,1] by mirroring. This section
        ! seems a bit excessive - maybe a shorter way of doing it?
 
-       if (MOD(N_sub, 2) /= 0) then ! For odd number of sublayers
-          GK_abscissae_f((N_sub+1)/2) = GK_abscissae(size(GK_abscissae))
-          GK_weights_f((N_sub+1)/2) = GK_weights(size(GK_weights))
-          G_weights_f((N_sub+1)/2) = G_weights(size(G_weights))
+       ! For odd number of sublayers
+       GK_abscissae_f((N_sub+1)/2) = GK_abscissae(size(GK_abscissae))
+       GK_weights_f((N_sub+1)/2) = GK_weights(size(GK_weights))
+       G_weights_f((N_sub+1)/2) = G_weights(size(G_weights))
 
-          do k=1, (N_sub-1)/2
-             GK_abscissae_f(k) = -GK_abscissae(k)
-             GK_weights_f(k) = GK_weights(k)
-             G_weights_f(k) = G_weights(k)
+       do k=1, (N_sub-1)/2
+          GK_abscissae_f(k) = -GK_abscissae(k)
+          GK_weights_f(k) = GK_weights(k)
+          G_weights_f(k) = G_weights(k)
 
-             GK_abscissae_f(k+(N_sub+1)/2) = GK_abscissae(size(GK_abscissae)-k)
-             GK_weights_f(k+(N_sub+1)/2) = GK_weights(size(GK_weights)-k)
-             G_weights_f(k+(N_sub+1)/2) = G_weights(size(GK_weights)-k)
-          end do
-       else
-          ! This should never happen!!
-          write(*,*) "Really bad stuff! Gas tau even number of sublayers.."
-          stop 1
-       end if
+          GK_abscissae_f(k+(N_sub+1)/2) = GK_abscissae(size(GK_abscissae)-k)
+          GK_weights_f(k+(N_sub+1)/2) = GK_weights(size(GK_weights)-k)
+          G_weights_f(k+(N_sub+1)/2) = G_weights(size(GK_weights)-k)
+       end do
 
        ! And adjust the GK abscissae and weights to our pressure interval
        ! between p_lower and p_higher. This way, we don't have to re-scale the
@@ -270,17 +268,19 @@ contains
              H2O_corr = (1.0d0 - this_sh)
           end if
 
-          C_tmp = 1.0d0 / 9.80665d0 * NA * 0.1d0 * H2O_corr
+          C_tmp = 1.0d0 / 9.80665d0 * NA * 0.1d0 * H2O_corr / this_M
 
           ! Tau for this sublayer
           if (log_scaling) then
-             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp * this_p
+             !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp * this_p
+             ndry(l-1) = GK_weights_f(k) * C_tmp * this_p
           else
-             gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR / this_M * C_tmp
+             !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
+             ndry(l-1) = GK_weights_f(k) * C_tmp
           end if
 
           ! Add sublayer contribution to full layer tau
-          gas_tau(:,l-1) = gas_tau(:,l-1) + gas_tmp(:)
+          gas_tau(:,l-1) = gas_tau(:,l-1) + ndry(l) * this_CS_value(:) * this_VMR
 
           if (need_gas_jac) then
 
@@ -291,8 +291,6 @@ contains
                 gas_tau_dvmr(:,1) = gas_tau_dvmr(:,1) + (&
                      gas_tmp(:) / this_VMR * (1.0d0 - this_p_fac))
              end if
-
-             gas_tau_dsh(:,l-1) = -gas_tmp(:) / (1.0d0 - this_sh)
 
           end if
 
@@ -329,9 +327,11 @@ contains
              C_tmp = 1.0d0 / (9.80665d0 * this_M) * NA * 0.1d0 * H2O_corr
 
              if (log_scaling) then
-                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) * this_VMR_pert * C_tmp * exp(this_p_pert)
+                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) &
+                * this_VMR_pert * C_tmp * exp(this_p_pert)
              else
-                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) * this_VMR_pert * C_tmp
+                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) &
+                     * this_VMR_pert * C_tmp
              end if
 
              gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + gas_tmp(:)

@@ -9,7 +9,8 @@ module control_mod
   use stringifor
   use finer, only: file_ini
   use logger_mod, only: logger => master_logger
-  use file_utils_mod, only: check_config_files_exist, check_fini_error, fini_extract
+  use file_utils_mod, only: check_config_files_exist, check_fini_error, &
+       fini_extract, string_to_bool
   use HDF5
 
   implicit none
@@ -72,13 +73,16 @@ module control_mod
      double precision :: dsigma_scale ! Convergence scaling factor
      integer :: max_iterations
      ! Do we use the less-accurate, but faster FFT convolution with an
-     ! averaged ILS kernel?
-     logical :: fft_convolution 
+     ! averaged ILS kernel? (DEPRECATED)
+     logical :: fft_convolution
      ! Location of the atmosphere file which must contain the gases mentioned
      ! in the 'gases' line
      type(string) :: atmosphere_file
      ! Initial value for the Levenberg-Marquart damping parameter
      double precision :: lm_gamma
+     ! If this is true, then the physical retrieval will allow for divergent
+     ! steps, where the LM-gamma parameter will be adjusted.
+     logical :: allow_divergences
   end type CS_window
 
   type, private :: CS_input
@@ -339,15 +343,7 @@ contains
        ! If not supplied, default state is "no"
        MCS%output%save_radiances = .false.
     else
-       if (fini_string%lower() == "true") then
-          MCS%output%save_radiances = .true.
-       else if (fini_string%lower() == "false") then
-          MCS%output%save_radiances = .false.
-       else
-          call logger%fatal(fname, "Sorry, -save_radiances- option accepts " &
-               // "only T/true or F/false.")
-          stop 1
-       end if
+          MCS%output%save_radiances = string_to_bool(fini_string)
     end if
 
     ! ----------------------------------------------------------------------
@@ -422,17 +418,17 @@ contains
              ! If not supplied, default state is "no"
              MCS%window(window_nr)%fft_convolution = .false.
           else
-             if (fini_string%lower() == "true") then
-                MCS%window(window_nr)%fft_convolution = .true.
-             else if (fini_string%lower() == "false") then
-                MCS%window(window_nr)%fft_convolution = .false.
-             else
-                call logger%fatal(fname, "Sorry, -fft_convolution- option accepts " &
-                     // "only T/true or F/false.")
-                stop 1
-             end if
+             MCS%window(window_nr)%fft_convolution = string_to_bool(fini_string)
           end if
 
+          call fini_extract(fini, tmp_str, 'allow_divergences', .false., fini_char)
+          fini_string = fini_char
+          if (fini_string == "") then
+             ! If not supplied, default state is "no"
+             MCS%window(window_nr)%allow_divergences = .false.
+          else
+             MCS%window(window_nr)%allow_divergences = string_to_bool(fini_string)
+          end if
 
           call fini_extract(fini, tmp_str, 'sublayers', .false., fini_int)
           ! We round the number of sublayers to the next odd value > 2

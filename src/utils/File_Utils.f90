@@ -548,6 +548,24 @@ contains
   end subroutine check_config_files_exist
 
 
+  function string_to_bool(input_string) result(value)
+    implicit none
+    type(string) :: input_string
+    logical :: value
+
+    if (input_string%lower() == 'true') then
+       value = .true.
+    else if (input_string%lower() == 'false') then
+       value = .false.
+    else
+       call logger%fatal("string_to_bool",&
+            "Sorry - we only accept T/true and F/false.")
+       stop 1
+    end if
+
+  end function string_to_bool
+
+
 
 
 end module file_utils_mod

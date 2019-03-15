@@ -83,6 +83,8 @@ module control_mod
      ! If this is true, then the physical retrieval will allow for divergent
      ! steps, where the LM-gamma parameter will be adjusted.
      logical :: allow_divergences
+     integer :: frame_skip
+     integer :: footprint_skip
   end type CS_window
 
   type, private :: CS_input
@@ -428,6 +430,20 @@ contains
              MCS%window(window_nr)%allow_divergences = .false.
           else
              MCS%window(window_nr)%allow_divergences = string_to_bool(fini_string)
+          end if
+
+          call fini_extract(fini, tmp_str, 'frame_skip', .false., fini_int)
+          if (fini_int < 1) then
+             MCS%window(window_nr)%frame_skip = 1
+          else
+             MCS%window(window_nr)%frame_skip = fini_int
+          end if
+
+          call fini_extract(fini, tmp_str, 'footprint_skip', .false., fini_int)
+          if (fini_int < 1) then
+             MCS%window(window_nr)%footprint_skip = 1
+          else
+             MCS%window(window_nr)%footprint_skip = fini_int
           end if
 
           call fini_extract(fini, tmp_str, 'sublayers', .false., fini_int)

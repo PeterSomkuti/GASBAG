@@ -96,6 +96,8 @@ contains
                 valid_options(this_idx,20) = "solar_dispersion"
                 valid_options(this_idx,21) = "lm_gamma"
                 valid_options(this_idx,22) = "allow_divergences"
+                valid_options(this_idx,23) = "frame_skip"
+                valid_options(this_idx,24) = "footprint_skip"
         end do
 
         ! Section for gases

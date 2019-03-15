@@ -519,8 +519,8 @@ contains
 
        call logger%info(fname, "Starting main retrieval loop!")
 
-       do i_fr=1, num_frames
-          do i_fp=1, num_fp
+       do i_fr=1, num_frames, MCS%window(i_win)%frame_skip
+          do i_fp=1, num_fp, MCS%window(i_win)%footprint_skip
 
              call cpu_time(cpu_time_start)
              ! Do the retrieval for this particular sounding
@@ -1294,10 +1294,10 @@ contains
                          ! go below or above the first/last level.
 
                          s_start(i) = searchsorted_dp((this_atm%p), &
-                              SV%gas_retrieve_scale_start(i) * (this_psurf), .false.)
+                              SV%gas_retrieve_scale_start(i) * (this_psurf), .true.)
                          s_start(i) = max(1, s_start(i))
                          s_stop(i) = searchsorted_dp((this_atm%p), &
-                              SV%gas_retrieve_scale_stop(i) * (this_psurf), .false.)
+                              SV%gas_retrieve_scale_stop(i) * (this_psurf), .true.) + 1
                          s_stop(i) = min(num_active_levels, s_stop(i))
 
                       end if
@@ -1319,6 +1319,25 @@ contains
                          s_start(i) = s_start(i) + 1
                       end if
                    end do
+                end do
+
+                do i=1, SV%num_gas
+
+                   ! Skip gases if index does not match
+                   if (SV%gas_idx_lookup(i) /= j) cycle
+
+                   if (s_stop(i) - s_start(i) == 1) then
+                      write(tmp_str, '(A,A)') "Scale factor index error for ", results%SV_names(SV%idx_gas(i,1))%chars()
+                      call logger%error(fname, trim(tmp_str))
+                      write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), SV%gas_retrieve_scale_stop(i)
+
+                      do l=1, num_levels
+                         write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
+                      end do
+
+
+                      return
+                   end if
                 end do
 
                 do i=1, SV%num_gas
@@ -1777,7 +1796,6 @@ contains
        KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
        ! (1+gamma) * Sa^-1 + (K^T Se K) 
        tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
-       !tmp_m1 = matmul(matmul(transpose(K), Se_inv), K)
 
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
        if (.not. success_inv_mat) then
@@ -1889,7 +1907,7 @@ contains
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Calculate the averaging kernel
-          AK(:,:) = matmul(gain_matrix, K)
+          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K)
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
@@ -2000,11 +2018,11 @@ contains
 
        end if
 
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
+       open(file="jacobian.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) (K(i, j), j=1, N_sv)
+       end do
+       close(funit)
 !!$
 !!$
 !!$       open(file="l1b_spec.dat", newunit=funit)

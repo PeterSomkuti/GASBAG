@@ -64,8 +64,8 @@ def plot_map_and_hist(lon, lat, data, gridsize=1.0,
 if 'physical_retrieval_results' in f:
 
     mask = (f['physical_retrieval_results/weak_co2/num_iterations'][:,:].flatten() >= 0)
-    mask = mask & (f['physical_retrieval_results/weak_co2/XCO2'][:,:].flatten() > 200e-6)
-    mask = mask & (f['physical_retrieval_results/strong_co2/XCO2'][:,:].flatten() > 200e-6)
+    mask = mask & (f['physical_retrieval_results/weak_co2/XCO2'][:,:].flatten() > 1e-6)
+    mask = mask & (f['physical_retrieval_results/strong_co2/XCO2'][:,:].flatten() > 1e-6)
     #mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 10 )
     #mask = mask & f['physical_retrieval_results/strong_co2/converged'][:,:].flatten() == 1
     #mask = mask & f['physical_retrieval_results/weak_co2/converged'][:,:].flatten() == 1

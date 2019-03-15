@@ -66,13 +66,23 @@ if 'physical_retrieval_results' in f:
     mask = (f['physical_retrieval_results/weak_co2/num_iterations'][:,:].flatten() >= 0)
     mask = mask & (f['physical_retrieval_results/weak_co2/XCO2'][:,:].flatten() > 1e-6)
     mask = mask & (f['physical_retrieval_results/strong_co2/XCO2'][:,:].flatten() > 1e-6)
+
+    for window_co2 in ['weak_co2', 'strong_co2']:
+        for key in f['physical_retrieval_results/'+window_co2]:
+            if 'scale' in key:
+                mask = mask & (f['physical_retrieval_results/'+ window_co2 +'/'+ key][:,:].flatten() > 1e-10)
+
+    #mask = mask & (f['physical_retrieval_results/weak_co2/CO2_scale_0.00_0.85'][:,:].flatten() > 1e-10)
+    #mask = mask & (f['physical_retrieval_results/strong_co2/CO2_scale_0.00_0.85'][:,:].flatten() > 1e-10)
+    #mask = mask & (f['physical_retrieval_results/weak_co2/CO2_scale_0.85_1.00'][:,:].flatten() > 1e-10)
+    #mask = mask & (f['physical_retrieval_results/strong_co2/CO2_scale_0.85_1.00'][:,:].flatten() > 1e-10)
     #mask = mask & (f['physical_retrieval_results/strong_co2_num_iterations'][:,:].flatten() < 10 )
     #mask = mask & f['physical_retrieval_results/strong_co2/converged'][:,:].flatten() == 1
     #mask = mask & f['physical_retrieval_results/weak_co2/converged'][:,:].flatten() == 1
     #mask = mask & (f['physical_retrieval_results/weak_co2_retrieved_chi2'][:,:].flatten() < 5)
     #mask = mask & (f['physical_retrieval_results/strong_co2_retrieved_chi2'][:,:].flatten() < 5)
 
-    print(np.sum(mask))
+    print(len(mask), np.sum(mask))
 
     co2_weak = f['physical_retrieval_results/weak_co2/XCO2'][:,:].flatten()[mask] * 1e6
     co2_strong = f['physical_retrieval_results/strong_co2/XCO2'][:,:].flatten()[mask] * 1e6
@@ -81,9 +91,10 @@ if 'physical_retrieval_results' in f:
     h2o_weak = f['physical_retrieval_results/weak_co2/XH2O'][:,:].flatten()[mask]
     h2o_strong = f['physical_retrieval_results/strong_co2/XH2O'][:,:].flatten()[mask]
     h2o_ratio = h2o_weak / h2o_strong
-
+    #h2o_ratio = (f['physical_retrieval_results/weak_co2/H2O_scale_0.00_1.00'][:,:].flatten()[mask] /
+    #             f['physical_retrieval_results/strong_co2/H2O_scale_0.00_1.00'][:,:].flatten()[mask])
     lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[mask]
-    lat =  f['SoundingGeometry/sounding_latitude'][:,:].flatten()[mask]
+    lat = f['SoundingGeometry/sounding_latitude'][:,:].flatten()[mask]
 
 if 'HighLevelResults' in f:
 

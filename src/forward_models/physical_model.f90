@@ -1216,7 +1216,7 @@ contains
           do i=1, num_gases
              ! Replace SH if H2O is used in atmosphere
              if (MCS%window(i_win)%gases(i) == "H2O") then
-             !    this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
+                !    this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
              end if
           end do
 
@@ -1278,67 +1278,72 @@ contains
              ! Enter this branch if we have at least one retrieved gas
              if (SV%num_gas > 0) then
 
-                ! We need to 'reverse-lookup' to see which SV index belongs to this
-                ! gas to grab the right scaling factor.
-                do i=1, SV%num_gas
+                if ((iteration == 1) .or. (SV%num_psurf == 1)) then
 
-                   if (MCS%window(i_win)%gas_retrieve_scale(j)) then
+                   ! We need to 'reverse-lookup' to see which SV index belongs to this
+                   ! gas to grab the right scaling factor. This is done only on the first
+                   ! iteration - or if we retrieve surface pressure.
+                   do i=1, SV%num_gas
 
-                      do_gas_jac = .true.
-                      if (SV%gas_idx_lookup(i) == j) then
+                      if (MCS%window(i_win)%gas_retrieve_scale(j)) then
 
-                         ! This bit here figures out which level/layer range a
-                         ! certain scaling factor corresponds to. They are fractions
-                         ! of surface pressure, so we use 'searchsorted' to find
-                         ! where they would belong to. We also make sure it can't
-                         ! go below or above the first/last level.
+                         do_gas_jac = .true.
+                         if (SV%gas_idx_lookup(i) == j) then
 
-                         s_start(i) = searchsorted_dp((this_atm%p), &
-                              SV%gas_retrieve_scale_start(i) * (this_psurf), .true.)
-                         s_start(i) = max(1, s_start(i))
-                         s_stop(i) = searchsorted_dp((this_atm%p), &
-                              SV%gas_retrieve_scale_stop(i) * (this_psurf), .true.) + 1
-                         s_stop(i) = min(num_active_levels, s_stop(i))
+                            ! This bit here figures out which level/layer range a
+                            ! certain scaling factor corresponds to. They are fractions
+                            ! of surface pressure, so we use 'searchsorted' to find
+                            ! where they would belong to. We also make sure it can't
+                            ! go below or above the first/last level.
 
+                            s_start(i) = searchsorted_dp((this_atm%p), &
+                                 SV%gas_retrieve_scale_start(i) * (this_psurf), .true.)
+                            s_start(i) = max(1, s_start(i))
+                            s_stop(i) = searchsorted_dp((this_atm%p), &
+                                 SV%gas_retrieve_scale_stop(i) * (this_psurf), .true.) + 1
+                            s_stop(i) = min(num_active_levels, s_stop(i))
+
+                         end if
                       end if
-                   end if
 
-                end do
+                   end do
 
-                ! We need to make sure that we are not "doubling up" on a specific
-                ! gas VMR level when retrieving scale factors. E.g. 0:0.5 0.5:1.0 will
-                ! produce overlapping s_start/s_stop.
+                   ! We need to make sure that we are not "doubling up" on a specific
+                   ! gas VMR level when retrieving scale factors. E.g. 0:0.5 0.5:1.0 will
+                   ! produce overlapping s_start/s_stop.
 
-                do i=1, SV%num_gas
-                   do l=1, SV%num_gas
+                   do i=1, SV%num_gas
+                      do l=1, SV%num_gas
+                         ! Skip gases if index does not match
+                         if (SV%gas_idx_lookup(i) /= j) cycle
+                         if (SV%gas_idx_lookup(l) /= j) cycle
+
+                         if (s_start(i) == s_stop(l)) then
+                            s_start(i) = s_start(i) + 1
+                         end if
+                      end do
+                   end do
+
+                   do i=1, SV%num_gas
+
                       ! Skip gases if index does not match
                       if (SV%gas_idx_lookup(i) /= j) cycle
-                      if (SV%gas_idx_lookup(l) /= j) cycle
 
-                      if (s_start(i) == s_stop(l)) then
-                         s_start(i) = s_start(i) + 1
+                      if (s_stop(i) - s_start(i) == 1) then
+                         write(tmp_str, '(A,A)') "Scale factor index error for ", results%SV_names(SV%idx_gas(i,1))%chars()
+                         call logger%error(fname, trim(tmp_str))
+                         write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), SV%gas_retrieve_scale_stop(i)
+
+                         do l=1, num_levels
+                            write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
+                         end do
+
+
+                         return
                       end if
                    end do
-                end do
 
-                do i=1, SV%num_gas
-
-                   ! Skip gases if index does not match
-                   if (SV%gas_idx_lookup(i) /= j) cycle
-
-                   if (s_stop(i) - s_start(i) == 1) then
-                      write(tmp_str, '(A,A)') "Scale factor index error for ", results%SV_names(SV%idx_gas(i,1))%chars()
-                      call logger%error(fname, trim(tmp_str))
-                      write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), SV%gas_retrieve_scale_stop(i)
-
-                      do l=1, num_levels
-                         write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
-                      end do
-
-
-                      return
-                   end if
-                end do
+                end if
 
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
@@ -1349,7 +1354,8 @@ contains
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
-                      this_vmr_profile(s_start(i):s_stop(i)) = this_vmr_profile(s_start(i):s_stop(i)) &
+                      this_vmr_profile(s_start(i):s_stop(i)) = &
+                           this_vmr_profile(s_start(i):s_stop(i)) &
                            * SV%svsv(SV%idx_gas(i,1))
                    end if
                 end do

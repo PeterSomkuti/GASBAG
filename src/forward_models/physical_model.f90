@@ -519,7 +519,7 @@ contains
 
        call logger%info(fname, "Starting main retrieval loop!")
 
-       do i_fr=1, num_frames, 1
+       do i_fr=1, num_frames
           do i_fp=1, num_fp
 
              call cpu_time(cpu_time_start)
@@ -855,7 +855,7 @@ contains
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
     double precision, allocatable :: tmp_v1(:), tmp_v2(:)
-    double precision, allocatable :: KtSeK(:,:)
+    double precision, allocatable :: KtSeK(:,:), gain_matrix(:,:), AK(:,:)
     ! Was the matrix inversion operation successful?
     logical :: success_inv_mat
     ! Was the convolution operation successful?
@@ -908,23 +908,6 @@ contains
     dsigma_scale = MCS%window(i_win)%dsigma_scale
     if (dsigma_scale < 0.0d0) dsigma_scale = 1.0d0
 
-    write(tmp_str, "(A, A)") "Date: ", date%isoformat()
-    call logger%debug(fname, trim(tmp_str))
-
-    write(tmp_str, "(A, F5.1)") "Day of the year: ", doy_dp
-    call logger%debug(fname, trim(tmp_str))
-
-    !write(*,*) solar_rv * 1000.0d0 + earth_rv, solar_doppler
-    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
-         " - SZA: ", SZA(i_fp, i_fr), " - SAA: ", SAA(i_fp, i_fr), &
-         " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
-    call logger%debug(fname, trim(tmp_str))
-
-    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2)") &
-         "Longitude: ", lon(i_fp, i_fr), &
-         " Latitude: ", lat(i_fp, i_fr), &
-         " Altitude: ", altitude(i_fp, i_fr)
-
     select type(my_instrument)
     type is (oco2_instrument)
        ! Read the L1B spectrum for this one measurement!
@@ -936,6 +919,23 @@ contains
     end select
 
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
+
+    write(tmp_str, "(A, A)") "Date: ", date%isoformat()
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, F5.1)") "Day of the year: ", doy_dp
+    call logger%debug(fname, trim(tmp_str))
+
+    !write(*,*) solar_rv * 1000.0d0 + earth_rv, solar_doppler
+    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
+         "SZA: ", SZA(i_fp, i_fr), " - SAA: ", SAA(i_fp, i_fr), &
+         " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2)") &
+         "Longitude: ", lon(i_fp, i_fr), &
+         " Latitude: ", lat(i_fp, i_fr), &
+         " Altitude: ", altitude(i_fp, i_fr)
 
     ! Dispersion array that contains the wavelenghts per pixel
     allocate(this_dispersion(size(radiance_l1b)))
@@ -987,6 +987,7 @@ contains
     allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
     allocate(tmp_v1(N_sv), tmp_v2(N_sv))
     allocate(KtSeK(N_sv, N_sv))
+    allocate(AK(N_sv, N_sv))
 
     ! Allocate Solar continuum (irradiance) array. We do this here already,
     ! since it's handy to have it for estimating the albedo.
@@ -1215,7 +1216,7 @@ contains
           do i=1, num_gases
              ! Replace SH if H2O is used in atmosphere
              if (MCS%window(i_win)%gases(i) == "H2O") then
-                 this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
+             !    this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
              end if
           end do
 
@@ -1292,11 +1293,11 @@ contains
                          ! where they would belong to. We also make sure it can't
                          ! go below or above the first/last level.
 
-                         s_start(i) = searchsorted_dp(log(this_atm%p), &
-                              SV%gas_retrieve_scale_start(i) * log(this_psurf), .false.)
+                         s_start(i) = searchsorted_dp((this_atm%p), &
+                              SV%gas_retrieve_scale_start(i) * (this_psurf), .false.)
                          s_start(i) = max(1, s_start(i))
-                         s_stop(i) = searchsorted_dp(log(this_atm%p), &
-                              SV%gas_retrieve_scale_stop(i) * log(this_psurf), .false.)
+                         s_stop(i) = searchsorted_dp((this_atm%p), &
+                              SV%gas_retrieve_scale_stop(i) * (this_psurf), .false.)
                          s_stop(i) = min(num_active_levels, s_stop(i))
 
                       end if
@@ -1322,6 +1323,10 @@ contains
 
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
+
+                      !write(*,*) "GAS: ", MCS%window(i_win)%gases(j)%chars()
+                      !write(*,*) "s_start: ", s_start(i)
+                      !write(*,*) "s_stop: ", s_stop(i)
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
@@ -1548,6 +1553,7 @@ contains
 
        ! Allocate various arrays that depend on N_spec
        allocate(K(N_spec, N_sv))
+       allocate(gain_matrix(N_sv, N_spec))
        allocate(radiance_meas_work(N_spec))
        allocate(radiance_calc_work(N_spec))
        allocate(radiance_tmp_work(N_spec))
@@ -1787,12 +1793,6 @@ contains
 
        ! Calculate Shat_inv
        Shat_inv = KtSeK + Sa_inv
-       call invert_matrix(Shat_inv, Shat, success_inv_mat)
-
-       if (.not. success_inv_mat) then
-          call logger%error(fname, "Failed to invert Shat^-1")
-          return
-       end if
 
        ! Check delta sigma square for this iteration
        dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
@@ -1827,6 +1827,7 @@ contains
              converged = .false.
              results%converged(i_fp, i_fr) = 0
           end if
+
 
           allocate(pwgts(num_active_levels))
 
@@ -1876,9 +1877,27 @@ contains
           ! Save the final dSigma-squared value (in case anyone needs it)
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
 
+          ! Calculate Shat from Shat_inverse
+          call invert_matrix(Shat_inv, Shat, success_inv_mat)
+
+          if (.not. success_inv_mat) then
+             call logger%error(fname, "Failed to invert Shat^-1")
+             return
+          end if
+
+          ! Calculate the Gain matrix
+          gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
+
+          ! Calculate the averaging kernel
+          AK(:,:) = matmul(gain_matrix, K)
+
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
              SV%sver(i) = sqrt(Shat(i,i))
+          end do
+
+          do i=1, N_sv
+             write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
           end do
 
           ! Put the SV uncertainty into the result container
@@ -2021,7 +2040,7 @@ contains
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.
        deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-            noise_work, Se_inv, K, solar_irrad)
+            noise_work, Se_inv, K, gain_matrix, solar_irrad)
 
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
@@ -2225,6 +2244,7 @@ contains
     ! reals/double precision, but not for integers.
     results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%sv_uncertainty = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -2348,9 +2368,9 @@ contains
                 if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
 
                 write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
-                write(tmp_str, '(A, G0.3)') trim(tmp_str), &
+                write(tmp_str, '(A, F4.2)') trim(tmp_str), &
                      SV%gas_retrieve_scale_start(j)
-                write(tmp_str, '(A,A,G0.3)') trim(tmp_str), ":" , &
+                write(tmp_str, '(A,A,F4.2)') trim(tmp_str), "_" , &
                      SV%gas_retrieve_scale_stop(j)
                 results%sv_names(i) = trim(tmp_str)
 

@@ -87,16 +87,16 @@ if 'physical_retrieval_results' in f:
 
 if 'HighLevelResults' in f:
 
-    mask = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::10] != 0
+    mask = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::200] != 0
 
-    lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[::10][mask]
-    lat = f['SoundingGeometry/sounding_latitude'][:,:].flatten()[::10][mask]
+    lon = f['SoundingGeometry/sounding_longitude'][:,:].flatten()[::200][mask]
+    lat = f['SoundingGeometry/sounding_latitude'][:,:].flatten()[::200][mask]
 
-    co2_ratio = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::10][mask]
-    h2o_ratio = f['HighLevelResults/CloudScreen/h2o_ratio'][:,:].flatten()[::10][mask]
+    co2_ratio = f['HighLevelResults/CloudScreen/co2_ratio'][:,:].flatten()[::200][mask]
+    h2o_ratio = f['HighLevelResults/CloudScreen/h2o_ratio'][:,:].flatten()[::200][mask]
 
-    co2_weak = f['HighLevelResults/CO2_bands/co2_vcd_weakBand'][:,:].flatten()[::10][mask]
-    co2_strong = f['HighLevelResults/CO2_bands/co2_vcd_strongBand'][:,:].flatten()[::10][mask]
+    co2_weak = f['HighLevelResults/CO2_bands/co2_vcd_weakBand'][:,:].flatten()[::200][mask]
+    co2_strong = f['HighLevelResults/CO2_bands/co2_vcd_strongBand'][:,:].flatten()[::200][mask]
 
 if 'physical_retrieval_results' in f:
     plot_map_and_hist(lon, lat, h2o_strong, gridsize=gridsize,

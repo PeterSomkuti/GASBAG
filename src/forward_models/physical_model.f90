@@ -216,7 +216,7 @@ contains
     ! Loop variables
     integer :: i, j, i_fp, i_fr, i_win, band
     ! Retrieval count
-    integer :: retr_count
+    integer :: retr_count, total_number_todo
     ! Return value of physical_fm, tells us whether this one has converged or not
     logical :: this_converged
     ! File unit for debugging only..
@@ -515,7 +515,12 @@ contains
        ! so far, and the mean_duration keeps track of the average
        ! processing time.
        retr_count = 0
+       total_number_todo = (num_fp * num_frames) / &
+            (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
+
+
+
 
        call logger%info(fname, "Starting main retrieval loop!")
 
@@ -535,15 +540,20 @@ contains
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
              if (mod(retr_count, 1) == 0) then
-                write(tmp_str, '(A, G0.1, A, G0.1, A, F5.2, A, F10.5, A, L1)') &
+                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
-                     dble(100 * dble(retr_count) / dble(num_fp * num_frames)), "%) - ", &
+                     dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
                      (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', this_converged
                 call logger%debug(fname, trim(tmp_str))
              end if
 
           end do
        end do
+
+
+
+
+
 
        ! Create an HDF group for all windows separately
        group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
@@ -1155,7 +1165,7 @@ contains
                    ! If H2O is needed to be retrieved, take it from the MET atmosphere
                    ! specific humidty directly, rather than the H2O column of the
                    ! atmosphere text file.
-                   ! this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
+                   this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
                 end if
              end do
 
@@ -2024,11 +2034,11 @@ contains
 
        end if
 
-       open(file="jacobian.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) (K(i, j), j=1, N_sv)
-       end do
-       close(funit)
+!!$       open(file="jacobian.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) (K(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
 !!$
 !!$
 !!$       open(file="l1b_spec.dat", newunit=funit)

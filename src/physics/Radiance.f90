@@ -2,7 +2,7 @@ module radiance_mod
 
     use math_utils_mod
 
-    public calculate_radiance
+    public calculate_Beer_Lambert
 
 contains
 

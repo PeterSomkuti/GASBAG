@@ -84,8 +84,10 @@ program GeoCARBSIF
 
 
   ! Open up the output HDF5 file for writing and save the HDF5 file handler in
-  ! MCS to be used all over the program.
-  call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_TRUNC_F, &
+  ! MCS to be used all over the program. The default behaviour (from now on)
+  ! is to abort if the file already exists. Overwriting can be dangerous!!
+
+  call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
        MCS%output%output_file_id, hdferr)
   call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
        // trim(MCS%output%output_filename%chars()))

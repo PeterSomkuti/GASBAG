@@ -1448,8 +1448,8 @@ contains
 
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
-       call calculate_radiance(hires_grid, SZA(i_fp, i_fr), &
-            VZA(i_fp, i_fr), albedo, total_tau, &
+       call calculate_Beer_Lambert(hires_grid, mu0, mu, &
+            albedo, total_tau, &
             radiance_calc_work_hi)
 
        ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
@@ -1631,6 +1631,8 @@ contains
              do i=1, N_spec
                 ! Remember: spike_list is in full l1b size, but noise work
                 ! is bounded by our window choice, thus needs to be offset
+                ! TODO: This threshold value should be user-supplied, as well
+                ! as the noise inflation factor.
                 if (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) then
                    noise_work(i) = noise_work(i) * 10000.0d0
                 end if
@@ -1939,7 +1941,7 @@ contains
 
           ! Save retrieved CHI2 - this is the predicted chi2 from the 'last+1'
           ! linear step that is not evaluated.
-          results%chi2(i_fp, i_fr) = linear_prediction_chi2
+          results%chi2(i_fp, i_fr) = this_chi2 !linear_prediction_chi2
 
           ! Get an SNR (mean and std) estimate
           results%SNR(i_fp, i_fr) = mean(radiance_meas_work / noise_work)

@@ -42,7 +42,7 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=medium")
+  set(dialect "-ffree-form -std=f2018 -fimplicit-none -mcmodel=large")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
@@ -65,8 +65,8 @@ set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
-#find_package(BLAS REQUIRED)
-#find_package(LAPACK REQUIRED)
+find_package(BLAS REQUIRED)
+find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran)
 find_package(NETCDF REQUIRED COMPONENTS Fortran)
 # This is where we put compiled modules
@@ -106,8 +106,8 @@ target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5
 #${GPERFTOOLS_INCLUDE_DIR}
 )
 target_link_libraries(GeoCARBSIF
-#${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
--L/usr/lib -llapack -lblas
+${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
+#-L/usr/lib -llapack -lblas
 ${HDF5_Fortran_LIBRARIES}
 #${HDF5_Fortran_HL_LIBRARIES}
 )

@@ -157,22 +157,22 @@ nonclear_true = (~clear_true)
 
 # Ratios
 h2o_ratio = new['physical_retrieval_results/weak_co2/XH2O'][:,0] / new['physical_retrieval_results/strong_co2/XH2O'][:,0]
-h2o_ratio_lower = new['physical_retrieval_results/weak_co2/H2O_scale_0.850:1.00'][:,0] / new['physical_retrieval_results/strong_co2/H2O_scale_0.850:1.00'][:,0]
-h2o_ratio_mid = new['physical_retrieval_results/weak_co2/H2O_scale_0.00:0.850'][:,0] / new['physical_retrieval_results/strong_co2/H2O_scale_0.00:0.850'][:,0]
+#h2o_ratio_lower = new['physical_retrieval_results/weak_co2/H2O_scale_0.00:1.00'][:,0] / new['physical_retrieval_results/strong_co2/H2O_scale_0.850:1.00'][:,0]
+#h2o_ratio_mid = new['physical_retrieval_results/weak_co2/H2O_scale_0.00:0.00'][:,0] / new['physical_retrieval_results/strong_co2/H2O_scale_0.00:0.850'][:,0]
 
 co2_ratio = new['physical_retrieval_results/weak_co2/XCO2'][:,0] / new['physical_retrieval_results/strong_co2/XCO2'][:,0]
-co2_ratio_mid = new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700'][:,0] / new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700'][:,0]
-co2_ratio_lower = new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00'][:,0] / new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00'][:,0]
+#co2_ratio_mid = new['physical_retrieval_results/weak_co2/CO2_scale_0.35_0.70'][:,0] / new['physical_retrieval_results/strong_co2/CO2_scale_0.35_0.70'][:,0]
+#co2_ratio_lower = new['physical_retrieval_results/weak_co2/CO2_scale_0.70_1.00'][:,0] / new['physical_retrieval_results/strong_co2/CO2_scale_0.70_1.00'][:,0]
 
-co2_ratio_mid_uncert = co2_ratio_mid * np.sqrt((new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700_uncertainty'][:,0] /
-                                                new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700'][:,0])**2 +
-                                               (new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700_uncertainty'][:,0] /
-                                                new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700'][:,0])**2)
+#co2_ratio_mid_uncert = co2_ratio_mid * np.sqrt((new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700_uncertainty'][:,0] /
+#                                                new['physical_retrieval_results/weak_co2/CO2_scale_0.300:0.700'][:,0])**2 +
+#                                               (new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700_uncertainty'][:,0] /
+#                                                new['physical_retrieval_results/strong_co2/CO2_scale_0.300:0.700'][:,0])**2)
 
-co2_ratio_lower_uncert = co2_ratio_lower * np.sqrt((new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00_uncertainty'][:,0] /
-                                                    new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00'][:,0])**2 +
-                                                   (new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00_uncertainty'][:,0] /
-                                                    new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00'][:,0])**2)
+#co2_ratio_lower_uncert = co2_ratio_lower * np.sqrt((new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00_uncertainty'][:,0] /
+#                                                    new['physical_retrieval_results/weak_co2/CO2_scale_0.700:1.00'][:,0])**2 +
+#                                                   (new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00_uncertainty'][:,0] /
+#                                                    new['physical_retrieval_results/strong_co2/CO2_scale_0.700:1.00'][:,0])**2)
 
 if ('ZLO' in new['physical_retrieval_results/strong_co2']):
     zlo_strong = new['physical_retrieval_results/strong_co2/ZLO'][:,0]
@@ -181,19 +181,27 @@ else:
 
 # Try a simple new threshold-based classification
 clear_new = (
-    (co2_ratio_lower > 1.00) & (co2_ratio_lower < 1.04) &
-    (co2_ratio_mid > 0.8) & (co2_ratio_mid < 1.2) &
-    (h2o_ratio_lower > 0.96) & (h2o_ratio_lower < 1.02)
-    # (zlo_strong > 0) & (zlo_strong < 1e17)
+    (co2_ratio > 0.9) &
+    (co2_ratio < 1.05) &
+    (h2o_ratio > 0.97) &
+    (h2o_ratio < 1.02) &
+    #(co2_ratio_lower > 1.00) & (co2_ratio_lower < 1.04) &
+    #(co2_ratio_mid > 0.8) & (co2_ratio_mid < 1.2)
+    #(h2o_ratio_lower > 0.96) & (h2o_ratio_lower < 1.02)
+    (zlo_strong > -1e17) & (zlo_strong < 1e17)
 )
 
 mask_new = (
-    np.isfinite(co2_ratio_lower) &
-    np.isfinite(co2_ratio_mid) &
+    #np.isfinite(co2_ratio_lower) &
+    np.isfinite(co2_ratio) &
     np.isfinite(h2o_ratio) &
     #(land_water == 1) & 
     (new['physical_retrieval_results/strong_co2/converged'][:,0] != -1) &
-    (new['physical_retrieval_results/weak_co2/converged'][:,0] != -1)
+    (new['physical_retrieval_results/weak_co2/converged'][:,0] != -1) & 
+    (new['physical_retrieval_results/strong_co2/H2O_scale_0.00_1.00'][:,0] != 1e-10) &
+    (new['physical_retrieval_results/weak_co2/H2O_scale_0.00_1.00'][:,0] != 1e-10) &
+    (new['physical_retrieval_results/strong_co2/CO2_scale_0.00_1.00'][:,0] != 1e-10) &
+    (new['physical_retrieval_results/weak_co2/CO2_scale_0.00_1.00'][:,0] != 1e-10)
     )
 
 calculate_statistics(clear_new[mask_new], ~clear_new[mask_new], clear_true[mask_new], nonclear_true[mask_new])
@@ -245,15 +253,15 @@ plot_sampling_density(lon[mask_idp][(clear_idp & (abp_cloudflag == 0))[mask_idp]
 
 # Try a decision tree classifier using all the retrieval results
 tree_data = np.vstack([
-    co2_ratio_mid,
+    #co2_ratio_mid,
     #co2_ratio_mid_uncert,
-    co2_ratio_lower,
+    #co2_ratio_lower,
     #co2_ratio_lower_uncert,
-    #co2_ratio,
-    #h2o_ratio,
-    h2o_ratio_mid,
-    h2o_ratio_lower,
-    zlo_strong,
+    co2_ratio,
+    h2o_ratio
+    #h2o_ratio_mid,
+    #h2o_ratio_lower,
+    #zlo_strong,
     #new['physical_retrieval_results/strong_co2/num_iterations'][:,0],
     #land_water,
     #new['physical_retrieval_results/strong_co2/converged'][:,0]
@@ -261,7 +269,7 @@ tree_data = np.vstack([
     #new['physical_retrieval_results/strong_co2/SIF_absolute'][:,0],
     #new['physical_retrieval_results/strong_co2/albedo_order_0'][:,0],
     #new['physical_retrieval_results/weak_co2/albedo_order_0'][:,0],
-    dp_abp
+    #dp_abp
     #new['physical_retrieval_results/strong_co2/retrieved_chi2'][:,0],
     #new['physical_retrieval_results/weak_co2/retrieved_chi2'][:,0],
     ]).T
@@ -284,20 +292,20 @@ tree_fit = tree_clf.fit(tree_data[mask_new], tree_target[mask_new])
 try:
     dot_data = tree.export_graphviz(tree_fit, out_file='graph.dot',
                                     feature_names=[
-                                        'co2_ratio_mid',
+                                        #'co2_ratio_mid',
                                         #'co2_ratio_mid_uncert',
                                         'co2_ratio_lower',
                                         #'co2_ratio_lower_uncert',
-                                        #'co2_ratio',
-                                        #'h2o_ratio',
-                                        'h2o_ratio_mid',
-                                        'h2o_ratio_lower',
-                                        'zlo_strong',
+                                        'co2_ratio',
+                                        'h2o_ratio',
+                                        #'h2o_ratio_mid',
+                                        #'h2o_ratio_lower',
+                                        #'zlo_strong',
                                         #'num_iterations_sco2',
                                         #'land_water',
                                         #'albedo_weak',
                                         #'albedo_strong',
-                                        'dpsurf'
+                                        #'dpsurf'
                                         #'weak_chi2',
                                         #'strong_chi2'
                                 ],
@@ -388,10 +396,10 @@ for od_type in ['water', 'ice']: #, 'aerosol', 'total']:
     if od_type == 'total':
         this_od = total_od_1
     else:
-        this_od = truth[f'Cloud {od_type}']
+        this_od = truth[f'Cloud {od_type}'] + 0.01
 
     fig = plt.figure(figsize=(10, 4))
-    lbins = np.logspace(-2, 1, 40)
+    lbins = np.logspace(-3, 2, 40)
 
     abp_clear = abp_cloudflag.copy()
     abp_clear[abp_cloudflag != 0] = 0

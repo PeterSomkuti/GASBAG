@@ -520,8 +520,10 @@ contains
        mean_duration = 0.0d0
 
 
-
-
+       ! BIG LOOP
+       ! TODO: it would be REALLY neat if this loop could be
+       ! multi-threaded at some point. Should give a near-linear
+       ! speedup.
        call logger%info(fname, "Starting main retrieval loop!")
 
        do i_fr=1, num_frames, MCS%window(i_win)%frame_skip
@@ -549,8 +551,6 @@ contains
 
           end do
        end do
-
-
 
 
 
@@ -590,7 +590,7 @@ contains
                results%sv_uncertainty(:,:,i), out_dims2d, -9999.99d0)
        end do
 
-       ! Save the dry air mass (moles / cm2)
+       ! Save the dry air mass (molecules / cm2)
        do i=1, SV%num_gas
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
 
@@ -702,9 +702,11 @@ contains
        call clear_SV(SV)
        call logger%info(fname, "Clearing up SV structure")
 
+       ! Clear up sounding geometry
        deallocate(SZA, SAA, VZA, VAA)
        deallocate(lon, lat, altitude, relative_velocity, relative_solar_velocity)
 
+       ! If present, deallocate a bad sample list as well as the spike filter list
        if (allocated(bad_sample_list)) deallocate(bad_sample_list)
        if (allocated(spike_list)) deallocate(spike_list)
 
@@ -928,6 +930,7 @@ contains
 
     end select
 
+    ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
     write(tmp_str, "(A, A)") "Date: ", date%isoformat()
@@ -936,7 +939,6 @@ contains
     write(tmp_str, "(A, F5.1)") "Day of the year: ", doy_dp
     call logger%debug(fname, trim(tmp_str))
 
-    !write(*,*) solar_rv * 1000.0d0 + earth_rv, solar_doppler
     write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
          "SZA: ", SZA(i_fp, i_fr), " - SAA: ", SAA(i_fp, i_fr), &
          " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
@@ -967,10 +969,8 @@ contains
     call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
          SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
 
-    solar_doppler = 0.0d0
-    instrument_doppler = 0.0d0
-    !solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
-    !instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+    solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+    instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
 
     ! Set up retrieval quantities:
@@ -1080,8 +1080,6 @@ contains
        end do
     end if
 
-
-
     ! Regardless of whether they are retrieved or not, the solar shift and stretch
     ! are set to 'default' values here. If we retrieve them, this value is then just
     ! updated from the state vector.
@@ -1162,7 +1160,7 @@ contains
 
              do i=1, num_gases
                 if (MCS%window(i_win)%gases(i) == "H2O") then
-                   ! If H2O is needed to be retrieved, take it from the MET atmosphere
+                   ! If H2O needs to be retrieved, take it from the MET atmosphere
                    ! specific humidty directly, rather than the H2O column of the
                    ! atmosphere text file.
                    this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
@@ -1222,15 +1220,8 @@ contains
              end if
 
           end if
-
-          do i=1, num_gases
-             ! Replace SH if H2O is used in atmosphere
-             if (MCS%window(i_win)%gases(i) == "H2O") then
-                !    this_atm%sh = this_atm%gas_vmr(:,i) / (SH_H2O_CONV + this_atm%gas_vmr(:,i))
-             end if
-          end do
-
        endif
+
 
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
@@ -1257,7 +1248,6 @@ contains
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
-          !allocate(gas_tau_pert(N_hires, num_levels-1, num_levels-1, num_gases))
           allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels))
@@ -1280,6 +1270,10 @@ contains
           end if
 
           do j=1, num_gases
+             ! Main gas loop. This loops over all present gases in the
+             ! microwindow, and depending on whether we want to retrieve
+             ! this gas or not, the code determines the partial column
+             ! segment, and applies the retrieved scale factor to it.
 
              ! Copy over this gases' VMR profile
              this_vmr_profile(:) = this_atm%gas_vmr(:,j)
@@ -1419,30 +1413,6 @@ contains
           allocate(total_tau(N_hires))
           total_tau(:) = 0.0d0
           total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
-
-!!$          do i=1, num_active_levels
-!!$             write(tmp_str,'(A,G0.1,A,G0.1,A)') "gas_od_iter", iteration, "layer", i, ".dat"
-!!$             open(newunit=funit, file=trim(tmp_str))
-!!$             do j=1, size(gas_tau, 1)
-!!$                write(funit, *) (gas_tau(j,i,l), l=1,size(gas_tau,3))
-!!$             end do
-!!$             close(funit)
-!!$          end do
-!!$
-
-!!$          open(newunit=funit, file="gas_od_full.dat")
-!!$          do j=1, size(gas_tau, 1)
-!!$             write(funit, *) (sum(gas_tau(j,:,l)), l=1,size(gas_tau,3))
-!!$          end do
-!!$          close(funit)
-
-!!$          write(tmp_str,'(A,G0.1,A)') "gas_dvmr_iter", iteration, ".dat"
-!!$          open(newunit=funit, file=trim(tmp_str))
-!!$          do j=1, size(gas_tau, 1)
-!!$             write(funit, *) (gas_tau_dvmr(j,i,2), i=1,size(gas_tau_dvmr,2))
-!!$          end do
-!!$          close(funit)
-
        end if
 
 
@@ -1464,7 +1434,7 @@ contains
        ! And multiply to get the full solar irradiance in physical units
        this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
 
-       ! If we retrieved either solar shift or stretch (or both), then we
+       ! If we retrieve either solar shift or stretch (or both), then we
        ! need to know the partial derivative of the solar spectrum w.r.t.
        ! wavelength: dsolar_dlambda
        if ((SV%num_solar_shift == 1) .or. (SV%num_solar_stretch == 1)) then
@@ -1498,11 +1468,11 @@ contains
        end if
 
 
-       ! Multiply with the solar spectrum for physical units and add SIF contributions. For
-       ! various Jacobian calculations we also need the radiance MINUS the additive contributions,
-       ! so we store them in a separate array.
+       ! Multiply with the solar spectrum for physical units and add SIF and ZLO contributions.
+       ! For various Jacobian calculations we also need the radiance MINUS the additive
+       ! contributions, so we store them in a separate array.
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
-       radiance_tmp_work_hi(:) = radiance_calc_work_hi(:) !* (1.0d0 / mu0 + 1.0d0 / mu)
+       radiance_tmp_work_hi(:) = radiance_calc_work_hi(:)
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
 
 
@@ -1553,7 +1523,7 @@ contains
 
 
        ! Stokes coefficients
-       ! TODO: apply Stokes coefficients here?
+       ! TODO: apply Stokes coefficients here via instrument parameters from L1b?
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:)
        K_hi(:,:) = K_hi(:,:)
 
@@ -1580,7 +1550,6 @@ contains
 
        ! Here we grab the index limits for the radiances for
        ! the choice of our microwindow and the given dispersion relation
-
        call calculate_dispersion_limits(this_dispersion, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
 
        ! Number of spectral points in the output resolution
@@ -1602,7 +1571,7 @@ contains
           ! Plug in the Jacobians (SIF is easy)
           K(:, SV%idx_sif(1)) = 1.0d0
        end if
-
+       ! Same for ZLO
        if (SV%num_zlo > 0) then
           K(:, SV%idx_zlo(1)) = 1.0d0
        end if
@@ -1645,27 +1614,8 @@ contains
        ! Inverse noise covariance, we keep it diagonal, as usual
        Se_inv(:,:) = 0.0d0
        do i=1, N_spec
-          Se_inv(i,i) = 1 / (noise_work(i) ** 2)
+          Se_inv(i,i) = 1.0d0 / (noise_work(i) ** 2)
        end do
-
-!!$       write(*,*) "Albedo positions: ", SV%idx_albedo
-!!$       write(*,*) "Dispersion positions: ", SV%idx_dispersion
-!!$       write(*,*) "SIF position: ", SV%idx_sif
-!!$       write(*,*) "psurf position: ", SV%idx_psurf
-!!$
-!!$       open(file="hires_jacs.dat", newunit=funit)
-!!$       do i=1, size(this_solar, 1)
-!!$          write(funit,*) solar_spectrum_regular(i, 1), (K_hi(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$       open(file="hires_spec.dat", newunit=funit)
-!!$       do i=1, N_hires
-!!$          write(funit,*) this_solar(i,1), this_solar(i,2), dsolar_dlambda(i), &
-!!$               solar_spectrum_regular(i,1), &
-!!$               solar_spectrum_regular(i,2), radiance_calc_work_hi(i)
-!!$       end do
-!!$       close(funit)
 
        ! Convolution with the instrument line shape function(s)
        ! Note: we are only passing the ILS arrays that correspond to the
@@ -1812,7 +1762,7 @@ contains
 
        ! K^T Se K
        KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
-       ! (1+gamma) * Sa^-1 + (K^T Se K) 
+       ! (1+gamma) * Sa^-1 + (K^T Se K)
        tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
 
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
@@ -1833,7 +1783,12 @@ contains
        ! Check delta sigma square for this iteration
        dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
 
-       ! In the case of retrieving gas - we have to adjust the retrieved state vector
+       ! Calculate the chi2 of this iteration
+       this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
+            noise_work, N_spec - N_sv)
+
+
+       ! In the case of retrieving gases - we have to adjust the retrieved state vector
        ! if the retrieval wants to push it below 0.
 
        do i=1, SV%num_gas
@@ -1846,6 +1801,8 @@ contains
           end do
        end do
 
+
+       ! Now we check for convergence!
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
@@ -1864,7 +1821,7 @@ contains
              results%converged(i_fp, i_fr) = 0
           end if
 
-
+          ! Allocate array for pressure weights
           allocate(pwgts(num_active_levels))
 
           ! Calculate the XGAS for every retreived gas only, same as above with the
@@ -1941,7 +1898,7 @@ contains
 
           ! Save retrieved CHI2 - this is the predicted chi2 from the 'last+1'
           ! linear step that is not evaluated.
-          results%chi2(i_fp, i_fr) = this_chi2 !linear_prediction_chi2
+          results%chi2(i_fp, i_fr) = this_chi2
 
           ! Get an SNR (mean and std) estimate
           results%SNR(i_fp, i_fr) = mean(radiance_meas_work / noise_work)
@@ -1984,8 +1941,6 @@ contains
              ! Make sure we keep the 'old' Chi2 only from a valid iteration
              old_chi2 = this_chi2
           end if
-
-          this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, noise_work, N_spec - N_sv)
 
           if (iteration == 1) then
              chi2_ratio = 0.5d0

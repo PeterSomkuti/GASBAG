@@ -1,17 +1,28 @@
-!! Main control_mod structure (MCS) of the program, for easy access of important
-!! quantities throughout the program, such as instrument name and retrieval
-!! settings, algorithm modes, .. the whole shebang.
-!! This is designed to be instrument-independent, so apart from the name of the
-!! instrument, no instrument-specifics should be stored here.
+!> @brief Main control_mod structure (MCS) of the program
+!> @file Control.f90
+!> @author Peter Somkuti
+!>
+!> @detail
+!> This module is for easy access of important quantities throughout the
+!> program, such as instrument name and retrieval settings, algorithm modes, ..
+!> the whole shebang. A lot of other modules and subroutines access variables
+!> from this module, which unfortunately makes those pieces of code very
+!> dependent on the Control module - and thus less portable. On the other
+!> hand, it makes some of the functions a bit cleaner, since you do not need
+!> to drag every single parameter through a number of subroutines..
 
 module control_mod
 
+  ! System modules
+  use HDF5
+
+  ! Third-party modules
   use stringifor
   use finer, only: file_ini
   use logger_mod, only: logger => master_logger
   use file_utils_mod, only: check_config_files_exist, check_fini_error, &
        fini_extract, string_to_bool
-  use HDF5
+
 
   implicit none
 
@@ -19,92 +30,141 @@ module control_mod
   ! extend the size of these arrays without a more complicated deallocation
   ! and reallocation procedure.
 
-  ! At the moment, we only plan the Guanter and Frankenberg methods
+  !> Number of maximally allowed algorithms
   integer, parameter :: MAX_ALGORITHMS = 2
-  ! Number of retrieval windows
+  !> Number of retrieval windows
   integer, parameter :: MAX_WINDOWS = 10
-  ! Number of absorbers
+  !> Number of absorbers
   integer, parameter :: MAX_GASES = 10
 
   type, private :: CS_general
-     integer :: N_soundings ! Number of soundings to be processed
-     integer :: N_fp, N_frame ! Number of frames and footprints
-     integer :: N_bands ! Number of bands
-     integer, allocatable :: N_spec(:) ! Number of spectral pixels per band
+     !> Number of soundings to be processed
+     integer :: N_soundings
+     !> Number of frames and footprints
+     integer :: N_fp, N_frame
+     !> Number of bands
+     integer :: N_bands
+     !> Number of spectral points / channels per band
+     integer, allocatable :: N_spec(:)
   end type CS_general
 
   type, private :: CS_algorithm
-     type(string) :: name(MAX_ALGORITHMS) ! Name of the algorithm(s) used?
-     integer :: N_algorithms ! How many do we want to actually use?
-     integer :: N_basisfunctions ! How mamy basis functions do we read in (and maybe use)?
-     logical :: using_GK_SIF ! Do we use the Guanter-type retrival?
-     logical :: using_physical ! Do we use a physics-based retrieval?
-     type(string) :: solar_file ! Path to the solar model file_exists
-     type(string) :: solar_type ! Which type of solar model?
+     !> Name of the algorithm(s) used?
+     type(string) :: name(MAX_ALGORITHMS)
+     !> How many do we want to actually use?
+     integer :: N_algorithms
+     !> How mamy basis functions do we read in (and maybe use) for Guanter-type?
+     integer :: N_basisfunctions
+     !> Do we use the Guanter-type retrival?
+     logical :: using_GK_SIF
+     !> Do we use a physics-based retrieval?
+     logical :: using_physical
+     !> Path to the solar model file
+     type(string) :: solar_file
+     !> Which type of solar model?
+     type(string) :: solar_type
   end type CS_algorithm
 
   type, private :: CS_window
-     logical :: used ! Is this CS_window structure used?
-     type(string) :: name ! The name will be used in the output file
-     double precision :: wl_min ! Window wavelength start and end
+     !> Is this CS_window structure used?
+     logical :: used
+     !> The name will be used in the output file
+     type(string) :: name
+     !> Window wavelength start (in microns)
+     double precision :: wl_min
+     !> Window wavelength end (in microns)
      double precision :: wl_max
-     double precision :: wl_spacing ! The high-resolution wavelength grid spacing
-     integer :: band ! Which satellite instrument band are we using? 
-     ! SV_string contains the space-separated state vector which will
-     ! determine the state vector structure for the retrieval.
+     !> The high-resolution wavelength grid spacing
+     double precision :: wl_spacing
+     !> Which satellite instrument band are we using?
+     integer :: band
+     !> SV_string contains the space-separated state vector which will
+     !> determine the state vector structure for the retrieval.
      type(string) :: SV_string
+     !> Path to the basisfunction file
      type(string) :: basisfunction_file
-     ! How many parameters of various state vector elements do we want to
-     ! retrieve (physical retrieval only)
-     integer :: albedo_order, dispersion_order
-     double precision, allocatable :: dispersion_pert(:), dispersion_cov(:)
+     !> Order of albedo-polynomial to be retrieved (number + 1)
+     integer :: albedo_order
+     !> Number of dispersion coefficients to be retrieved
+     integer :: dispersion_order
+     !> Dispersion perturbation value for Jacobians
+     double precision, allocatable :: dispersion_pert(:)
+     !> Dispersion prior covariance value
+     double precision, allocatable :: dispersion_cov(:)
+     !> Names of gases which are present in the window
      type(string), allocatable :: gases(:)
-     ! This gas_index variable holds the information about which gas-section (CS_gas)
-     ! index corresponds to the gas that is stored in 'gases'
+     !> This gas_index variable holds the information about which gas-section (CS_gas)
+     !> index corresponds to the gas that is stored in 'gases'
      integer, allocatable :: gas_index(:)
-     ! Is this gas being retrieved?
+     !> Is this gas being retrieved?
      logical, allocatable :: gas_retrieved(:)
-     ! What type of gas retrieval is used here?
-     logical, allocatable :: gas_retrieve_profile(:), gas_retrieve_scale(:)
-     double precision, allocatable :: gas_retrieve_scale_start(:,:), &
-          gas_retrieve_scale_stop(:,:), gas_retrieve_scale_cov(:,:)
+     !> Are we retrieving a gas profile?
+     logical, allocatable :: gas_retrieve_profile(:)
+     !> Are we retrieving scale factors?
+     logical, allocatable :: gas_retrieve_scale(:)
+     !> At which p/psurf does this partial column start?
+     double precision, allocatable :: gas_retrieve_scale_start(:,:)
+     !> At which p/psurf does this partial column stop?
+     double precision, allocatable :: gas_retrieve_scale_stop(:,:)
+     !> What is the covariance for this partial column?
+     double precision, allocatable :: gas_retrieve_scale_cov(:,:)
+     !> What is the number of gases in this window?
      integer :: num_gases
+     !> What is the number of sublayers to be used for gas OD calculations
      integer :: N_sublayers
-     double precision :: dsigma_scale ! Convergence scaling factor
+     !> The dsigma_square factor to adjust convergence
+     double precision :: dsigma_scale
+     !> Number of iterations after which the rerieval is stopped
      integer :: max_iterations
-     ! Do we use the less-accurate, but faster FFT convolution with an
-     ! averaged ILS kernel? (DEPRECATED)
+     !> Do we use the less-accurate, but faster FFT convolution with an
+     !> averaged ILS kernel? (DEPRECATED)
      logical :: fft_convolution
-     ! Location of the atmosphere file which must contain the gases mentioned
-     ! in the 'gases' line
+     !> Location of the atmosphere file which must contain the gases mentioned
+     !> in the 'gases' line
      type(string) :: atmosphere_file
-     ! Initial value for the Levenberg-Marquart damping parameter
+     !> Initial value for the Levenberg-Marquart damping parameter
      double precision :: lm_gamma
-     ! If this is true, then the physical retrieval will allow for divergent
-     ! steps, where the LM-gamma parameter will be adjusted.
+     !> If this is true, then the physical retrieval will allow for divergent
+     !> steps, where the LM-gamma parameter will be adjusted.
      logical :: allow_divergences
+     !> Only retrieve every x'th frame
      integer :: frame_skip
+     !> Only retrieve every x'th footprint
      integer :: footprint_skip
   end type CS_window
 
   type, private :: CS_input
-     type(string) :: l1b_filename , met_filename! Path to the L1B/MET file
-     integer(hid_t) :: l1b_file_id, met_file_id ! HDF file handler of L1B/MET file
-     type(string) :: instrument_name ! Name of the instrument
+     !> Path to L1B file
+     type(string) :: l1b_filename
+     !> Path to MET file
+     type(string) :: met_filename
+     !> L1B HDF file ID
+     integer(hid_t) :: l1b_file_id
+     !> MET HDF file ID
+     integer(hid_t) :: met_file_id
+     !> Name of the instrument
+     type(string) :: instrument_name
   end type CS_input
 
   type, private :: CS_output
-     type(string) :: output_filename ! Where does the ouptut HDF file go?
+     !> Where does the ouptut HDF file go?
+     type(string) :: output_filename
+     !> HDF File ID for the output file
      integer(hid_t) :: output_file_id
-     logical :: save_radiances ! Do we want to save radiances?
+     !> Do we want to save radiances?
+     logical :: save_radiances
   end type CS_output
 
   type :: CS_gas
-     logical :: used ! Is this CS_gas used?
-     type(string) :: name ! Name of the gas/absorber, this will be cross-referenced
-     ! against the names in the CS_window%gases structure to find out which gases
-     ! are to be used in the retrieval window.
+     !> Is this CS_gas used?
+     logical :: used
+     !> Name of the gas/asorber, this will be cross-referenced
+     !> against the names in the CS_window%gases structure to find out which gases
+     !> are to be used in the retrieval window.
+     type(string) :: name
+     !> Type of the cross section file (e.g. ABSCO)
      type(string) :: type
+     !> Path to ABSCO file
      type(string) :: filename
 
      ! At the time, we are using JPL ABSCO tables, which are 4-dimensional.
@@ -113,59 +173,91 @@ module control_mod
      ! dimensions, or not use superfluous dimensions. During the calculation of
      ! optical properties, the type of spectroscopy will thus have to be referred to.
      ! The same holds true fo T,p,SH dimensions. E.g., T is 2-dimensional for ABSCO
-     logical :: has_h2o ! Does this spectroscopy have H2O broadening?
+
+     !> Does this spectroscopy have H2O broadening (ABSCO)?
+     logical :: has_h2o
+     !> Cross section data array
      double precision, allocatable :: cross_section(:,:,:,:)
-     ! The wavelength dimension
+     !> The wavelength dimension of the table
      double precision, allocatable :: wavelength(:)
      ! The temperature, pressure and water vapour dimensions of the cross sections
-     double precision, allocatable :: T(:,:), p(:), H2O(:)
+     !> The temperature dimension of the table
+     double precision, allocatable :: T(:,:)
+     !> The pressre dimension of the table
+     double precision, allocatable :: p(:)
+     !> The H2O dimension of the table
+     double precision, allocatable :: H2O(:)
   end type CS_gas
 
 
   ! Main control_mod structure type
   type, private :: CS
-     type(CS_algorithm) :: algorithm ! Algorithm/forwared model - related settings
-     type(CS_window) :: window(MAX_WINDOWS) ! Retrieval windows
-     type(CS_gas) :: gas(MAX_GASES) ! Absorbers
-     type(CS_input) :: input ! Input files needed by the program
-     type(CS_output) :: output ! Output file path(s)
+     !> Algorithm/forwared model - related settings
+     type(CS_algorithm) :: algorithm
+     !> Retrieval windows
+     type(CS_window) :: window(MAX_WINDOWS)
+     !> Gas absorbers
+     type(CS_gas) :: gas(MAX_GASES)
+     !> Input files/handlers needed by the program
+     type(CS_input) :: input
+     !> Output settings
+     type(CS_output) :: output
+     !> General retrieval settings/info
      type(CS_general) :: general
   end type CS
 
-  ! Define it here. Rest of the code should be allowed to change data?
+  !> Main control structure
   type(CS), public :: MCS
 
   public populate_MCS
 
 contains
 
+  !> In here, the contents of the config file are being used to populate
+  !> the main control structure of the program. It's mostly string/value
+  !> parsing and making sure that the contents of the config file are
+  !> in line with the expectation of the code. If something does not look
+  !> right, the code will abort with error code 1, and a message stating
+  !> what you did wrong.
+  !
+  !> @param fini FINER ini object
   subroutine populate_MCS(fini)
-    !! In here, the contents of the config file are being used to populate
-    !! the main control structure of the program. It's mostly string/value
-    !! parsing and making sure that the contents of the config file are
-    !! in line with the expectation of the code. If something does not look
-    !! right, the code will abort with error code 1, and a message stating
-    !! what you did wrong.
 
     implicit none
 
     type(file_ini), intent(in) :: fini
+
+    ! Local variables
+
+    ! Name of the function
     character(len=*), parameter :: fname = "populate_control_structure"
+    ! Temporary character objection
     character(len=999) :: tmp_str
+    ! Number of algorithms (coming from the config)
     integer :: alg_count
+    ! The string that will be turned into alg_count
     type(string), allocatable :: alg_strings(:)
 
     ! FINER stuff
+    ! FINER error variable
     integer :: fini_error
+    ! If we want to read a character array from FINER
     character(len=999) :: fini_char
+    ! If we want to read a string from FINER
     type(string) :: fini_string
+    ! If we want to read a double precision from FINER
     double precision :: fini_val
+    ! If we want to read several double precisions from FINER
     double precision, allocatable :: fini_val_array(:)
+    ! If we want to read several strings from FINER
     type(string), allocatable :: fini_string_array(:)
+    ! If we want to read an integer from FINER
     integer :: fini_int
 
+    ! Loop variables
     integer :: window_nr, gas_nr
     integer :: i
+    ! Does a file exist?
     logical :: file_exists
 
 
@@ -546,15 +638,28 @@ contains
 
   end subroutine populate_MCS
 
+  !> Subroutine to match gases from the window object to the
+  !> gases / spectroscopy sections.
+  !>
+  !> @param window CS_window object array
+  !> @param gas CS_gas object array
+  !> @param i_win CS_window index
   subroutine MCS_find_gases(window, gas, i_win)
     implicit none
+
     type(CS_window), intent(inout) :: window(:)
     type(CS_gas), intent(inout) :: gas(:)
     integer, intent(in) :: i_win
 
+    ! Local variables
+
+    ! Loop variables
     integer :: i, j
+    ! Set if gas is found
     logical :: gas_found
+    ! Function name
     character(len=*), parameter :: fname = "MCS_find_gases"
+    ! Temp character array for conversions
     character(len=999) :: tmp_str
 
     if (window(i_win)%num_gases == 0) return

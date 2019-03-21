@@ -1,25 +1,30 @@
+!> @brief OCO-2(-like) specific subroutines
+!> @file OCO2_Instrument.f90
+!> @author Peter Somkuti
+!>
+
 module oco2_mod
 
-  use stringifor
+  ! Modules
   use instruments_mod, only: generic_instrument
-  use control_mod, only: MCS
-  use logger_mod, only: logger => master_logger
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, &
        read_DP_hdf_dataset, read_INT_hdf_dataset
+  use control_mod, only: MCS
+
+  ! Third-party modules
+  use stringifor
+  use logger_mod, only: logger => master_logger
   use mod_datetime
 
+  ! System modules
   use HDF5
 
   implicit none
 
+  !> @brief OCO-2 instrument type, which is an extention of the
+  !> (empty) generic instrument type.
   type, extends(generic_instrument), public :: oco2_instrument
-
-     ! dispersion coefficients, noise model, ILS array, ...
-     ! all of that should be read in immediately at the start of the
-     ! program, and kept in memory for quick access
-
    contains
-     procedure, nopass :: scan_l1b_file
      procedure, nopass :: read_l1b_dispersion
      procedure, nopass :: read_l1b_snr_coef
      procedure, nopass :: read_num_frames_and_fp
@@ -40,77 +45,31 @@ module oco2_mod
 
 contains
 
-  subroutine scan_l1b_file(l1b_file)
-    !! Checks whether this is indeed a valid OCO-2 l1b file that has all
-    !! the required fields and variables..
-
-    type(string) :: l1b_file
-
-    character(len=*), parameter :: fname = "scan_l1b_file"
-    character(len=999) :: msg
-    integer(hid_t) :: file_id
-    integer(8), allocatable :: n_fp_frames(:), dim_spec(:)
-    integer :: hdferr
-
-    ! Open the HDF file
-    call h5fopen_f(l1b_file%chars(), H5F_ACC_RDONLY_F, file_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(l1b_file%chars()))
-
-    ! Let's start with the sounding IDs and have a look how many we actually
-    ! have in this file.
-    call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
-    if (size(n_fp_frames) /= 2) then
-       call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
-       stop 1
-    end if
-
-    write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), &
-         ", number of frames: ", n_fp_frames(2)
-    call logger%info(fname, trim(msg))
-    write(msg, "(A, G0.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
-    call logger%info(fname, trim(msg))
-
-    ! Store the total number of soundings to be processed in the MCS. We need
-    ! that later to allocate all those big arrays.
-    MCS%general%N_soundings = n_fp_frames(1)*n_fp_frames(2)
-    MCS%general%N_frame = n_fp_frames(2)
-    MCS%general%N_fp = n_fp_frames(1)
-
-    ! OCO-2, we have three bands
-    MCS%general%N_bands = 3
-
-    ! And we can grab the number of pixels per band individually
-    allocate(MCS%general%N_spec(MCS%general%N_bands))
-
-    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", dim_spec)
-    MCS%general%N_spec(1) = dim_spec(1)
-    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_weak_co2", dim_spec)
-    MCS%general%N_spec(2) = dim_spec(1)
-    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
-    MCS%general%N_spec(3) = dim_spec(1)
-
-  end subroutine scan_l1b_file
-
-
+  !> @brief Read the dispersion coefficients from the L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param dispersion_coeffs Unallocated array for dispersion coefficients (coef, fp, band)
   subroutine read_l1b_dispersion(l1b_file_id, dispersion_coeffs)
+
+    implicit none
 
     integer(hid_t), intent(in) :: l1b_file_id
     double precision, allocatable, intent(out) :: dispersion_coeffs(:,:,:)
 
-    ! We hard-code the dimensions of the OCO-2 dispersion coefficients here,
-    ! we do not really expect them to change do we?
     integer(hsize_t), allocatable :: disp_shape(:)
     character(len=*), parameter :: fname = "read_l1b_dispersion(oco2)"
     character(len=*), parameter :: dset_name = "/InstrumentHeader/dispersion_coef_samp"
-    integer :: hdferr
-    integer(hid_t) :: dset_id
 
     ! Coeffs, footprints, bands
     call read_DP_hdf_dataset(l1b_file_id, dset_name, dispersion_coeffs, disp_shape)
 
   end subroutine read_l1b_dispersion
 
+  !> @brief Read the dispersion coefficients from the L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param snr_coeffs Unallocated array for SNR coefficients (coef, pixel, fp, band)
   subroutine read_l1b_snr_coef(l1b_file_id, snr_coefs)
+
+    implicit none
 
     integer(hid_t), intent(in) :: l1b_file_id
     double precision, allocatable, intent(out) :: snr_coefs(:,:,:,:)
@@ -118,8 +77,6 @@ contains
     integer(hsize_t), allocatable :: snr_shape(:)
     character(len=*), parameter :: fname = "read_l1b_snr_coefs(oco2)"
     character(len=*), parameter :: dset_name = "/InstrumentHeader/snr_coef"
-    integer :: hdferr
-    integer(hid_t) :: dset_id
 
     ! coefficients, spectral indices, footprints, bands
     call read_DP_hdf_dataset(l1b_file_id, dset_name, snr_coefs, snr_shape)
@@ -131,9 +88,7 @@ contains
 
     integer(hid_t), intent(in) :: l1b_file_id
     integer, intent(out) :: num_frames, num_fp
-    integer, dimension(1) :: tmp_num_frames
 
-    integer(hid_t) :: dset_id
     integer(hsize_t), allocatable :: num_frames_shape(:)
     integer :: hdferr
     character(len=*), parameter :: fname = "read_num_frames(oco2)"
@@ -147,11 +102,21 @@ contains
 
   end subroutine read_num_frames_and_fp
 
+  !> @brief Calculate the dispersion array, based on the dispersion coefficients
+  !> @param disp_coef dispersion_coefficients (coef, fp, band)
+  !> @param dispersion dispersion array (pixel)
+  !> @param band Band number
+  !> @param fp Footprint number
   subroutine calculate_dispersion(disp_coef, dispersion, band, fp)
 
+    implicit none
+
     double precision, intent(in) :: disp_coef(:)
+    integer, intent(in) :: band
+    integer, intent(in) :: fp
     double precision, intent(out) :: dispersion(:)
-    integer, intent(in) :: band, fp
+
+    ! Local variables
     integer :: pix, order
 
     dispersion(:) = 0.0d0
@@ -164,6 +129,13 @@ contains
 
   end subroutine calculate_dispersion
 
+  !> @brief Read one single spectrum from the L1B data
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param i_fr Frame index
+  !> @param i_fp Footprint index
+  !> @param band Band number
+  !> @param N_spec Number of spectral points
+  !> @param spectrum Output spectral array
   subroutine read_one_spectrum(l1b_file_id, i_fr, i_fp, band, N_spec, spectrum)
 
     ! Select one (!) OCO-2 sounding via HDF5 hyperslab selection and feed it
@@ -174,17 +146,14 @@ contains
 
     integer(hid_t) :: l1b_file_id
     integer, intent(in) :: i_fr, i_fp, band, N_spec
-    double precision, allocatable :: spectrum(:)
+    double precision, allocatable, intent(inout) :: spectrum(:)
 
     character(len=*), parameter :: fname = "read_one_spectrum(oco2)"
     character(len=999) :: dset_name
     integer(hid_t) :: dset_id, dspace_id, memspace_id
-    logical :: selection_valid
     integer(hsize_t) :: hs_offset(3), hs_count(3)
     integer(hsize_t) :: dim_mem(1)
     integer :: hdferr
-    logical :: extent_equal
-
 
     ! Set dataset name according to the band we want
     if (band == 1) then
@@ -201,37 +170,35 @@ contains
     call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening spectra at: " // trim(dset_name))
 
-    !! Offset - where do we start our hyperslab? We read the full spectrum, so
-    !! the first index is 0, the other two depenend on the indices.
-    !! Remember the order in OCO-2 files: (spectral index, footprint, frame)
-    !! .. as seen by Fortran
+    ! Offset - where do we start our hyperslab? We read the full spectrum, so
+    ! the first index is 0, the other two depenend on the indices.
+    ! Remember the order in OCO-2 files: (spectral index, footprint, frame)
+    ! .. as seen by Fortran
 
     hs_offset(1) = 0
     hs_offset(2) = i_fp - 1
     hs_offset(3) = i_fr - 1
 
-    !! 
-
-    !! We step 1016 in the spectral direction to get the full measurement,
-    !! and 1 each in the frame and footprint directions (convention)
+    ! We step 1016 in the spectral direction to get the full measurement,
+    ! and 1 each in the frame and footprint directions (convention)
     hs_count(1) = N_spec
     hs_count(2) = 1
     hs_count(3) = 1
 
-    !! This is the size of the container that we will be writing the spectral
-    !! data into.
+    ! This is the size of the container that we will be writing the spectral
+    ! data into.
     dim_mem(1) = N_spec
 
     allocate(spectrum(N_spec))
     spectrum(:) = 0.0d0
 
-    !! So this is how a hyperslab selection in HDF5 works. First, get the
-    !! dataspace corresponding to the dataset you want to grab from. Then
-    !! call h5sselect_hyperslab, and using offset and count, select the
-    !! data you want to grab. Now we have to create a memory space which has
-    !! the exact same size (not shape necessarily) as the hyperslab selection.
-    !! Now using h5dread, using both memory and dataspace id, the data can
-    !! be read from the file.
+    ! So this is how a hyperslab selection in HDF5 works. First, get the
+    ! dataspace corresponding to the dataset you want to grab from. Then
+    ! call h5sselect_hyperslab, and using offset and count, select the
+    ! data you want to grab. Now we have to create a memory space which has
+    ! the exact same size (not shape necessarily) as the hyperslab selection.
+    ! Now using h5dread, using both memory and dataspace id, the data can
+    ! be read from the file.
 
     call h5dget_space_f(dset_id, dspace_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error getting dataspace id for " // trim(dset_name))
@@ -240,18 +207,28 @@ contains
          hs_offset, hs_count, hdferr)
     call check_hdf_error(hdferr, fname, "Error performing hyperslab selection.")
 
-
     call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error creating simple memory space.")
 
-    call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, hdferr, memspace_id, dspace_id)
+    call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, &
+         hdferr, memspace_id, dspace_id)
     call check_hdf_error(hdferr, fname, "Error reading spectrum data from " // trim(dset_name))
-
 
   end subroutine read_one_spectrum
 
 
+  !> @brief Calculate the noise-equivalent radiances from the SNR coefficients
+  !> @param snr_coefs SNR coefficients (coef, pixel, fp, band)
+  !> @param radiance L1B Radiance
+  !> @param noise Noise-equivalent radiances
+  !> @param fp Footprint number
+  !> @param band Band number
+  !> @param idx_start Starting index of radiance slice
+  !> @param idx_end Last index of radiance slice (not used)
   subroutine calculate_noise(snr_coefs, radiance, noise, fp, band, idx_start, idx_end)
+
+    implicit none
+
     double precision, intent(in) :: snr_coefs(:,:,:,:)
     double precision, intent(in) :: radiance(:)
     double precision, intent(inout) :: noise(:)
@@ -259,37 +236,50 @@ contains
 
     double precision, allocatable :: MaxMS(:)
     integer(hsize_t), allocatable :: dims(:)
-    integer(hid_t) :: dset_id
-    integer :: i, hdferr
+    integer :: i
 
     call read_DP_hdf_dataset(MCS%input%l1b_file_id, &
          "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
 
     do i=1, size(noise)
-       noise(i) = (MaxMS(band) / 100) * sqrt(abs(100 * radiance(i) / MaxMS(band)) * &
+       noise(i) = (MaxMS(band) / 100.0d0) * sqrt(abs(100.0d0 * radiance(i) / MaxMS(band)) * &
             (snr_coefs(1,idx_start+i-1,fp,band)**2) + (snr_coefs(2,idx_start+i-1,fp,band)**2))
     end do
 
   end subroutine calculate_noise
 
+  !> @brief Check if the radiance array within the bounds that we're interested in
+  !> is actually valid.
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param radiance Radiance array, extracted from the L1B
+  !> @param idx_start Starting index of radiance slice to check
+  !> @param idx_end Last index of radiance slice to check
   subroutine check_radiance_valid(l1b_file_id, radiance, idx_start, idx_end, valid)
+
+    implicit none
+
     integer(hid_t), intent(in) :: l1b_file_id
     double precision, dimension(:), intent(in) :: radiance
     integer, intent(in) :: idx_start, idx_end
     logical, intent(out) :: valid
 
-
     valid = .true.
 
-    if (COUNT(radiance == -999999.0) > 0) then
+    ! For OCO-2, "bad" radiance points might be flagged by
+    ! -999999 values.
+    if (COUNT(radiance == -999999.0d0) > 0) then
        valid = .false.
     end if
 
   end subroutine check_radiance_valid
 
+  !> @brief Read the whole sounding ID array
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param sounding_ids Sounding ID array (fp, frame)
   subroutine read_sounding_ids(l1b_file_id, sounding_ids)
 
     implicit none
+
     integer(hid_t), intent(in) :: l1b_file_id
     integer(8), dimension(:,:), allocatable, intent(out) :: sounding_ids
 
@@ -348,11 +338,10 @@ contains
     implicit none
     character(len=25), intent(in) :: time_string
     type(datetime), intent(out) :: date
-
-    type(string) :: tmp_str
     integer :: year, month, day, hour, minute, second, millisecond
 
-    ! Grab the various fields/positions from the string
+    ! Grab the various fields/positions from the string and stick them into
+    ! the corresponding date/time variables
     read(time_string(1:4), *) year
     read(time_string(6:7), *) month
     read(time_string(9:10), *) day
@@ -361,21 +350,29 @@ contains
     read(time_string(18:19), *) second
     read(time_string(21:23), *) millisecond
 
-    ! Create datetime objection
+    ! Create datetime object
     date = datetime(year, month, day, hour, minute, &
          second, millisecond)
 
   end subroutine convert_time_string_to_date
 
 
+  !> @brief Read variables related to the sounding scene geometry from L1B
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param band Band number
+  !> @param SZA SZA array (fp, frame)
+  !> @param SAA SAA array (fp, frame)
+  !> @param VZA VZA array (fp, frame)
+  !> @param VAA VAA array (fp, frame)
   subroutine read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
+
+    implicit none
+
     integer(hid_t), intent(in) :: l1b_file_id
     integer, intent(in) :: band
     double precision, dimension(:,:), allocatable, intent(out) :: SZA, SAA, VZA, VAA
 
     character(len=*), parameter :: fname = "read_sounding_geometry(oco2)"
-    integer :: hdferr
-    integer(hid_t) :: dset_id
     integer(hsize_t), dimension(:), allocatable :: dset_dims
     double precision, dimension(:,:,:), allocatable :: tmp_array
 
@@ -401,18 +398,17 @@ contains
     allocate(VAA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
     VAA(:,:) = tmp_array(band,:,:)
 
-
   end subroutine read_sounding_geometry
 
   subroutine read_ils_data(l1b_file_id, ils_delta_lambda, ils_relative_response)
 
     implicit none
+
     integer(hid_t), intent(in) :: l1b_file_id
     double precision, allocatable, intent(inout) :: ils_delta_lambda(:,:,:,:), &
          ils_relative_response(:,:,:,:)
 
-
-    character(len=*), parameter :: fname = "read_sounding_location"
+    character(len=*), parameter :: fname = "read_sounding_location(oco2)"
     integer(hsize_t), dimension(:), allocatable :: dset_dims
 
     call read_DP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_delta_lambda", &
@@ -431,9 +427,7 @@ contains
     double precision, dimension(:,:), allocatable, intent(out) :: lon, lat, &
          altitude, rel_vel, rel_solar_vel
 
-    character(len=*), parameter :: fname = "read_sounding_location"
-    integer :: hdferr
-    integer(hid_t) :: dset_id, filetype
+    character(len=*), parameter :: fname = "read_sounding_location(oco2)"
     integer(hsize_t), dimension(:), allocatable :: dset_dims
     double precision, dimension(:,:,:), allocatable :: tmp_array
 

@@ -2,6 +2,7 @@
 !> @file Startup.f90
 !> @author Peter Somkuti
 !>
+!> @detail
 !! Startup module. Routines in here are called during the startup-phase of the
 !! program, where we also check if the config/inputs are sane. At this point, the
 !! logger is not yet initialized, so the various messages do not have the usual

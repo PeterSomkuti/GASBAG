@@ -662,6 +662,8 @@ contains
     ! Temp character array for conversions
     character(len=999) :: tmp_str
 
+    ! If we have no gases in this window, there's nothing to do
+    ! so might as well just return.
     if (window(i_win)%num_gases == 0) return
 
     do i=1, size(window(i_win)%gases)
@@ -696,8 +698,6 @@ contains
        end if
 
     end do ! Finish first loop to find/match gases with window gases
-
-
 
   end subroutine MCS_find_gases
 

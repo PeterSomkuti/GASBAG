@@ -75,14 +75,6 @@ program GeoCARBSIF
      stop 1
   end if
 
-  select type(my_instrument)
-  type is (oco2_instrument)
-     ! Scan the L1b file - we need some info from there, mostly the
-     ! number of frames, footprints, bands and spectral points
-     call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
-  end select
-
-
   ! Open up the output HDF5 file for writing and save the HDF5 file handler in
   ! MCS to be used all over the program. The default behaviour (from now on)
   ! is to abort if the file already exists. Overwriting can be dangerous!!

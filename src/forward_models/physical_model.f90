@@ -526,7 +526,7 @@ contains
        ! speedup.
        call logger%info(fname, "Starting main retrieval loop!")
 
-       do i_fr=1, num_frames, MCS%window(i_win)%frame_skip
+       do i_fr=1, num_frames, MCS%window(i_win)%frame_skip ! 38920, 38922!
           do i_fp=1, num_fp, MCS%window(i_win)%footprint_skip
 
              call cpu_time(cpu_time_start)
@@ -812,13 +812,14 @@ contains
     double precision, allocatable :: gas_tau_dvmr(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
     double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
     double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
+    double precision :: gas_pert_step_size
 
     ! Perturbed VMR profile and per-iteration-and-per-gas VMR profile for OD calculation (level)
-    double precision, allocatable :: vmr_pert(:), this_vmr_profile(:)
+    double precision, allocatable :: vmr_pert(:), this_vmr_profile(:,:)
     ! Rayleigh extinction optical depth (spectral, layer)
     double precision, allocatable :: ray_tau(:,:)
     ! Total column optical depth (spectral)
-    double precision, allocatable :: total_tau(:)
+    double precision, allocatable :: total_tau(:), total_tau_pert(:)
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
     ! Is this gas H2O?
@@ -1030,9 +1031,9 @@ contains
 
     ! We can now populate the prior state vector
 
-    SV%svap(SV%idx_albedo(1)) = albedo_apriori
     ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
-    if (SV%num_albedo > 1) then
+    if (SV%num_albedo > 0) then
+       SV%svap(SV%idx_albedo(1)) = albedo_apriori
        do i=2, SV%num_albedo
           SV%svap(SV%idx_albedo(i)) = 0.0d0
        end do
@@ -1107,6 +1108,7 @@ contains
           divergent_step = .false.
           ! Initialise Chi2 with an insanely large value
           this_chi2 = 9.9d9
+          linear_prediction_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
           ! and the first guess state vector is the prior
@@ -1121,6 +1123,7 @@ contains
              ! microwindow.
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
+
              num_levels = size(this_atm%p)
 
              ! And get the T and SH MET profiles onto our new atmosphere grid. We are
@@ -1159,6 +1162,7 @@ contains
              end if
 
              do i=1, num_gases
+
                 if (MCS%window(i_win)%gases(i) == "H2O") then
                    ! If H2O needs to be retrieved, take it from the MET atmosphere
                    ! specific humidty directly, rather than the H2O column of the
@@ -1246,11 +1250,12 @@ contains
        if (num_gases > 0) then
 
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
+          allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
           allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
           allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
-          allocate(this_vmr_profile(num_levels))
+          allocate(this_vmr_profile(num_levels, num_gases))
           allocate(ndry(num_levels), ndry_tmp(num_levels))
 
           ! If we retrieve surface pressure, grab it from the state vector,
@@ -1276,7 +1281,7 @@ contains
              ! segment, and applies the retrieved scale factor to it.
 
              ! Copy over this gases' VMR profile
-             this_vmr_profile(:) = this_atm%gas_vmr(:,j)
+             this_vmr_profile(:,j) = this_atm%gas_vmr(:,j)
              do_gas_jac = .false.
 
              ! Enter this branch if we have at least one retrieved gas
@@ -1342,7 +1347,6 @@ contains
                             write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
                          end do
 
-
                          return
                       end if
                    end do
@@ -1358,8 +1362,8 @@ contains
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
-                      this_vmr_profile(s_start(i):s_stop(i)) = &
-                           this_vmr_profile(s_start(i):s_stop(i)) &
+                      this_vmr_profile(s_start(i):s_stop(i), j) = &
+                           this_vmr_profile(s_start(i):s_stop(i), j) &
                            * SV%svsv(SV%idx_gas(i,1))
                    end if
                 end do
@@ -1377,12 +1381,40 @@ contains
                 is_H2O = .false.
              end if
 
+
+!!$             do i=1, SV%num_gas
+!!$
+!!$                gas_pert_step_size = (0.85d0 * SV%svsv(SV%idx_gas(i,1)))
+!!$                write(*,*) gas_pert_step_size
+!!$                ! DELETEME
+!!$                ! Call the function that calculates the gas optical depths
+!!$                call calculate_gas_tau( &
+!!$                     .true., & ! We are using pre-gridded spectroscopy!
+!!$                     is_H2O, & ! Is this gas H2O?
+!!$                     hires_grid, & ! The high-resolution wavelength grid
+!!$                     this_vmr_profile(:,SV%gas_idx_lookup(i)) * (1.0d0 - gas_pert_step_size) , & ! The gas VMR profile for this gas with index j
+!!$                     this_psurf, & ! Surface pressure
+!!$                     this_atm%p(:), & ! Atmospheric profile pressures
+!!$                     this_atm%T(:), & ! Atmospheric profile temperature
+!!$                     this_atm%sh(:), & ! Atmospheric profile humidity
+!!$                     MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
+!!$                     MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
+!!$                     do_psurf_jac, & ! Do we require surface pressure jacobians?
+!!$                     do_gas_jac, & ! Do we require gas OD jacobians?
+!!$                     gas_tau_pert(:,:,j,i), & ! Output: Gas ODs
+!!$                     gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+!!$                     gas_tau_dvmr(:,:,j), & ! Output: dTau/dVMR
+!!$                     ndry_tmp, & ! Output: ndry molecules per m2
+!!$                     success_gas) ! Output: Was the calculation successful?
+!!$             end do
+
+
              ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
                   hires_grid, & ! The high-resolution wavelength grid
-                  this_vmr_profile, & ! The gas VMR profile for this gas with index j
+                  this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   this_psurf, & ! Surface pressure
                   this_atm%p(:), & ! Atmospheric profile pressures
                   this_atm%T(:), & ! Atmospheric profile temperature
@@ -1411,7 +1443,8 @@ contains
 
           ! Total optical depth is calculated as sum of all gas ODs
           allocate(total_tau(N_hires))
-          total_tau(:) = 0.0d0
+          allocate(total_tau_pert(N_hires))
+          !total_tau(:) = 0.0d0
           total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
        end if
 
@@ -1499,6 +1532,12 @@ contains
                / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
        end if
 
+!!$       open(file="perturbed_tau.dat", newunit=funit)
+!!$       do i=1, size(total_tau)
+!!$          write(funit, *) i, total_tau(i), total_tau_pert(i)
+!!$       end do
+!!$       close(funit)
+
 
        ! Gas jacobians
        if (SV%num_gas > 0) then
@@ -1507,22 +1546,54 @@ contains
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
 
                 ! This is a scale-type jacobian
-                do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
+                !!do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
 
-                   ! Loop through all potential profile "sections", but skip the unused ones
-                   if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1.0d0) cycle
+                ! Loop through all potential profile "sections", but skip the unused ones
+                !if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1.0d0) cycle
 
-                   K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * (1.0d0 / mu0 + 1.0d0 / mu) &
-                        * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) / SV%svsv(SV%idx_gas(i,1))
+!!!!
+!!$                total_tau_pert(:) = sum(sum(gas_tau_pert(:,:,:,i), dim=2), dim=2)
+!!$                call calculate_Beer_Lambert(hires_grid, mu0, mu, &
+!!$                     albedo, total_tau_pert, &
+!!$                     radiance_calc_work_hi(:))
+!!$                radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * this_solar(:,2)
 
-                end do
+                !K_hi(:, SV%idx_gas(i,1)) = radiance_calc_work_hi(:)
+
+                !call calculate_Beer_Lambert(hires_grid, mu0, mu, &
+                !     albedo, total_tau, &
+                !     radiance_calc_work_hi(:))
+                !radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * this_solar(:,2)
+
+                !K_hi(:, SV%idx_gas(i,1)) = -(K_hi(:, SV%idx_gas(i,1)) - radiance_calc_work_hi(:)) &
+                !     / (gas_pert_step_size)
+
+!!$                open(file="finite_diff_scale.dat", newunit=funit)
+!!$                do l=1, size(total_tau)
+!!$                   write(funit, *) K_hi(l, SV%idx_gas(i,1))
+!!$                end do
+!!$                close(funit)
+!!!!
+                !if (iteration > 1) then
+                   K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
+                        * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) &
+                        / (1.0d0 * SV%svsv(SV%idx_gas(i,1)))
+
+                !end if
+!!$                open(file="anayltic_scale.dat", newunit=funit)
+!!$                do l=1, size(total_tau)
+!!$                   write(funit, *) K_hi(l, SV%idx_gas(i,1))
+!!$                end do
+!!$                close(funit)
+
+                !!end do
              end if
 
           end do
        end if
 
 
-       ! Stokes coefficients
+       ! Stokes coeff0icients
        ! TODO: apply Stokes coefficients here via instrument parameters from L1b?
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:)
        K_hi(:,:) = K_hi(:,:)
@@ -1576,6 +1647,12 @@ contains
           K(:, SV%idx_zlo(1)) = 1.0d0
        end if
 
+       if (SV%num_albedo > 0) then
+          do i=1, SV%num_albedo
+             K_hi(:, SV%idx_albedo(i)) = (radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) / albedo * &
+                  ((hires_grid(:) - hires_grid(1)) ** (i-1))
+          end do
+       end if
 
        ! Now calculate the noise-equivalent radiances
        select type(my_instrument)
@@ -1664,11 +1741,11 @@ contains
              if (i == SV%idx_zlo(1)) skip_jacobian = .true.
 
              ! Albedo jacobians can be calculated later as well
-             do j=1, SV%num_albedo
-                if (i == SV%idx_albedo(j)) then
-                   skip_jacobian = .true.
-                end if
-             end do
+!!$             do j=1, SV%num_albedo
+!!$                if (i == SV%idx_albedo(j)) then
+!!$                   skip_jacobian = .true.
+!!$                end if
+!!$             end do
 
              ! If we have any reason to skip this Jacobian index for convolution,
              ! do it now.
@@ -1694,28 +1771,28 @@ contains
        ! Calculate albedo Jacobians
        ! We could just convolve the high-res albedo jacobian, however the convolution
        ! is probably a good chunk slower than this little section here.
-       if (SV%num_albedo > 0) then
-
-          allocate(albedo_low(N_spec))
-
-          ! In order to calculate the low-resolution albedo Jacobian, we also
-          ! need the low-resolution albedo, which we calculate here.
-          albedo_low(:) = 0.0d0
-          do i=1, SV%num_albedo
-             albedo_low(:) = albedo_low(:) + SV%svsv(SV%idx_albedo(i)) * &
-                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
-                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
-          end do
-
-          ! And calculate the derivative ..
-          do i=1, SV%num_albedo
-             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance - this_zlo_radiance) / albedo_low(:) * &
-                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
-                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
-          end do
-
-          deallocate(albedo_low)
-       end if
+!!$       if (SV%num_albedo > 0) then
+!!$
+!!$          allocate(albedo_low(N_spec))
+!!$
+!!$          ! In order to calculate the low-resolution albedo Jacobian, we also
+!!$          ! need the low-resolution albedo, which we calculate here.
+!!$          albedo_low(:) = 0.0d0
+!!$          do i=1, SV%num_albedo
+!!$             albedo_low(:) = albedo_low(:) + SV%svsv(SV%idx_albedo(i)) * &
+!!$                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
+!!$                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
+!!$          end do
+!!$
+!!$          ! And calculate the derivative ..
+!!$          do i=1, SV%num_albedo
+!!$             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance - this_zlo_radiance) / albedo_low(:) * &
+!!$                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
+!!$                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
+!!$          end do
+!!$
+!!$          deallocate(albedo_low)
+!!$       end if
 
        ! Disperion Jacobians are produced via finite differencing
        if (SV%num_dispersion > 0) then
@@ -1760,25 +1837,59 @@ contains
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
 
-       ! K^T Se K
+       ! K^T Se^-1 K
        KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
-       ! (1+gamma) * Sa^-1 + (K^T Se K)
-       tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
-
+       ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
+       ! tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
+       tmp_m1 = Sa_inv + KtSeK
        call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
        if (.not. success_inv_mat) then
           call logger%error(fname, "Failed to invert K^T Se K")
           return
        end if
 
-       tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-       tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+       !tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
+       !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+
+       tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
+            radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
 
        ! Update state vector
-       SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+       !SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+       SV%svsv = SV%svap + tmp_v2
+
+
+       ! In the case of retrieving gases - we have to adjust the retrieved state vector
+       ! if the retrieval wants to push it below 0.
+       do i=1, SV%num_gas
+          do j=1, size(sv%idx_gas(i,:))
+             if (SV%idx_gas(i,j) /= -1) then
+                if (SV%svsv(sv%idx_gas(i, j)) < (0.25d0 * old_sv(sv%idx_gas(i, j)))) then
+                   SV%svsv(sv%idx_gas(i, j)) = (0.25d0 * old_sv(sv%idx_gas(i, j)))
+                end if
+                if (SV%svsv(sv%idx_gas(i, j)) < 0.1d0) then
+                   SV%svsv(sv%idx_gas(i, j)) = 0.1d0
+                end if
+             end if
+          end do
+       end do
+
+       if (SV%num_albedo > 0) then
+          if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
+             SV%svsv(SV%idx_albedo(1)) = 1.0d-4
+          end if
+       end if
 
        ! Calculate Shat_inv
        Shat_inv = KtSeK + Sa_inv
+
+       ! Calculate Shat from Shat_inverse
+       call invert_matrix(Shat_inv, Shat, success_inv_mat)
+
+       if (.not. success_inv_mat) then
+          call logger%error(fname, "Failed to invert Shat^-1")
+          return
+       end if
 
        ! Check delta sigma square for this iteration
        dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
@@ -1787,19 +1898,9 @@ contains
        this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
             noise_work, N_spec - N_sv)
 
-
-       ! In the case of retrieving gases - we have to adjust the retrieved state vector
-       ! if the retrieval wants to push it below 0.
-
-       do i=1, SV%num_gas
-          do j=1, size(sv%idx_gas(i,:))
-             if (SV%idx_gas(i,j) /= -1) then
-                if (SV%svsv(sv%idx_gas(i, j)) < 1.0d-10) then
-                   SV%svsv(sv%idx_gas(i, j)) = 1.0d-10
-                end if
-             end if
-          end do
-       end do
+       write(*,*) "Chi2: ", this_chi2
+       write(*,*) "Linear prediction: ", linear_prediction_chi2
+       write(*,*) "Ratio R: ", (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
 
 
        ! Now we check for convergence!
@@ -1832,17 +1933,17 @@ contains
           if (SV%num_gas > 0) then
              do j=1, num_gases
 
-
                 ! Here we need to do the same thing as before when calculating
                 ! gas OD's. Take local copy of VMR profile, and re-scale the portions
                 ! of the profile which, according to the retrieval, have changed.
-                this_vmr_profile = this_atm%gas_vmr(:,j)
+                this_vmr_profile(:,j) = this_atm%gas_vmr(:,j)
+
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
-                      this_vmr_profile(s_start(i):s_stop(i)) = this_vmr_profile(s_start(i):s_stop(i)) &
+                      this_vmr_profile(s_start(i):s_stop(i),j) = this_vmr_profile(s_start(i):s_stop(i),j) &
                            * SV%svsv(SV%idx_gas(i,1))
 
                       ! We also want to have the corresponding number of molecules of dry air
@@ -1855,13 +1956,13 @@ contains
                 call pressure_weighting_function( &
                      this_atm%p(1:num_active_levels), &
                      this_psurf, &
-                     this_vmr_profile(1:num_active_levels), &
+                     this_vmr_profile(1:num_active_levels,j), &
                      pwgts)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) =  sum( &
                      pwgts(:) &
-                     * this_vmr_profile(1:num_active_levels) &
+                     * this_vmr_profile(1:num_active_levels,j) &
                      )
 
              end do
@@ -1869,14 +1970,6 @@ contains
 
           ! Save the final dSigma-squared value (in case anyone needs it)
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
-
-          ! Calculate Shat from Shat_inverse
-          call invert_matrix(Shat_inv, Shat, success_inv_mat)
-
-          if (.not. success_inv_mat) then
-             call logger%error(fname, "Failed to invert Shat^-1")
-             return
-          end if
 
           ! Calculate the Gain matrix
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
@@ -2002,30 +2095,27 @@ contains
 !!$       do i=1, N_spec
 !!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
 !!$               noise_work(i)!, solar_low(i)
-!!$
 !!$       end do
 !!$       close(funit)
-!!$
-!!$
+
+
 !!$       write(*,*) num_active_levels
 !!$       do i=1, num_active_levels
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
 !!$       end do
-
-!!$       write(*,*) "old, current and delta state vector, and errors"
 !!$
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!!$       write(*,*) "LM-Gamma: ", lm_gamma
-!!$       write(*,*) "Ratio R: ", chi2_ratio
-!!$       write(*,*) this_sif_radiance
-!!$       write(*,*) this_zlo_radiance
+       write(*,*) "old, current and delta state vector, and errors"
+
+       write(*,*) "Iteration: ", iteration
+       do i=1, N_sv
+          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+       write(*,*) "LM-Gamma: ", lm_gamma
+       write(*,*) "Ratio R: ", chi2_ratio
 
 
        ! These quantities are all allocated within the iteration loop, and
@@ -2039,6 +2129,7 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
        if (allocated(ray_tau)) deallocate(ray_tau)
        if (allocated(total_tau)) deallocate(total_tau)
+       if (allocated(total_tau_pert)) deallocate(total_tau_pert)
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
        if (allocated(ndry)) deallocate(ndry)
@@ -2077,9 +2168,9 @@ contains
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
           if (i==1) then
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 0.1d0 !* SV%svap(SV%idx_albedo(i))
           else
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 10.0d0 ** dble(i)
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 0.1d0 !* SV%svap(SV%idx_albedo(1)) ** dble(i)
           end if
        end do
     end if

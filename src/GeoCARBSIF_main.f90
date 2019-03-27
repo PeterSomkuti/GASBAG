@@ -84,6 +84,16 @@ program GeoCARBSIF
   call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
        // trim(MCS%output%output_filename%chars()))
 
+  select type(my_instrument)
+  type is (oco2_instrument)
+     ! Scan the L1b file - we need some info from there, mostly the
+     ! number of frames, footprints, bands and spectral points
+     call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
+  end select
+
+
+
+
   ! Go and perform the retrieval process. At this stage, all information from
   ! the config file should have been passed onto the MCS, hence why the main
   ! retrieval function needs no arguments apart from the choice of instrumentm,

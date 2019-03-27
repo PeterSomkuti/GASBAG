@@ -25,6 +25,7 @@ module oco2_mod
   !> (empty) generic instrument type.
   type, extends(generic_instrument), public :: oco2_instrument
    contains
+     procedure, nopass :: scan_l1b_file
      procedure, nopass :: read_l1b_dispersion
      procedure, nopass :: read_l1b_snr_coef
      procedure, nopass :: read_num_frames_and_fp
@@ -44,6 +45,60 @@ module oco2_mod
 
 
 contains
+
+  subroutine scan_l1b_file(l1b_file)
+    !! Checks whether this is indeed a valid OCO-2 l1b file that has all
+    !! the required fields and variables..
+
+    type(string) :: l1b_file
+
+    character(len=*), parameter :: fname = "scan_l1b_file"
+    character(len=999) :: msg
+    integer(hid_t) :: file_id
+    integer(8), allocatable :: n_fp_frames(:), dim_spec(:)
+    integer :: hdferr
+
+    ! Open the HDF file
+    call h5fopen_f(l1b_file%chars(), H5F_ACC_RDONLY_F, file_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(l1b_file%chars()))
+
+    ! Let's start with the sounding IDs and have a look how many we actually
+    ! have in this file.
+    call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
+    if (size(n_fp_frames) /= 2) then
+       call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
+       stop 1
+    end if
+
+    write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), &
+         ", number of frames: ", n_fp_frames(2)
+    call logger%info(fname, trim(msg))
+    write(msg, "(A, G0.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
+    call logger%info(fname, trim(msg))
+
+    ! Store the total number of soundings to be processed in the MCS. We need
+    ! that later to allocate all those big arrays.
+    MCS%general%N_soundings = n_fp_frames(1)*n_fp_frames(2)
+    MCS%general%N_frame = n_fp_frames(2)
+    MCS%general%N_fp = n_fp_frames(1)
+
+    ! OCO-2, we have three bands
+    MCS%general%N_bands = 3
+
+    ! And we can grab the number of pixels per band individually
+    allocate(MCS%general%N_spec(MCS%general%N_bands))
+
+    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", dim_spec)
+    MCS%general%N_spec(1) = dim_spec(1)
+    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_weak_co2", dim_spec)
+    MCS%general%N_spec(2) = dim_spec(1)
+    call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
+    MCS%general%N_spec(3) = dim_spec(1)
+
+  end subroutine scan_l1b_file
+
+
+
 
   !> @brief Read the dispersion coefficients from the L1B file
   !> @param l1b_file_id HDF File ID of the L1B file

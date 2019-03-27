@@ -183,6 +183,8 @@ contains
        MCS%window(i_win)%gas_retrieved(:) = .false.
        MCS%window(i_win)%gas_retrieve_profile(:) = .false.
        MCS%window(i_win)%gas_retrieve_scale(:) = .false.
+       MCS%window(i_win)%gas_retrieve_scale_start(:,:) = -1.0d0
+       MCS%window(i_win)%gas_retrieve_scale_stop(:,:) = -1.0d0
     end if
 
     do i=1, size(split_string)

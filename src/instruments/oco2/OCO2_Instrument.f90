@@ -18,6 +18,7 @@ module oco2_mod
 
   ! System modules
   use HDF5
+  use OMP_LIB
 
   implicit none
 
@@ -209,6 +210,7 @@ contains
     integer(hsize_t) :: hs_offset(3), hs_count(3)
     integer(hsize_t) :: dim_mem(1)
     integer :: hdferr
+    integer(kind = OMP_lock_kind) :: lck
 
     ! Set dataset name according to the band we want
     if (band == 1) then
@@ -255,6 +257,10 @@ contains
     ! Now using h5dread, using both memory and dataspace id, the data can
     ! be read from the file.
 
+    ! If we have OpenMP, lock this section of the code, to make sure
+    ! only one thread at a time is reading in a spectrum..
+    call OMP_init_lock(lck)
+
     call h5dget_space_f(dset_id, dspace_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error getting dataspace id for " // trim(dset_name))
 
@@ -268,6 +274,9 @@ contains
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, &
          hdferr, memspace_id, dspace_id)
     call check_hdf_error(hdferr, fname, "Error reading spectrum data from " // trim(dset_name))
+
+    ! Release the lock after the spectrum was read..
+    call OMP_destroy_lock(lck)
 
   end subroutine read_one_spectrum
 

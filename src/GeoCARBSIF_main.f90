@@ -33,6 +33,7 @@ program GeoCARBSIF
   type(file_ini) :: fini ! The config file structure
   class(generic_instrument), allocatable :: my_instrument ! The used instrument type
   integer :: hdferr ! HDF error variable
+  character(len=999) :: tmp_str
 
 
   ! Initilize the HDF5 library program-wide
@@ -79,8 +80,19 @@ program GeoCARBSIF
   ! MCS to be used all over the program. The default behaviour (from now on)
   ! is to abort if the file already exists. Overwriting can be dangerous!!
 
-  call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
-       MCS%output%output_file_id, hdferr)
+  if (MCS%output%this_parallel_index /= -1) then
+     ! If we are processing in parallel, then a number is added to the filename
+     write(tmp_str, "(A,A,I5.5,A,I5.5)") MCS%output%output_filename%chars(), &
+          ".", MCS%output%this_parallel_index, "_", MCS%output%N_parallel_index
+     call h5fcreate_f(trim(tmp_str), H5F_ACC_EXCL_F, &
+          MCS%output%output_file_id, hdferr)
+  else
+     ! If no parallel processing - just create the requested output name
+     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
+          MCS%output%output_file_id, hdferr)
+  end if
+
+
   call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
        // trim(MCS%output%output_filename%chars()))
 

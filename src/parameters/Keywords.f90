@@ -60,6 +60,7 @@ contains
         valid_sections(5) = "output"
             valid_options(5,1) = "output_file"
             valid_options(5,2) = "save_radiances"
+            valid_options(5,3) = "parallel_index"
 
         ! Solar model type and file path
         valid_sections(6) = "solar"
@@ -98,6 +99,7 @@ contains
                 valid_options(this_idx,22) = "allow_divergences"
                 valid_options(this_idx,23) = "frame_skip"
                 valid_options(this_idx,24) = "footprint_skip"
+                valid_options(this_idx,25) = "inverse_method"
         end do
 
         ! Section for gases

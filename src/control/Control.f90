@@ -131,6 +131,8 @@ module control_mod
      integer :: frame_skip
      !> Only retrieve every x'th footprint
      integer :: footprint_skip
+     !> Type of inverse method to use
+     type(string) :: inverse_method
   end type CS_window
 
   type, private :: CS_input
@@ -153,6 +155,10 @@ module control_mod
      integer(hid_t) :: output_file_id
      !> Do we want to save radiances?
      logical :: save_radiances
+     !> If we process in parallel - this is the index of this process
+     integer :: this_parallel_index
+     !> The total number of parallel processes
+     integer :: N_parallel_index
   end type CS_output
 
   type :: CS_gas
@@ -253,6 +259,8 @@ contains
     type(string), allocatable :: fini_string_array(:)
     ! If we want to read an integer from FINER
     integer :: fini_int
+    ! Split string
+    type(string), allocatable :: split_strings(:)
 
     ! Loop variables
     integer :: window_nr, gas_nr
@@ -437,7 +445,44 @@ contains
        ! If not supplied, default state is "no"
        MCS%output%save_radiances = .false.
     else
-          MCS%output%save_radiances = string_to_bool(fini_string)
+       MCS%output%save_radiances = string_to_bool(fini_string)
+    end if
+
+    ! Get the indices for parallel processing
+    call fini_extract(fini, 'output', 'parallel_index', .false., fini_char)
+    fini_string = trim(fini_char)
+
+    if (fini_string /= "") then
+       call fini_string%split(tokens=split_strings, sep=' ', &
+            max_tokens=2)
+
+       if (size(split_strings) /= 2) then
+          call logger%fatal(fname, "Sorry, I require exactly 2 arguments" &
+               // " for the parallel indices.")
+          stop 1
+       end if
+
+       tmp_str = split_strings(1)%chars()
+       read(tmp_str, '(I10)') MCS%output%this_parallel_index
+       tmp_str = split_strings(2)%chars()
+       read(tmp_str, '(I10)') MCS%output%N_parallel_index
+
+       ! The indices have to be > 1, and this_parallel_index needs to be <=
+       ! N_parallel_index
+
+       if (MCS%output%this_parallel_index < 1) then
+          call logger%fatal(fname, "Sorry, 'this_parallel_index' is < 1")
+          stop 1
+       end if
+
+       if (MCS%output%this_parallel_index > MCS%output%N_parallel_index) then
+          call logger%fatal(fname, "Sorry, 'this_parallel_index' is > " &
+               // "'N_parallel_index'")
+          stop 1
+       end if
+    else
+       MCS%output%this_parallel_index = -1
+       MCS%output%N_parallel_index = -1
     end if
 
     ! ----------------------------------------------------------------------
@@ -482,6 +527,9 @@ contains
 
           call fini_extract(fini, tmp_str, 'band', .true., fini_int)
           MCS%window(window_nr)%band = fini_int
+
+          call fini_extract(fini, tmp_str, 'inverse_method', .true., fini_char)
+          MCS%window(window_nr)%inverse_method = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'max_iterations', .true., fini_int)
           if (fini_int > 0) then

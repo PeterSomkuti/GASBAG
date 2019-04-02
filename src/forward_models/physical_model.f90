@@ -33,6 +33,7 @@ module physical_model_mod
 
   ! System modules
   use ISO_FORTRAN_ENV
+  USE OMP_LIB
   use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
@@ -223,6 +224,8 @@ contains
     integer :: funit
     ! CPU time stamps and mean duration for performance analysis
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
+    integer :: frame_start, frame_skip
+    integer :: fp_start, fp_skip
 
     ! Open up the MET file
     call h5fopen_f(MCS%input%met_filename%chars(), &
@@ -511,14 +514,6 @@ contains
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, SV, i_win)
 
-       ! retr_count keeps track of the number of retrievals processed
-       ! so far, and the mean_duration keeps track of the average
-       ! processing time.
-       retr_count = 0
-       total_number_todo = (num_fp * num_frames) / &
-            (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
-       mean_duration = 0.0d0
-
 
        ! BIG LOOP
        ! TODO: it would be REALLY neat if this loop could be
@@ -526,8 +521,28 @@ contains
        ! speedup.
        call logger%info(fname, "Starting main retrieval loop!")
 
-       do i_fr=1, num_frames, MCS%window(i_win)%frame_skip ! 38920, 38922!
-          do i_fp=1, num_fp, MCS%window(i_win)%footprint_skip
+       if ((MCS%output%this_parallel_index /= -1) .and. &
+            (MCS%output%N_parallel_index /= -1)) then
+
+          frame_start = MCS%output%this_parallel_index
+          frame_skip = MCS%output%N_parallel_index
+
+       else
+          frame_start = 1
+          frame_skip = MCS%window(i_win)%frame_skip
+       end if
+
+       ! retr_count keeps track of the number of retrievals processed
+       ! so far, and the mean_duration keeps track of the average
+       ! processing time.
+       retr_count = 0
+       total_number_todo = (num_fp * num_frames / frame_skip) / &
+            (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
+       mean_duration = 0.0d0
+
+
+       do i_fr=frame_start, num_frames, frame_skip
+          do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
              call cpu_time(cpu_time_start)
              ! Do the retrieval for this particular sounding
@@ -551,9 +566,6 @@ contains
 
           end do
        end do
-
-
-
 
        ! Create an HDF group for all windows separately
        group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
@@ -903,7 +915,7 @@ contains
     integer :: i, j, l
     ! File unit for debugging
     integer :: funit
-
+    double precision :: random_dp
 
     ! Take a local copy of the HDF file ID handlers
     l1b_file_id = MCS%input%l1b_file_id
@@ -1168,6 +1180,15 @@ contains
                    ! specific humidty directly, rather than the H2O column of the
                    ! atmosphere text file.
                    this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
+
+                   ! DELETE ME!
+                   ! This modifies the first-guess profile magnitude of H2O, otherwise
+                   ! we are just using the "true" value in the case of simulations.
+                   call random_number(random_dp)
+                   random_dp = 0.25 + random_dp * (4.0d0 - 0.25d0)
+
+                   this_atm%gas_vmr(:,i) = this_atm%gas_vmr(:,i) * random_dp
+
                 end if
              end do
 
@@ -1381,7 +1402,6 @@ contains
                 is_H2O = .false.
              end if
 
-
 !!$             do i=1, SV%num_gas
 !!$
 !!$                gas_pert_step_size = (0.85d0 * SV%svsv(SV%idx_gas(i,1)))
@@ -1532,61 +1552,15 @@ contains
                / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
        end if
 
-!!$       open(file="perturbed_tau.dat", newunit=funit)
-!!$       do i=1, size(total_tau)
-!!$          write(funit, *) i, total_tau(i), total_tau_pert(i)
-!!$       end do
-!!$       close(funit)
-
-
        ! Gas jacobians
        if (SV%num_gas > 0) then
 
           do i=1, SV%num_gas
+             ! Jacobian for a scalar-type gas retrieval
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-
-                ! This is a scale-type jacobian
-                !!do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
-
-                ! Loop through all potential profile "sections", but skip the unused ones
-                !if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i), j) == -1.0d0) cycle
-
-!!!!
-!!$                total_tau_pert(:) = sum(sum(gas_tau_pert(:,:,:,i), dim=2), dim=2)
-!!$                call calculate_Beer_Lambert(hires_grid, mu0, mu, &
-!!$                     albedo, total_tau_pert, &
-!!$                     radiance_calc_work_hi(:))
-!!$                radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * this_solar(:,2)
-
-                !K_hi(:, SV%idx_gas(i,1)) = radiance_calc_work_hi(:)
-
-                !call calculate_Beer_Lambert(hires_grid, mu0, mu, &
-                !     albedo, total_tau, &
-                !     radiance_calc_work_hi(:))
-                !radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * this_solar(:,2)
-
-                !K_hi(:, SV%idx_gas(i,1)) = -(K_hi(:, SV%idx_gas(i,1)) - radiance_calc_work_hi(:)) &
-                !     / (gas_pert_step_size)
-
-!!$                open(file="finite_diff_scale.dat", newunit=funit)
-!!$                do l=1, size(total_tau)
-!!$                   write(funit, *) K_hi(l, SV%idx_gas(i,1))
-!!$                end do
-!!$                close(funit)
-!!!!
-                !if (iteration > 1) then
                    K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
                         * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) &
-                        / (1.0d0 * SV%svsv(SV%idx_gas(i,1)))
-
-                !end if
-!!$                open(file="anayltic_scale.dat", newunit=funit)
-!!$                do l=1, size(total_tau)
-!!$                   write(funit, *) K_hi(l, SV%idx_gas(i,1))
-!!$                end do
-!!$                close(funit)
-
-                !!end do
+                        / SV%svsv(SV%idx_gas(i,1))
              end if
 
           end do
@@ -1726,7 +1700,6 @@ contains
              ! do not require or work with high-res spectra.
              skip_jacobian = .false.
 
-
              do j=1, SV%num_dispersion
                 ! This is a dispersion Jacobian! Maybe there's a smart way of doing
                 ! this analytically, but for now we just perform finite
@@ -1837,26 +1810,50 @@ contains
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
 
-       ! K^T Se^-1 K
-       KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
-       ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
-       ! tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
-       tmp_m1 = Sa_inv + KtSeK
-       call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
-       if (.not. success_inv_mat) then
-          call logger%error(fname, "Failed to invert K^T Se K")
-          return
+
+       ! Inverse method solver
+       write(tmp_str, *) MCS%window(i_win)%inverse_method%chars()
+       if (MCS%window(i_win)%inverse_method%lower() == "imap") then
+          ! Use iterative maximum a-posteriori solution (linear retrieval)
+
+          ! K^T Se^-1 K
+          KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
+
+          tmp_m1 = Sa_inv + KtSeK
+          call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
+          if (.not. success_inv_mat) then
+             call logger%error(fname, "Failed to invert K^T Se K")
+             return
+          end if
+
+          tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
+               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
+
+          ! Update state vector
+          SV%svsv = SV%svap + tmp_v2
+       else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
+
+          ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
+          ! tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
+
+          ! K^T Se^-1 K
+          !KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
+
+          !tmp_m1 = Sa_inv + KtSeK
+          !call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
+          !if (.not. success_inv_mat) then
+          !   call logger%error(fname, "Failed to invert K^T Se K")
+          !   return
+          !end if
+
+          !tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
+          !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+          !SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+       else
+
+          call logger%error(fname, "Inverse method: " // trim(tmp_str) // ", not known!")
+          stop 1
        end if
-
-       !tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-       !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
-
-       tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
-            radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
-
-       ! Update state vector
-       !SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
-       SV%svsv = SV%svap + tmp_v2
 
 
        ! In the case of retrieving gases - we have to adjust the retrieved state vector
@@ -1898,15 +1895,16 @@ contains
        this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
             noise_work, N_spec - N_sv)
 
-       write(*,*) "Chi2: ", this_chi2
-       write(*,*) "Linear prediction: ", linear_prediction_chi2
-       write(*,*) "Ratio R: ", (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
+       !write(*,*) "Chi2: ", this_chi2
+       !write(*,*) "Linear prediction: ", linear_prediction_chi2
+       !write(*,*) "Ratio R: ", (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
 
 
        ! Now we check for convergence!
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
+            (abs(this_chi2 - old_chi2) / old_chi2 < 0.01) .or. &
             (num_divergent_steps > 1) &
             ) then
 
@@ -1982,9 +1980,9 @@ contains
              SV%sver(i) = sqrt(Shat(i,i))
           end do
 
-          do i=1, N_sv
-             write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
-          end do
+          !do i=1, N_sv
+          !   write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
+          !end do
 
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
@@ -2104,18 +2102,18 @@ contains
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
 !!$       end do
 !!$
-       write(*,*) "old, current and delta state vector, and errors"
+!       write(*,*) "old, current and delta state vector, and errors"
 
-       write(*,*) "Iteration: ", iteration
-       do i=1, N_sv
-          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-       write(*,*) "LM-Gamma: ", lm_gamma
-       write(*,*) "Ratio R: ", chi2_ratio
+!       write(*,*) "Iteration: ", iteration
+!       do i=1, N_sv
+!          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
+!               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
+!       end do
+!       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!       write(*,*) "LM-Gamma: ", lm_gamma
+!       write(*,*) "Ratio R: ", chi2_ratio
 
 
        ! These quantities are all allocated within the iteration loop, and

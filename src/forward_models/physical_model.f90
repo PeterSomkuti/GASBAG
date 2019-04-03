@@ -170,8 +170,8 @@ module physical_model_mod
   !> Calculated noise radiances (pixel, footprint, frame)
   double precision, dimension(:,:,:), allocatable :: noise_radiance
 
-  !> State vector construct
-  type(statevector) :: SV
+  !> Global state vector construct
+  type(statevector) :: global_SV
   !> Result container
   type(result_container) :: results
 
@@ -504,15 +504,15 @@ contains
        ! For the beginning, we start by initialising it with the number of levels
        ! as obtained from the initial_atm
 
-       call parse_and_initialize_SV(i_win, size(initial_atm%p), SV)
+       call parse_and_initialize_SV(i_win, size(initial_atm%p), global_SV)
        call logger%info(fname, "Initialised SV structure")
 
        ! And now set up the result container with the appropriate sizes for arrays
        call create_result_container(results, num_frames, num_fp, &
-            size(SV%svap), SV%num_gas)
+            size(global_SV%svap), global_SV%num_gas)
 
        ! Create the SV names corresponding to the SV indices
-       call assign_SV_names_to_result(results, SV, i_win)
+       call assign_SV_names_to_result(results, global_SV, i_win)
 
 
        ! BIG LOOP
@@ -540,16 +540,23 @@ contains
             (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
 
-
+!$OMP PARALLEL DO SHARED(retr_count, mean_duration) PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_converged)
        do i_fr=frame_start, num_frames, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
+#ifdef _OPENMP
+             cpu_time_start = omp_get_wtime()
+#else
              call cpu_time(cpu_time_start)
+#endif
              ! Do the retrieval for this particular sounding
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
              ! After the very first call, we set first_band_call to false
+#ifdef _OPENMP
+             cpu_time_stop = omp_get_wtime()
+#else
              call cpu_time(cpu_time_stop)
-
+#endif
              ! Increase the rerival count tracker and compute the average processing
              ! time per retrieval.
              retr_count = retr_count + 1
@@ -557,15 +564,17 @@ contains
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
              if (mod(retr_count, 1) == 0) then
-                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1)') &
+                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
-                     (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', this_converged
+                     (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', &
+                     this_converged, ", Thread #: ", OMP_GET_THREAD_NUM()
                 call logger%debug(fname, trim(tmp_str))
              end if
 
           end do
        end do
+!$OMP END PARALLEL DO
 
        ! Create an HDF group for all windows separately
        group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
@@ -584,7 +593,7 @@ contains
             trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
 
        ! Save the retrieved state vectors
-       do i=1, size(SV%svsv)
+       do i=1, size(global_SV%svsv)
           write(tmp_str, '(A,A,A,A)') trim(group_name) // "/" // results%sv_names(i)
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
@@ -593,7 +602,7 @@ contains
        end do
 
        ! Save the retrieved state vector uncertainties
-       do i=1, size(SV%svsv)
+       do i=1, size(global_SV%svsv)
           write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" &
                // results%sv_names(i) // "_uncertainty"
           call logger%info(fname, "Writing out: " // trim(tmp_str))
@@ -603,15 +612,15 @@ contains
        end do
 
        ! Save the dry air mass (molecules / cm2)
-       do i=1, SV%num_gas
-          if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+       do i=1, global_SV%num_gas
+          if (MCS%window(i_win)%gas_retrieve_scale(global_SV%gas_idx_lookup(i))) then
 
              ! This is a scale-type jacobian
-             do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(i),:))
+             do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(global_SV%gas_idx_lookup(i),:))
 
-                if (SV%gas_idx_lookup(i) == j) then
+                if (global_SV%gas_idx_lookup(i) == j) then
                    write(tmp_str, "(A, A, A)") trim(group_name) // "/", &
-                        results%SV_names(SV%idx_gas(i,1))%chars(), "_ndry"
+                        results%SV_names(global_SV%idx_gas(i,1))%chars(), "_ndry"
                    call logger%info(fname, "Writing out: " // trim(tmp_str))
                    call write_DP_hdf_dataset(output_file_id, &
                         trim(tmp_str), &
@@ -711,7 +720,7 @@ contains
        ! We really shouldn't need to check if this is deallocated already or not,
        ! since parse_and_initialize_SV should have successfully allocated
        ! all fields in SV.
-       call clear_SV(SV)
+       call clear_SV(global_SV)
        call logger%info(fname, "Clearing up SV structure")
 
        ! Clear up sounding geometry
@@ -833,7 +842,7 @@ contains
     ! Total column optical depth (spectral)
     double precision, allocatable :: total_tau(:), total_tau_pert(:)
     ! Start and end positions in the atmosphere of the gas scalar
-    integer :: s_start(SV%num_gas), s_stop(SV%num_gas)
+    integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
     ! Is this gas H2O?
     logical :: is_H2O
     ! Number of molecules of dry air per m^2
@@ -864,6 +873,7 @@ contains
     logical :: success_gas
 
     ! Retrieval quantities
+    type(statevector) :: SV
     ! User-defined value to scale the dsigma_sq value that essentially
     ! controls convergence. A higher value will lead to faster convergence.
     double precision :: dsigma_scale
@@ -876,6 +886,7 @@ contains
     double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
     ! Posterior covariance matrix and its inverse (N_sv, N_sv)
     double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
+
 
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
@@ -916,6 +927,9 @@ contains
     ! File unit for debugging
     integer :: funit
     double precision :: random_dp
+
+    ! Grab a copy of the state vector for local use
+    SV = global_SV
 
     ! Take a local copy of the HDF file ID handlers
     l1b_file_id = MCS%input%l1b_file_id
@@ -1187,7 +1201,7 @@ contains
                    call random_number(random_dp)
                    random_dp = 0.25 + random_dp * (4.0d0 - 0.25d0)
 
-                   this_atm%gas_vmr(:,i) = this_atm%gas_vmr(:,i) * random_dp
+                   !this_atm%gas_vmr(:,i) = this_atm%gas_vmr(:,i) * random_dp
 
                 end if
              end do
@@ -1401,33 +1415,6 @@ contains
              else
                 is_H2O = .false.
              end if
-
-!!$             do i=1, SV%num_gas
-!!$
-!!$                gas_pert_step_size = (0.85d0 * SV%svsv(SV%idx_gas(i,1)))
-!!$                write(*,*) gas_pert_step_size
-!!$                ! DELETEME
-!!$                ! Call the function that calculates the gas optical depths
-!!$                call calculate_gas_tau( &
-!!$                     .true., & ! We are using pre-gridded spectroscopy!
-!!$                     is_H2O, & ! Is this gas H2O?
-!!$                     hires_grid, & ! The high-resolution wavelength grid
-!!$                     this_vmr_profile(:,SV%gas_idx_lookup(i)) * (1.0d0 - gas_pert_step_size) , & ! The gas VMR profile for this gas with index j
-!!$                     this_psurf, & ! Surface pressure
-!!$                     this_atm%p(:), & ! Atmospheric profile pressures
-!!$                     this_atm%T(:), & ! Atmospheric profile temperature
-!!$                     this_atm%sh(:), & ! Atmospheric profile humidity
-!!$                     MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
-!!$                     MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
-!!$                     do_psurf_jac, & ! Do we require surface pressure jacobians?
-!!$                     do_gas_jac, & ! Do we require gas OD jacobians?
-!!$                     gas_tau_pert(:,:,j,i), & ! Output: Gas ODs
-!!$                     gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-!!$                     gas_tau_dvmr(:,:,j), & ! Output: dTau/dVMR
-!!$                     ndry_tmp, & ! Output: ndry molecules per m2
-!!$                     success_gas) ! Output: Was the calculation successful?
-!!$             end do
-
 
              ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &

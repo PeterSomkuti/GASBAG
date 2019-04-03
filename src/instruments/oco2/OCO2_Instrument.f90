@@ -224,9 +224,6 @@ contains
        stop 1
     end if
 
-    call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening spectra at: " // trim(dset_name))
-
     ! Offset - where do we start our hyperslab? We read the full spectrum, so
     ! the first index is 0, the other two depenend on the indices.
     ! Remember the order in OCO-2 files: (spectral index, footprint, frame)
@@ -259,7 +256,10 @@ contains
 
     ! If we have OpenMP, lock this section of the code, to make sure
     ! only one thread at a time is reading in a spectrum..
-    call OMP_init_lock(lck)
+
+!$OMP CRITICAL
+    call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error opening spectra at: " // trim(dset_name))
 
     call h5dget_space_f(dset_id, dspace_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error getting dataspace id for " // trim(dset_name))
@@ -274,9 +274,7 @@ contains
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, &
          hdferr, memspace_id, dspace_id)
     call check_hdf_error(hdferr, fname, "Error reading spectrum data from " // trim(dset_name))
-
-    ! Release the lock after the spectrum was read..
-    call OMP_destroy_lock(lck)
+!$OMP END CRITICAL
 
   end subroutine read_one_spectrum
 
@@ -302,8 +300,10 @@ contains
     integer(hsize_t), allocatable :: dims(:)
     integer :: i
 
+!$OMP CRITICAL
     call read_DP_hdf_dataset(MCS%input%l1b_file_id, &
          "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
+!$OMP END CRITICAL
 
     do i=1, size(noise)
        noise(i) = (MaxMS(band) / 100.0d0) * sqrt(abs(100.0d0 * radiance(i) / MaxMS(band)) * &

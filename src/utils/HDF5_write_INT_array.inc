@@ -6,10 +6,10 @@ call check_hdf_error(hdferr, fname, "Error creating dataset creation property li
 
 ! This is for compression
 call h5pset_chunk_f(dcpl, size(dims), dims, hdferr)
-call h5pset_deflate_f(dcpl, 9, hdferr)
+call h5pset_deflate_f(dcpl, 1, hdferr)
 
 if (present(fill_value)) then
-    call h5pset_fill_value_f(dcpl, H5T_NATIVE_INTEGEr, conv_fill_value, hdferr)
+    call h5pset_fill_value_f(dcpl, H5T_NATIVE_INTEGER, conv_fill_value, hdferr)
     call check_hdf_error(hdferr, fname, "Error setting dataset fill value")
 end if
 

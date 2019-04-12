@@ -26,6 +26,7 @@ module physical_model_mod
   use absco_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
+  use smart_first_guess_mod
 
   ! Third-party modules
   use logger_mod, only: logger => master_logger
@@ -169,6 +170,8 @@ module physical_model_mod
   double precision, dimension(:,:,:), allocatable :: measured_radiance
   !> Calculated noise radiances (pixel, footprint, frame)
   double precision, dimension(:,:,:), allocatable :: noise_radiance
+  !> Wavelength array (pixel, footprint, frame)
+  double precision, dimension(:,:,:), allocatable :: wavelength_radiance
 
   !> Global state vector construct
   type(statevector) :: global_SV
@@ -216,6 +219,8 @@ contains
     integer :: num_frames, num_fp, num_pixel, num_band
     ! Loop variables
     integer :: i, j, i_fp, i_fr, i_win, band
+    ! Thread number for openMP
+    integer :: this_thread
     ! Retrieval count
     integer :: retr_count, total_number_todo
     ! Return value of physical_fm, tells us whether this one has converged or not
@@ -237,6 +242,7 @@ contains
     met_file_id = MCS%input%met_file_id
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
+    this_thread = 0
 
     ! Grab number of frames and footprints
     num_frames = MCS%general%N_frame
@@ -293,19 +299,6 @@ contains
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-       ! Conveniently grab the number of spectral pixels and number of bands
-
-
-       ! Read dispersion coefficients and create dispersion array
-       call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
-       allocate(dispersion(num_pixel, num_fp, num_band))
-
-       do band=1, num_band
-          do i_fp=1, num_fp
-             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, band), &
-                  dispersion(:, i_fp, band), band, i_fp)
-          end do
-       end do
 
        ! Read in the sounding id's
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
@@ -326,6 +319,28 @@ contains
        if (bad_sample_exists) then
           call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
        end if
+
+       ! Read dispersion coefficients and create dispersion array
+       call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
+
+       ! Grab the number of spectral pixels in this band - we need to grab the largest value
+       ! of all bands here. TODO: This will cause problems if we have different number of
+       ! pixels for the different bands!
+       num_pixel = 0
+       do band=1, num_band
+          if (MCS%general%N_spec(band) > num_pixel) then
+             num_pixel = MCS%general%N_spec(band)
+          end if
+       end do
+
+       allocate(dispersion(num_pixel, num_fp, num_band))
+
+       do band=1, num_band
+          do i_fp=1, num_fp
+             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, band), &
+                  dispersion(:, i_fp, band), band, i_fp)
+          end do
+       end do
 
     end select
 
@@ -379,6 +394,8 @@ contains
 
        ! The currently used band / spectrometer number
        band = MCS%window(i_win)%band
+       ! Grab the number of spectral pixels in this band
+       num_pixel = MCS%general%N_spec(band)
 
        ! We are reading in the sounding geometry and location on a
        ! per-band basis. This might not be necessary for all instruments,
@@ -390,10 +407,10 @@ contains
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
                altitude, relative_velocity, relative_solar_velocity)
+
        end select
 
-       ! Grab the number of spectral pixels in this band
-       num_pixel = MCS%general%N_spec(band)
+
 
        ! Find the smallest and largest delta-lambda values for all ILSs
        ! in this given band to calculate hires_pad.
@@ -472,13 +489,15 @@ contains
           allocate(final_radiance(num_pixel, num_fp, num_frames))
           allocate(measured_radiance(num_pixel, num_fp, num_frames))
           allocate(noise_radiance(num_pixel, num_fp, num_frames))
+          allocate(wavelength_radiance(num_pixel, num_fp, num_frames))
 
           ! We fill these with NaNs. This makes plotting a bit easier, since
           ! most plotting routines (at least Matplotlib does it) just skip NaNs,
           ! so you will only see the values that are populated / used.
-          final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-          measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-          noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          final_radiance(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          measured_radiance(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          noise_radiance(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          wavelength_radiance(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        end if
 
        ! Set up state vector structure here
@@ -515,22 +534,9 @@ contains
        call assign_SV_names_to_result(results, global_SV, i_win)
 
 
-       ! BIG LOOP
-       ! TODO: it would be REALLY neat if this loop could be
-       ! multi-threaded at some point. Should give a near-linear
-       ! speedup.
        call logger%info(fname, "Starting main retrieval loop!")
-
-       if ((MCS%output%this_parallel_index /= -1) .and. &
-            (MCS%output%N_parallel_index /= -1)) then
-
-          frame_start = MCS%output%this_parallel_index
-          frame_skip = MCS%output%N_parallel_index
-
-       else
-          frame_start = 1
-          frame_skip = MCS%window(i_win)%frame_skip
-       end if
+       frame_start = 1
+       frame_skip = MCS%window(i_win)%frame_skip
 
        ! retr_count keeps track of the number of retrievals processed
        ! so far, and the mean_duration keeps track of the average
@@ -540,18 +546,27 @@ contains
             (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
 
-!$OMP PARALLEL DO SHARED(retr_count, mean_duration) PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_converged)
+       ! At the moment, OpenMP is implemented to spread the loop over many threads,
+       ! and should be maxed out at the number of available cores on the same machine.
+       ! This could be further expanded to use MPI, but at the moment, this seems fast
+       ! enough for my humble purposes.
+       ! As you can see, it does not require much, whereas MPI would be more effort.
+
+!$OMP PARALLEL DO SHARED(retr_count, mean_duration) PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, num_frames, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
 #ifdef _OPENMP
+             this_thread = OMP_GET_THREAD_NUM()
              cpu_time_start = omp_get_wtime()
 #else
              call cpu_time(cpu_time_start)
 #endif
-             ! Do the retrieval for this particular sounding
+             ! --------------------------------------------- !
+             ! Do the retrieval for this particular sounding !
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
-             ! After the very first call, we set first_band_call to false
+             ! --------------------------------------------- !
+
 #ifdef _OPENMP
              cpu_time_stop = omp_get_wtime()
 #else
@@ -568,7 +583,7 @@ contains
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
                      (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', &
-                     this_converged, ", Thread #: ", OMP_GET_THREAD_NUM()
+                     this_converged, ", Thread #: ", this_thread
                 call logger%debug(fname, trim(tmp_str))
              end if
 
@@ -591,6 +606,16 @@ contains
        write(tmp_str, '(A,A,A)') trim(group_name) // "/prior_psurf"
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
+
+       ! Save the prior state vectors
+       do i=1, size(global_SV%svsv)
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" &
+               // results%sv_names(i) // "_prior"
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               results%sv_prior(:,:,i), out_dims2d, -9999.99d0)
+       end do
 
        ! Save the retrieved state vectors
        do i=1, size(global_SV%svsv)
@@ -704,10 +729,19 @@ contains
                trim(tmp_str), &
                noise_radiance, out_dims3d)
 
+          out_dims3d = shape(wavelength_radiance)
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength")
+          write(tmp_str, '(A,A)') trim(group_name) // "/wavelength"
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               wavelength_radiance, out_dims3d)
+
           ! Also deallocate containers holding the radiances
           deallocate(final_radiance)
           deallocate(measured_radiance)
           deallocate(noise_radiance)
+          deallocate(wavelength_radiance)
+
        end if
 
        ! Clean-up phase! We need to deallocate / destroy a few arrays here, so
@@ -840,7 +874,7 @@ contains
     ! Rayleigh extinction optical depth (spectral, layer)
     double precision, allocatable :: ray_tau(:,:)
     ! Total column optical depth (spectral)
-    double precision, allocatable :: total_tau(:), total_tau_pert(:)
+    double precision, allocatable :: total_tau(:), convolved_tau(:)
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
     ! Is this gas H2O?
@@ -871,6 +905,10 @@ contains
     logical :: do_gas_jac
     ! Was the calculation of gas ODs successful?
     logical :: success_gas
+    double precision :: expected_wavelengths_in(1)
+    double precision :: expected_wavelengths_out(1)
+    double precision :: expected_delta_tau(1)
+    double precision :: scale_first_guess(1)
 
     ! Retrieval quantities
     type(statevector) :: SV
@@ -957,6 +995,16 @@ contains
 
     end select
 
+    expected_wavelengths_in(1) = 2.05555d0
+    expected_wavelengths_out(1) = 2.05588d0
+    expected_delta_tau(1) = 1.38d0
+
+    call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
+         radiance_l1b, expected_wavelengths_in, expected_wavelengths_out, &
+         expected_delta_tau, SZA(i_fp, i_fr), VZA(i_fp, i_fr), scale_first_guess)
+
+
+
     ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
@@ -1037,10 +1085,14 @@ contains
 
     Sa_inv(:,:) = 0.0d0
     Sa(:,:) = 0.0d0
+    ! Separate function to populate the prior covariance - this contains
+    ! a good number of hard-coded values, which in future should be
+    ! given through the config file.
     call populate_prior_covariance(SV, percentile(radiance_l1b, 98.0d0), &
          i_win, Sa, Sa_inv)
 
-    ! Get the albedo prior
+    ! Get the albedo prior estimated through the L1B radiances using a simple
+    ! Lambertian model.
     select type(my_instrument)
     type is (oco2_instrument)
 
@@ -1102,7 +1154,7 @@ contains
     if (SV%num_gas > 0) then
        do i=1, SV%num_gas
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-             SV%svap(SV%idx_gas(i,1)) = 1.0d0
+             SV%svap(SV%idx_gas(i,1)) = scale_first_guess(1) !1.0d0
           end if
        end do
     end if
@@ -1140,6 +1192,7 @@ contains
           ! and the first guess state vector is the prior
           SV%svsv = SV%svap
           !
+          results%sv_prior(i_fp, i_fr, :) = SV%svap
           last_successful_sv(:) = SV%svap
           old_sv(:) = SV%svap
 
@@ -1198,8 +1251,8 @@ contains
                    ! DELETE ME!
                    ! This modifies the first-guess profile magnitude of H2O, otherwise
                    ! we are just using the "true" value in the case of simulations.
-                   call random_number(random_dp)
-                   random_dp = 0.25 + random_dp * (4.0d0 - 0.25d0)
+                   !call random_number(random_dp)
+                   !random_dp = 0.25 + random_dp * (4.0d0 - 0.25d0)
 
                    !this_atm%gas_vmr(:,i) = this_atm%gas_vmr(:,i) * random_dp
 
@@ -1450,11 +1503,44 @@ contains
 
           ! Total optical depth is calculated as sum of all gas ODs
           allocate(total_tau(N_hires))
-          allocate(total_tau_pert(N_hires))
-          !total_tau(:) = 0.0d0
           total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
        end if
 
+       ! Grab a copy of the dispersion coefficients from the L1B
+       this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
+
+       ! .. and if required, replace L1B dispersion coefficients by state vector
+       ! elements from the retrieval process
+       if (SV%num_dispersion > 0) then
+          do i=1, SV%num_dispersion
+             this_dispersion_coefs(i) = SV%svsv(SV%idx_dispersion(i))
+          end do
+       end if
+
+       ! Calculate the wavelength grid using those dispersion coefficients
+       select type(my_instrument)
+       type is (oco2_instrument)
+          call my_instrument%calculate_dispersion(this_dispersion_coefs, &
+               this_dispersion(:), band, i_fp)
+       end select
+
+       ! Stretch the (total) dispersion according to the instrument doppler shift
+       this_dispersion = this_dispersion / (1.0d0 - instrument_doppler)
+
+       ! Here we grab the index limits for the radiances for
+       ! the choice of our microwindow and the given dispersion relation
+       call calculate_dispersion_limits(this_dispersion, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
+
+       ! Number of spectral points in the output resolution
+       N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
+
+       ! Allocate various arrays that depend on N_spec
+       allocate(K(N_spec, N_sv))
+       allocate(gain_matrix(N_sv, N_spec))
+       allocate(radiance_meas_work(N_spec))
+       allocate(radiance_calc_work(N_spec))
+       allocate(radiance_tmp_work(N_spec))
+       allocate(noise_work(N_spec))
 
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
@@ -1515,7 +1601,6 @@ contains
        radiance_tmp_work_hi(:) = radiance_calc_work_hi(:)
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
 
-
        ! JACOBIAN CALCULATIONS
 
        ! Surface pressure Jacobian
@@ -1545,55 +1630,19 @@ contains
           do i=1, SV%num_gas
              ! Jacobian for a scalar-type gas retrieval
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-                   K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
-                        * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) &
-                        / SV%svsv(SV%idx_gas(i,1))
+                K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
+                     * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) &
+                     / SV%svsv(SV%idx_gas(i,1))
              end if
 
           end do
        end if
 
 
-       ! Stokes coeff0icients
+       ! Stokes coefficients
        ! TODO: apply Stokes coefficients here via instrument parameters from L1b?
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:)
        K_hi(:,:) = K_hi(:,:)
-
-       ! Grab a copy of the dispersion coefficients from the L1B
-       this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)
-
-       ! .. and if required, replace L1B dispersion coefficients by state vector
-       ! elements from the retrieval process
-       if (SV%num_dispersion > 0) then
-          do i=1, SV%num_dispersion
-             this_dispersion_coefs(i) = SV%svsv(SV%idx_dispersion(i))
-          end do
-       end if
-
-       ! Calculate the wavelength grid using those dispersion coefficients
-       select type(my_instrument)
-       type is (oco2_instrument)
-          call my_instrument%calculate_dispersion(this_dispersion_coefs, &
-               this_dispersion(:), band, i_fp)
-       end select
-
-       ! Stretch the (total) dispersion according to the instrument doppler shift
-       this_dispersion = this_dispersion / (1.0d0 - instrument_doppler)
-
-       ! Here we grab the index limits for the radiances for
-       ! the choice of our microwindow and the given dispersion relation
-       call calculate_dispersion_limits(this_dispersion, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
-
-       ! Number of spectral points in the output resolution
-       N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
-
-       ! Allocate various arrays that depend on N_spec
-       allocate(K(N_spec, N_sv))
-       allocate(gain_matrix(N_sv, N_spec))
-       allocate(radiance_meas_work(N_spec))
-       allocate(radiance_calc_work(N_spec))
-       allocate(radiance_tmp_work(N_spec))
-       allocate(noise_work(N_spec))
 
        ! Grab a copy of the L1b radiances
        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
@@ -1813,11 +1862,15 @@ contains
              return
           end if
 
+          !          tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
+          !               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
+
           tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
-               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
+               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - old_sv))
 
           ! Update state vector
-          SV%svsv = SV%svap + tmp_v2
+          !SV%svsv = SV%svap + tmp_v2
+          SV%svsv = old_sv + tmp_v2
        else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
 
           ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
@@ -1837,7 +1890,6 @@ contains
           !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
           !SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
        else
-
           call logger%error(fname, "Inverse method: " // trim(tmp_str) // ", not known!")
           stop 1
        end if
@@ -1848,11 +1900,11 @@ contains
        do i=1, SV%num_gas
           do j=1, size(sv%idx_gas(i,:))
              if (SV%idx_gas(i,j) /= -1) then
-                if (SV%svsv(sv%idx_gas(i, j)) < (0.25d0 * old_sv(sv%idx_gas(i, j)))) then
-                   SV%svsv(sv%idx_gas(i, j)) = (0.25d0 * old_sv(sv%idx_gas(i, j)))
+                if (SV%svsv(sv%idx_gas(i, j)) < (0.5d0 * old_sv(sv%idx_gas(i, j)))) then
+                   SV%svsv(sv%idx_gas(i, j)) = (0.5d0 * old_sv(sv%idx_gas(i, j)))
                 end if
-                if (SV%svsv(sv%idx_gas(i, j)) < 0.1d0) then
-                   SV%svsv(sv%idx_gas(i, j)) = 0.1d0
+                if (SV%svsv(sv%idx_gas(i, j)) < 0.01d0) then
+                   SV%svsv(sv%idx_gas(i, j)) = 0.01d0
                 end if
              end if
           end do
@@ -1891,7 +1943,8 @@ contains
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
-            (abs(this_chi2 - old_chi2) / old_chi2 < 0.01) .or. &
+            ((abs(this_chi2 - old_chi2) / old_chi2) < 0.01) .or. &
+                                !(abs(sqrt(old_chi2) - sqrt(this_chi2)) < 0.01) .or. &
             (num_divergent_steps > 1) &
             ) then
 
@@ -1998,6 +2051,7 @@ contains
              final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
              measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
              noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+             wavelength_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) =  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max)
           end if
 
           ! Write a debug message
@@ -2082,25 +2136,25 @@ contains
 !!$               noise_work(i)!, solar_low(i)
 !!$       end do
 !!$       close(funit)
-
-
+!!$
+!!$
 !!$       write(*,*) num_active_levels
 !!$       do i=1, num_active_levels
 !!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
 !!$       end do
 !!$
-!       write(*,*) "old, current and delta state vector, and errors"
-
-!       write(*,*) "Iteration: ", iteration
-!       do i=1, N_sv
-!          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!               i, results%sv_names(i)%chars(), old_sv(i), SV%svsv(i), &
-!               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
-!       end do
-!       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!       write(*,*) "LM-Gamma: ", lm_gamma
-!       write(*,*) "Ratio R: ", chi2_ratio
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!!$       write(*,*) "LM-Gamma: ", lm_gamma
+!!$       write(*,*) "Ratio R: ", chi2_ratio
 
 
        ! These quantities are all allocated within the iteration loop, and
@@ -2114,7 +2168,6 @@ contains
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
        if (allocated(ray_tau)) deallocate(ray_tau)
        if (allocated(total_tau)) deallocate(total_tau)
-       if (allocated(total_tau_pert)) deallocate(total_tau_pert)
        if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
        if (allocated(ndry)) deallocate(ndry)
@@ -2153,9 +2206,9 @@ contains
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
           if (i==1) then
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 0.1d0 !* SV%svap(SV%idx_albedo(i))
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(i))
           else
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 0.1d0 !* SV%svap(SV%idx_albedo(1)) ** dble(i)
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(1)) ** dble(i)
           end if
        end do
     end if

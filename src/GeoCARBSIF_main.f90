@@ -79,19 +79,8 @@ program GeoCARBSIF
   ! Open up the output HDF5 file for writing and save the HDF5 file handler in
   ! MCS to be used all over the program. The default behaviour (from now on)
   ! is to abort if the file already exists. Overwriting can be dangerous!!
-
-  if (MCS%output%this_parallel_index /= -1) then
-     ! If we are processing in parallel, then a number is added to the filename
-     write(tmp_str, "(A,A,I5.5,A,I5.5)") MCS%output%output_filename%chars(), &
-          ".", MCS%output%this_parallel_index, "_", MCS%output%N_parallel_index
-     call h5fcreate_f(trim(tmp_str), H5F_ACC_EXCL_F, &
-          MCS%output%output_file_id, hdferr)
-  else
-     ! If no parallel processing - just create the requested output name
-     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
-          MCS%output%output_file_id, hdferr)
-  end if
-
+  call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
+       MCS%output%output_file_id, hdferr)
 
   call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
        // trim(MCS%output%output_filename%chars()))
@@ -102,8 +91,6 @@ program GeoCARBSIF
      ! number of frames, footprints, bands and spectral points
      call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
   end select
-
-
 
 
   ! Go and perform the retrieval process. At this stage, all information from

@@ -905,10 +905,10 @@ contains
     logical :: do_gas_jac
     ! Was the calculation of gas ODs successful?
     logical :: success_gas
-    double precision :: expected_wavelengths_in(1)
-    double precision :: expected_wavelengths_out(1)
-    double precision :: expected_delta_tau(1)
-    double precision :: scale_first_guess(1)
+    double precision :: expected_wavelengths_in(3)
+    double precision :: expected_wavelengths_out(3)
+    double precision :: expected_delta_tau(3)
+    double precision :: scale_first_guess(3)
 
     ! Retrieval quantities
     type(statevector) :: SV
@@ -995,14 +995,40 @@ contains
 
     end select
 
-    expected_wavelengths_in(1) = 2.05555d0
-    expected_wavelengths_out(1) = 2.05588d0
-    expected_delta_tau(1) = 1.38d0
+    if (band == 2) then
+
+       expected_wavelengths_in(1) = 1.60188d0
+       expected_wavelengths_out(1) = 1.60169d0
+       expected_delta_tau(1) = 0.21d0
+
+       expected_wavelengths_in(2) = 1.60221d0
+       expected_wavelengths_out(2) = 1.60234d0
+       expected_delta_tau(2) = 0.22d0
+
+       expected_wavelengths_in(3) = 1.60253d0
+       expected_wavelengths_out(3) = 1.60273d0
+       expected_delta_tau(3) = 0.24d0
+
+    else if (band == 3) then
+
+       expected_wavelengths_in(1) = 2.0555d0
+       expected_wavelengths_out(1) = 2.0059d0
+       expected_delta_tau(1) = 0.75d0
+
+       expected_wavelengths_in(2) = 2.0673d0
+       expected_wavelengths_out(2) = 2.0677d0
+       expected_delta_tau(2) = 1.30d0
+
+       expected_wavelengths_in(3) = 2.0751d0
+       expected_wavelengths_out(3) = 2.0753d0
+       expected_delta_tau(3) = 0.76d0
+
+    end if
+
 
     call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
          radiance_l1b, expected_wavelengths_in, expected_wavelengths_out, &
          expected_delta_tau, SZA(i_fp, i_fr), VZA(i_fp, i_fr), scale_first_guess)
-
 
 
     ! Calculate the day of the year into a full fractional value
@@ -1154,7 +1180,7 @@ contains
     if (SV%num_gas > 0) then
        do i=1, SV%num_gas
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-             SV%svap(SV%idx_gas(i,1)) = scale_first_guess(1) !1.0d0
+             SV%svap(SV%idx_gas(i,1)) = 1.0d0 !mean(scale_first_guess(:)) !1.0d0
           end if
        end do
     end if

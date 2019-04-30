@@ -5,6 +5,7 @@ module math_utils_mod
 
   implicit none
 
+  ! Various constants
   double precision, parameter :: SPEED_OF_LIGHT = 299792458d0
   double precision, parameter :: PI = 3.141592653589793d0
   double precision, parameter :: DEG2RAD = 0.017453292519943295d0
@@ -14,7 +15,10 @@ module math_utils_mod
   double precision, parameter :: DRY_AIR_MASS = 0.0289644d0
   double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
   double precision, parameter :: SH_H2O_CONV = DRY_AIR_MASS / H2Om
-
+  double precision, parameter :: PLANCK_CONST = 6.62607015d-34
+  double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
+  double precision, parameter :: SOLAR_RADIUS = 695.660d6 ! [m]
+  
 contains
 
   pure function calculate_chi2(array1, array2, std_dev, dof) result(chi2)

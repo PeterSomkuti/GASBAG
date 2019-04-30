@@ -31,6 +31,7 @@ module physical_model_mod
   ! Third-party modules
   use logger_mod, only: logger => master_logger
   use mod_datetime
+  use doppler_solar_module
 
   ! System modules
   use ISO_FORTRAN_ENV
@@ -825,6 +826,8 @@ contains
     double precision :: doy_dp ! Day of year as double precision
     ! Sounding location variables
     double precision :: mu0, mu ! cos(sza) and cos(vza)
+    ! Epoch, which is just the date split into an integer array
+    integer, dimension(7) :: epoch
 
     ! Instrument stuff
     ! Instrument doppler shift based on relative motion between ground footprint
@@ -1015,6 +1018,12 @@ contains
 
     ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
+    epoch(1) = date%getYear()
+    epoch(2) = date%getMonth()
+    epoch(3) = date%getDay()
+    epoch(4) = date%getHour()
+    epoch(5) = date%getMinute()
+    epoch(7) = date%getSecond()
 
     write(tmp_str, "(A, A)") "Date: ", date%isoformat()
     call logger%debug(fname, trim(tmp_str))
@@ -1044,17 +1053,12 @@ contains
     ! Allocate the micro-window bounded solar arrays
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
-
-    ! If solar doppler-shift is needed, calculate the distance and relative
-    ! velocity between point of measurement and the (fixed) sun
-    call calculate_solar_distance_and_rv(doy_dp, solar_dist, solar_rv)
-
-    call calculate_rel_velocity_earth_sun(lat(i_fp, i_fr), SZA(i_fp, i_fr), &
-         SAA(i_fp, i_fr), altitude(i_fp, i_fr), earth_rv)
-
-    solar_doppler = (earth_rv + solar_rv * 1000.0d0) / SPEED_OF_LIGHT
+    
+    ! THIS IS "BORROWED" FROM THE MS3 CODE
+    call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
+         epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
+    solar_doppler = solar_rv / SPEED_OF_LIGHT
     instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
-
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
@@ -1106,12 +1110,11 @@ contains
 
        ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
        ! take that into account for the incoming solar irradiance
-       call calculate_solar_planck_function(6500.0d0, solar_dist * 1000.0d0, &
+       call calculate_solar_planck_function(6500.0d0, solar_dist, &
             solar_spectrum_regular(:,1), solar_irrad)
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(solar_irrad) * mu0)
-
+            (1.0d0 * maxval(solar_irrad) * mu0)       
     end select
 
 
@@ -1562,7 +1565,7 @@ contains
        this_solar(:,1) = this_solar_shift + &
             this_solar_stretch * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
 
-       call calculate_solar_planck_function(6500.0d0, solar_dist * 1000.0d0, &
+       call calculate_solar_planck_function(6500.0d0, solar_dist, &
             this_solar(:,1), solar_irrad)
 
        ! And multiply to get the full solar irradiance in physical units

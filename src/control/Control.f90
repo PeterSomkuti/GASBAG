@@ -108,6 +108,12 @@ module control_mod
      double precision, allocatable :: gas_retrieve_scale_stop(:,:)
      !> What is the covariance for this partial column?
      double precision, allocatable :: gas_retrieve_scale_cov(:,:)
+     !> For a smart first guess of the gas scale factors, we store the
+     !> wavelengths of line cores and pseudo-continuum, along with the
+     !> expected delta-tau between those two.
+     double precision, allocatable :: smart_scale_first_guess_wl_in(:)
+     double precision, allocatable :: smart_scale_first_guess_wl_out(:)
+     double precision, allocatable :: smart_scale_first_guess_delta_tau(:)
      !> What is the number of gases in this window?
      integer :: num_gases
      !> What is the number of sublayers to be used for gas OD calculations
@@ -289,7 +295,6 @@ contains
     alg_count = 0 ! Initialize with zero, otherwise we'll have garbage
     alg_count = fini%count_values(section_name="algorithm", &
          option_name="sif_algorithm")
-
 
 
     if (alg_count > MAX_ALGORITHMS) then
@@ -512,6 +517,51 @@ contains
           ! The rest is potentially optional. Whether a certain option is
           ! required for a given retrieval setting, will be checked later
           ! on in the code, usually when it's needed the first time
+
+
+          ! Arrays that are used for our super-duper smart first guess for the
+          ! scalar gas retrieval
+          call fini_extract(fini, tmp_str, 'smart_scale_first_guess_wl_in', &
+               .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%smart_scale_first_guess_wl_in(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%smart_scale_first_guess_wl_in(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
+
+          call fini_extract(fini, tmp_str, 'smart_scale_first_guess_wl_out', &
+               .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%smart_scale_first_guess_wl_out(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%smart_scale_first_guess_wl_out(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
+
+          call fini_extract(fini, tmp_str, 'smart_scale_first_guess_delta_tau', &
+               .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%smart_scale_first_guess_delta_tau(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%smart_scale_first_guess_delta_tau(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
+
+          ! Now we need to check if they are the same size
+          if ((size(MCS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
+               size(MCS%window(window_nr)%smart_scale_first_guess_wl_out)) .or. &
+               (size(MCS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
+               size(MCS%window(window_nr)%smart_scale_first_guess_delta_tau))) then
+
+             call logger%error(fname, "Error parsing smart gas scalar first guess!")
+             call logger%error(fname, "I need to have the same number of values for each " &
+                  // "of the three inputs!")
+             stop 1
+          end if
 
           call fini_extract(fini, tmp_str, 'fft_convolution', .false., fini_char)
           fini_string = fini_char

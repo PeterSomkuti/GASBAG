@@ -480,6 +480,7 @@ contains
             solar_spectrum(:,1), solar_spectrum(:,2), &
             N_hires, &
             solar_spectrum_regular(:,1), solar_spectrum_regular(:,2))
+
        call logger%debug(fname, "Finished re-gridding solar spectrum.")
        ! Note that at this point, the solar spectrum is still normalised
 
@@ -552,7 +553,8 @@ contains
        ! enough for my humble purposes.
        ! As you can see, it does not require much, whereas MPI would be more effort.
 
-!$OMP PARALLEL DO SHARED(retr_count, mean_duration) PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
+!$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
+!$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, num_frames, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
@@ -905,10 +907,7 @@ contains
     logical :: do_gas_jac
     ! Was the calculation of gas ODs successful?
     logical :: success_gas
-    double precision :: expected_wavelengths_in(3)
-    double precision :: expected_wavelengths_out(3)
-    double precision :: expected_delta_tau(3)
-    double precision :: scale_first_guess(3)
+    double precision, allocatable :: scale_first_guess(:)
 
     ! Retrieval quantities
     type(statevector) :: SV
@@ -995,41 +994,24 @@ contains
 
     end select
 
-    if (band == 2) then
 
-       expected_wavelengths_in(1) = 1.60188d0
-       expected_wavelengths_out(1) = 1.60169d0
-       expected_delta_tau(1) = 0.21d0
+    ! Estimate a smart first guess for the gas scale factor, if the user supplied
+    ! values for expected delta tau etc.
+    if (allocated(MCS%window(i_win)%smart_scale_first_guess_wl_in)) then
 
-       expected_wavelengths_in(2) = 1.60221d0
-       expected_wavelengths_out(2) = 1.60234d0
-       expected_delta_tau(2) = 0.22d0
-
-       expected_wavelengths_in(3) = 1.60253d0
-       expected_wavelengths_out(3) = 1.60273d0
-       expected_delta_tau(3) = 0.24d0
-
-    else if (band == 3) then
-
-       expected_wavelengths_in(1) = 2.0555d0
-       expected_wavelengths_out(1) = 2.0059d0
-       expected_delta_tau(1) = 0.75d0
-
-       expected_wavelengths_in(2) = 2.0673d0
-       expected_wavelengths_out(2) = 2.0677d0
-       expected_delta_tau(2) = 1.30d0
-
-       expected_wavelengths_in(3) = 2.0751d0
-       expected_wavelengths_out(3) = 2.0753d0
-       expected_delta_tau(3) = 0.76d0
-
+       allocate(scale_first_guess(size(MCS%window(i_win)%smart_scale_first_guess_wl_in)))
+       
+       call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
+            radiance_l1b, &
+            MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &!expected_wavelengths_in, &
+            MCS%window(i_win)%smart_scale_first_guess_wl_out(:), &!expected_wavelengths_out, &
+            MCS%window(i_win)%smart_scale_first_guess_delta_tau(:), &!expected_delta_tau, &
+            SZA(i_fp, i_fr), VZA(i_fp, i_fr), scale_first_guess)
+    else
+       ! Otherwise just start with 1.0
+       allocate(scale_first_guess(1))
+       scale_first_guess(1) = 1.0d0
     end if
-
-
-    call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
-         radiance_l1b, expected_wavelengths_in, expected_wavelengths_out, &
-         expected_delta_tau, SZA(i_fp, i_fr), VZA(i_fp, i_fr), scale_first_guess)
-
 
     ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
@@ -1180,7 +1162,7 @@ contains
     if (SV%num_gas > 0) then
        do i=1, SV%num_gas
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-             SV%svap(SV%idx_gas(i,1)) = 1.0d0 !mean(scale_first_guess(:)) !1.0d0
+             SV%svap(SV%idx_gas(i,1)) = mean(scale_first_guess(:))
           end if
        end do
     end if
@@ -2046,9 +2028,9 @@ contains
              SV%sver(i) = sqrt(Shat(i,i))
           end do
 
-          !do i=1, N_sv
-          !   write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
-          !end do
+!!$          do i=1, N_sv
+!!$             write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
+!!$          end do
 
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
@@ -2201,7 +2183,8 @@ contains
 
        !read(*,*)
     end do
-
+    !read(*,*)
+    
   end function physical_FM
 
 

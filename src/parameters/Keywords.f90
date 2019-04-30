@@ -74,15 +74,15 @@ contains
             this_idx = window_start + window_nr
 
             valid_sections(this_idx) = trim(tmp_str)
-                valid_options(this_idx,1) = "name"
-                valid_options(this_idx,2) = "wl_min"
-                valid_options(this_idx,3) = "wl_max"
-                valid_options(this_idx,4) = "basisfunctions"
-                valid_options(this_idx,5) = "gases"
-                valid_options(this_idx,6) = "statevector"
-                valid_options(this_idx,7) = "albedo_apriori"
-                valid_options(this_idx,8) = "albedo_order"
-                valid_options(this_idx,9) = "dispersion_order"
+                valid_options(this_idx,1)  = "name"
+                valid_options(this_idx,2)  = "wl_min"
+                valid_options(this_idx,3)  = "wl_max"
+                valid_options(this_idx,4)  = "basisfunctions"
+                valid_options(this_idx,5)  = "gases"
+                valid_options(this_idx,6)  = "statevector"
+                valid_options(this_idx,7)  = "albedo_apriori"
+                valid_options(this_idx,8)  = "albedo_order"
+                valid_options(this_idx,9)  = "dispersion_order"
                 valid_options(this_idx,10) = "dispersion_perturbation"
                 valid_options(this_idx,11) = "dispersion_covariance"
                 valid_options(this_idx,12) = "atmosphere"
@@ -99,6 +99,9 @@ contains
                 valid_options(this_idx,23) = "frame_skip"
                 valid_options(this_idx,24) = "footprint_skip"
                 valid_options(this_idx,25) = "inverse_method"
+                valid_options(this_idx,26) = "smart_scale_first_guess_wl_in"
+                valid_options(this_idx,27) = "smart_scale_first_guess_wl_out"
+                valid_options(this_idx,28) = "smart_scale_first_guess_delta_tau"
         end do
 
         ! Section for gases

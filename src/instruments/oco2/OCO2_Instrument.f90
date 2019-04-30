@@ -233,7 +233,7 @@ contains
     hs_offset(2) = i_fp - 1
     hs_offset(3) = i_fr - 1
 
-    ! We step 1016 in the spectral direction to get the full measurement,
+    ! We step N_spec in the spectral direction to get the full measurement,
     ! and 1 each in the frame and footprint directions (convention)
     hs_count(1) = N_spec
     hs_count(2) = 1

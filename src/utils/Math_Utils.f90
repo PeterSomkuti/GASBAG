@@ -1,7 +1,19 @@
+!> @brief Math Utils module
+!> @file math_utils.f90
+!> @author Peter Somkuti
+!>
+!! Here we collect 'math-y' utils/subroutines that are used by
+!! various other modules, i.e. calculation of a mean, std or the
+!! chi2.
+
 module math_utils_mod
 
+  ! User modules
   use logger_mod, only: logger => master_logger
-  use, intrinsic:: ieee_arithmetic, only: ieee_is_nan
+  
+  ! System modules
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+  use :: iso_fortran_env
 
   implicit none
 
@@ -21,6 +33,11 @@ module math_utils_mod
   
 contains
 
+  !> @brief Calculates reduced CHI2 statistic for two spectra
+  !> @param array1 One of two spectra
+  !> @param array2 The other spectrum
+  !> @param std_dev Standard deviation / noise per pixel
+  !> @param dof Degrees of freedom (number of SV elements - 1 usually)
   pure function calculate_chi2(array1, array2, std_dev, dof) result(chi2)
     implicit none
     double precision, intent(in) :: array1(:), array2(:), std_dev(:)
@@ -29,18 +46,23 @@ contains
     double precision :: chi2
 
     chi2 = sum(((array1 - array2) * (array1 - array2)) / (std_dev * std_dev)) / dble(dof)
-
   end function calculate_chi2
+  
 
+  !> @brief Simple function to calculate the mean for double-precision arrays
+  !> @param array Array you want the mean of
+  !> @param mean_value Arithmetic mean of array
   pure function mean(array) result(mean_value)
     implicit none
     double precision, intent(in) :: array(:)
     double precision :: mean_value
 
     mean_value = sum(array) / dble(size(array))
-
   end function mean
 
+  !> @brief Simple function to calculate the standard deviation for double-precision arrays
+  !> @param array Array you want the std of
+  !> @param std_value (Unbiased) standard deviation of array (Bessel correction)
   pure function std(array) result(std_value)
     implicit none
     double precision, intent(in) :: array(:)
@@ -48,17 +70,27 @@ contains
 
     mean_value = mean(array)
     std_value = sqrt(sum((array - mean_value) * (array - mean_value)) / dble(size(array) - 1))
-
   end function std
 
 
+  !> @brief Calculates the O'Dell-ian pressure weighting function
+  !> see O'Dell et al. (2012) for details (ACOS paper)
+  !> @param p_levels Pressure level array
+  !> @param psurf Surface pressure
+  !> @param vrms Volume mixing ratio array for this gas
+  !> @param pwgts Pressure weights
   subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
     implicit none
-    double precision, intent(in) :: p_levels(:), psurf, vmrs(:)
+    double precision, intent(in) :: p_levels(:)
+    double precision, intent(in) :: psurf
+    double precision, intent(in) :: vmrs(:)
     double precision, intent(inout) :: pwgts(:)
 
+    ! Loop and size variables
     integer :: i, N
+    ! H-prime, c-bar and delta pressure
     double precision, allocatable :: hp(:), cbar(:), dp(:)
+    ! Interpolation factors
     double precision :: f, fs
 
     N = size(p_levels)
@@ -72,15 +104,16 @@ contains
     do i=1, N-1
        ! Loop over levels starting from top down to
        ! the surface layer.
-
        cbar(i) = 0.5d0 * (vmrs(i) + vmrs(i+1))
        dp(i) = p_levels(i+1) - p_levels(i)
-
        hp(i) = cbar(i) * dp(i)
     end do
 
+    ! Normalize h-prime
     hp(:) = hp(:) / sum(hp(:))
 
+    ! F is set to 0.5 for all levels, I guess this could be changed
+    ! if someone really wanted to..
     f = 0.5d0
     fs = (psurf - p_levels(N-1)) &
          / (p_levels(N) - p_levels(N-1))
@@ -103,11 +136,18 @@ contains
        call logger%warning("pressure_weighting_function", &
             "Pressure weighting function does not sum up to 1.0")
     end if
-
-
   end subroutine pressure_weighting_function
 
 
+  !> @brief Piecewise linear interpolation, based on the code
+  !> by John Burkardt, but slightly modified for speed.
+  ! NOTE: THIS ASSUMES AN ORDERED ARRAY!
+  !> @param nd Number of data points given
+  !> @param xd x-coordinates of data
+  !> @param yd y-coordinates of data
+  !> @param ni Number of points to be calculated
+  !> @param xi x-coordinates where interpolation should be performed
+  !> @param yi Interpolated values
   subroutine pwl_value_1d_v2(nd, xd, yd, ni, xi, yi)
 
     implicit none
@@ -117,7 +157,7 @@ contains
     double precision, intent(inout) :: yi(:)
 
     double precision :: fac
-    integer :: i, j, d, last_d
+    integer :: i, d, last_d
 
     last_d = 1
     do i=1, ni
@@ -129,6 +169,9 @@ contains
           do d=last_d, nd-1
              if ((xi(i) >= xd(d)) .and. (xi(i) <= xd(d+1))) then
 
+                ! Since we are using a sorted array, we can
+                ! skip searching the first d points, as we know
+                ! the value is not going to be found there.
                 last_d = d
 
                 fac = (xi(i) - xd(d)) / (xd(d+1) - xd(d))
@@ -138,12 +181,14 @@ contains
           end do
        end if
     end do
-
-
-
+    
   end subroutine pwl_value_1d_v2
 
-
+  !> @brief See Numpy's searchsorted function, using binary search
+  !> @param x Array to be searched for
+  !> @param val Value, whose position in the array needs determining
+  !> @param left Left insert? (or right if set to .false.)
+  !> @param idx The index at which val is inserted in x
   pure function searchsorted_dp(x, val, left) result(idx)
     implicit none
     double precision, intent(in) :: x(:), val
@@ -151,7 +196,7 @@ contains
     integer :: idx
 
     logical :: from_left
-    integer :: i, L, R, m
+    integer :: L, R, m
 
     ! Insert to the left of value is the standard
     if (.not. present(left)) then
@@ -191,23 +236,34 @@ contains
   end function searchsorted_dp
 
 
+  !> @brief FFT-based convolution DEPRECATED/UNUSED!
+  !> @param input Radiance array to be convolved (high-res)
+  !> @param kernel ILS array
+  !> @param wl_input Wavelengths of input array
+  !> @param wl_output Requested wavelengths of output array
+  !> @param output Convolved radiance array
   subroutine fft_convolution(input, kernel, wl_input, wl_output, output)
 
+    ! NOTE - THIS TYPE OF CONVOLUTION DOES NOT WORK FOR OCO-LIKE INSTRUMENTS,
+    ! WHERE THE ILS CHANGES WITH EVERY PIXEL AND EVERY FOOTPRINT. I ALSO DOUBT
+    ! IT WOULD MAKE THE CODE MUCH FASTER. I WILL LEAVE THIS IN FOR COMPLETENESS,
+    ! HOWEVER NONE OF THE CODE CURRENTLY USES THIS FEATURE (APRIL 2019)
+    
     implicit none
     double precision, intent(in) :: input(:), kernel(:), wl_input(:), wl_output(:)
     double precision, intent(inout) :: output(:)
 
     integer :: power
     integer :: N_input, N_kernel, N_fft
-    integer :: input_shift, kernel_shift, pad_space
+    integer :: input_shift, kernel_shift
     integer(4) :: lensav, lenwrk
     integer :: fft_err
     double precision, allocatable :: wsave(:), work(:)
-    complex(8), allocatable :: input_fft(:), kernel_fft(:), ifft(:)
+    complex(8), allocatable :: input_fft(:), kernel_fft(:)
 
-    integer :: i, funit
+    integer :: i
+    !integer :: funit
     logical :: found_power
-
 
     ! FFT-type convolution using FFTPACK5.1, which is most efficient and
     ! quickest if our two arrays are powers of 2. We thus must zero pad
@@ -266,11 +322,11 @@ contains
     ! Copy over input data and kernel to complex array
     ! and convert to complex data type with zero imaginary part
     do i=1, N_input
-       input_fft(i) = cmplx(input(i), 0.0d0)
+       input_fft(i) = cmplx(input(i), 0.0d0, kind=REAL64)
     end do
 
     do i=1, N_kernel
-       kernel_fft(i) = cmplx(kernel(i), 0.0d0)
+       kernel_fft(i) = cmplx(kernel(i), 0.0d0, kind=REAL64)
     end do
 
     input_shift = (N_fft - N_input)/2
@@ -356,14 +412,38 @@ contains
 
   end subroutine fft_convolution
 
-
-  subroutine oco_type_convolution2(wl_input, input, wl_kernels, kernels, &
+  !> @brief Convolve function for OCO-type instruments with different
+  !> ILS's for every detector pixel
+  !> @param wl_input Wavelengths of high-res radiance array
+  !> @param input High-res radiance array
+  !> @param wl_kernels Wavelength for ILS per pixel for this footprint/band
+  !> @param kernels ILS relative response per pixel for this footprint/band
+  !> @param wl_output Requested wavelength grid for convolved radiance
+  !> @param output Convolved radiance
+  !> @param success Did it all go well?
+  subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
        wl_output, output, success)
 
-    !! This is an implementation of the OCO-type ILS application, which ins't
-    !! quite a convolution since we have to treat every pixel with a different
-    !! ILS. wl_output is the DESIRED output wavelength grid
+    ! This is an implementation of the OCO-type ILS application, which ins't
+    ! quite a convolution since we have to treat every pixel with a different
+    ! ILS. wl_output is the DESIRED output wavelength grid
 
+    ! Notes Peter Somkuti:
+    ! I've experimented a bit with making this function faster, since the convolution
+    ! and the gas OD calculation are essentially the top two time-consuming portions
+    ! of the physical algorithm. Another way of doing this was to re-grid all ILS tables
+    ! to a common high-resolution grid, so that we would not need to interpolate the ILS
+    ! onto the high-res grid of the current pixel. This however seemed to create issues
+    ! when the chosen high-res spacing was not fine enough, since the ILS wl spacing gets
+    ! finer the closer you are at the center (at least for OCO-2/3). Hence I reverted to
+    ! this particular option, where the ILS is interpolated to the high-res wavelength grid
+    ! for every pixel at every calculation. While this makes it somewhat slower, it also
+    ! seemed to have eliminated the issue of bad results. These bad results were non-trivially
+    ! seen as stripy patterns which were somewhat related to time-of-day and doppler shift.
+    ! Since the doppler shift changes the wavelength grid, one can end up with misaligned
+    ! spectra if the ILS convolution (however it is done) does work accordingly and shifts
+    ! the line cores around..
+    
     ! High-resolution bits
     double precision, intent(in) :: wl_input(:), input(:)
     ! "Convolution" wavelengths and kernels
@@ -374,15 +454,11 @@ contains
 
     character(len=*), parameter :: fname = "oco_type_convolution"
     integer :: N_pix, N_ils_pix, N_wl, N_this_wl
-    integer :: idx_pix, idx_hires_closest, idx_hires_ILS_min, idx_hires_ILS_max
-    integer :: kernel_idx_min, kernel_idx_max
+    integer :: idx_pix, idx_hires_ILS_min, idx_hires_ILS_max
     double precision :: ILS_delta_min, ILS_delta_max
     double precision :: ILS_wl_spacing
-    double precision :: wl_diff
 
-    double precision, allocatable :: ILS_upsampled(:), input_upsampled(:)
-    double precision :: time_start, time_stop
-    integer :: i, funit
+    double precision, allocatable :: ILS_upsampled(:)
 
     N_wl = size(wl_input)
     N_pix = size(wl_output)
@@ -436,7 +512,7 @@ contains
        allocate(ILS_upsampled(N_this_wl + 1))
        ILS_upsampled = 0.0d0
 
-       call pwl_value_1d( &
+       call pwl_value_1d_v2( &
             N_ils_pix, &
             wl_output(idx_pix) + wl_kernels(:, idx_pix), kernels(:, idx_pix), &
             N_this_wl, &
@@ -450,10 +526,12 @@ contains
     end do
 
     success = .true.
+  end subroutine oco_type_convolution
 
-
-  end subroutine oco_type_convolution2
-
+  !> @brief Inverts a quadratic matrix using DGETRF/DGETRI
+  !> @param mat_in Matrix to be inverted
+  !> @param mat_out Inverted matrix
+  !> @param success False if DGETRF or DGETRI fail
   subroutine invert_matrix(mat_in, mat_out, success)
 
     double precision, dimension(:,:), intent(in) :: mat_in
@@ -494,10 +572,11 @@ contains
   end subroutine invert_matrix
 
 
+  !> @brief Calculates the perc'th percentile for array x
+  !> @param x Array you want the perc'th percentile of
+  !> @param perc Percentile to be calculated
   function percentile(x, perc)
-
-    !! Calculates the percentile "perc" of a double precision array "x"
-
+    
     implicit none
     double precision :: percentile
 
@@ -527,8 +606,9 @@ contains
 
   end function percentile
 
+  !> @brief Combsort routine, taken from Rosettacode
+  !> @param a Array to be sorted
   subroutine combsort(a)
-    ! Taken from Rosettacode
 
     double precision, intent(in out) :: a(:)
     double precision :: temp
@@ -537,7 +617,7 @@ contains
 
     gap = size(a)
     do while (gap > 1 .or. swapped)
-       gap = gap / 1.3
+       gap = int(gap / 1.3)
        if (gap < 1) gap = 1
        swapped = .false.
        do i = 1, size(a)-gap

@@ -1723,7 +1723,7 @@ contains
        type is (oco2_instrument)
 
           ! Convolution of the TOA radiances
-          call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
+          call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
                ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
@@ -1773,7 +1773,7 @@ contains
 
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
-             call oco_type_convolution2(hires_grid, K_hi(:,i), &
+             call oco_type_convolution(hires_grid, K_hi(:,i), &
                   ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
@@ -1836,7 +1836,7 @@ contains
                 this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
 
                 ! Convolve the perturbed TOA radiance
-                call oco_type_convolution2(hires_grid, radiance_calc_work_hi, &
+                call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
                      ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &

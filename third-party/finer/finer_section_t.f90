@@ -400,14 +400,21 @@ contains
   !< Get section name from a source string.
   class(section), intent(inout) :: self     !< Section data.
   type(string),   intent(in)    :: source   !< String containing section data.
+
   integer(I4P),   intent(out)   :: error    !< Error code.
   integer(I4P)                  :: pos(1:2) !< Characters counter.
+  type(string) :: tmp_str
 
   error = ERR_SECTION_NAME
   pos(1) = index(source, "[")
   pos(2) = index(source, "]")
   if (all(pos > 0)) then
-    self%sname = trim(adjustl(source%slice(pos(1)+1, pos(2)-1)))
+    
+    !self%sname = trim(adjustl(source%slice(pos(1)+1, pos(2)-1)))
+    ! Change by Peter Somkuti to keep sections lower case
+    tmp_str = trim(adjustl(source%slice(pos(1)+1, pos(2)-1)))
+    tmp_str = tmp_str%lower()
+    self%sname = tmp_str%chars()
     error = 0
   endif
   endsubroutine parse_name

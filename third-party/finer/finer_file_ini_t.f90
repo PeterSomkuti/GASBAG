@@ -161,29 +161,51 @@ contains
   endif
   endsubroutine get_sections_list
 
+
   function has_option(self, option_name, section_name) result(pres)
-  !< Inquire the presence of (at least one) option with the name passed.
-  !<
-  !< Optional, the first matching section name is returned.
-  !<
-  !< @note All sections are searched and the first occurence is returned.
+  ! Changed by Peter Somkuti, this now scans ONLY the corresponding section for
+  ! the presense of an option.
+
   class(file_ini),        intent(in)    :: self         !< File data.
   character(*),           intent(in)    :: option_name  !< Option name.
-  character(*), optional, intent(inout) :: section_name !< Section name.
+  character(*), optional, intent(in)    :: section_name !< Section name.
   logical                               :: pres         !< Inquiring flag.
   integer(I4P)                          :: s            !< Counter.
 
   pres = .false.
   if (allocated(self%sections)) then
     do s=1, size(self%sections, dim=1)
-      pres = (self%sections(s)%index(option_name=option_name)>0)
-      if (pres) then
-        if (present(section_name)) section_name = self%sections(s)%name()
-        exit
+      if (self%sections(s)%name() == trim(section_name)) then
+          pres = (self%sections(s)%index(option_name=option_name)>0)
       endif
     enddo
   endif
   endfunction has_option
+
+
+  ! function has_option(self, option_name, section_name) result(pres)
+  ! !< Inquire the presence of (at least one) option with the name passed.
+  ! !<
+  ! !< Optional, the first matching section name is returned.
+  ! !<
+  ! !< @note All sections are searched and the first occurence is returned.
+  ! class(file_ini),        intent(in)    :: self         !< File data.
+  ! character(*),           intent(in)    :: option_name  !< Option name.
+  ! character(*), optional, intent(inout) :: section_name !< Section name.
+  ! logical                               :: pres         !< Inquiring flag.
+  ! integer(I4P)                          :: s            !< Counter.
+  !
+  ! pres = .false.
+  ! if (allocated(self%sections)) then
+  !   do s=1, size(self%sections, dim=1)
+  !     pres = (self%sections(s)%index(option_name=option_name)>0)
+  !     if (pres) then
+  !       if (present(section_name)) section_name = self%sections(s)%name()
+  !       exit
+  !     endif
+  !   enddo
+  ! endif
+  ! endfunction has_option
 
   elemental function has_section(self, section_name) result(pres)
   !< Inquire the presence of (at least one) section with the name passed.
@@ -606,11 +628,17 @@ contains
   errd = err_source_missing
   call source%split(tokens=tokens, sep=new_line('a'))
 
+  ! This has been slightly changed by Peter Somkuti. If a line contains
+  ! a comment token, that line is automatically ignored. This means no
+  ! proper 'inline' comments are possible.
+
   Ns = 0
   s = 0
   do while (s+1<=size(tokens, dim=1))
     s = s + 1
-    if (scan(adjustl(tokens(s)), comments) == 1) cycle
+    if (scan(adjustl(tokens(s)), comments) >= 1) then
+       cycle
+    end if
     if (index(trim(adjustl(tokens(s))), "[") == 1) then
       Ns = Ns + 1
       dummy = trim(adjustl(tokens(s)))//new_line('a')
@@ -620,7 +648,10 @@ contains
         if (index(trim(adjustl(tokens(ss))), "[") == 1) then
           ! new section... go back
           exit
-        else
+       else
+          if (scan(adjustl(tokens(ss)), comments) >= 1) then
+             cycle
+          end if
           ! continuation of current section
           dummy = trim(adjustl(dummy))//new_line('a')//trim(adjustl(tokens(ss)))
           tokens(ss) = comments ! forcing skip this in the following scan

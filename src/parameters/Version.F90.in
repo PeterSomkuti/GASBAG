@@ -1,6 +1,0 @@
-module version
-    implicit none
-
-    character(len=*), parameter :: git_branch = "@GIT_BRANCH@"
-    character(len=*), parameter :: git_commit_hash = "@GIT_COMMIT_HASH@"
-end module

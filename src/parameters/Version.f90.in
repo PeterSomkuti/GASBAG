@@ -1,0 +1,12 @@
+!! This module contains the GIT revision information that is parsed by CMAKE
+!! CMAKE then turns this into Version.f90, which contains the proper string
+!! literals for the various variables, that can then be accessed from the
+!! rest of the code.
+
+module version_mod
+    implicit none
+
+    character(len=*), parameter :: git_branch = "@GIT_BRANCH@"
+    character(len=*), parameter :: git_commit_hash = "@GIT_COMMIT_HASH@"
+    character(len=*), parameter :: git_rev_no = "@GIT_REV_NO@"
+end module

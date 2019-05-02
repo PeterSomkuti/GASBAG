@@ -159,7 +159,7 @@ dividing through a best-fit slope that characterises the continuum
 
     return rad_norm[good_spectra, :]
 
-def grab_radiances_oco2(h5, micro_window, bare_soundings,
+def grab_radiances_oco2(h5, micro_window, bare_soundings, N_fp,
                         cont_threshold=2e20):
     """This function grabs radinces from the band in question and does some
 OCO-2 specific things like checking for spikes etc.
@@ -179,7 +179,7 @@ OCO-2 specific things like checking for spikes etc.
 
 
     # Construct the wavelength grid from the dispersion coefficients
-    for fp in range(8):
+    for fp in range(N_fp):
         num_pix = wl_grid[fp].shape[0]
         wl_grid[fp] = 1000 * np.poly1d(disp_coeffs[fp][::-1])(np.arange(num_pix) + 1)
 
@@ -188,7 +188,7 @@ OCO-2 specific things like checking for spikes etc.
     idx_min = dict.fromkeys(range(8))
     idx_max = dict.fromkeys(range(8))
 
-    for fp in range(8):
+    for fp in range(N_fp):
         # Note! The -1 and +1 are required such that the dispersion limits match
         # up with how it's done in the retrieval algorithm.
         idx_min[fp] = np.searchsorted(wl_grid[fp], mwin_min) - 1
@@ -197,22 +197,37 @@ OCO-2 specific things like checking for spikes etc.
     # Read all radiances in for faster access:
     all_radiances = h5['SoundingMeasurements/radiance_o2'][:]
     # Read all Spike data:
-    all_spikes = h5['SpikeEOF/spike_eof_weighted_residual_o2'][:]
+    try:
+        all_spikes = h5['SpikeEOF/spike_eof_weighted_residual_o2'][:]
+    except:
+        all_spikes = None
 
     # Similarly, store all the radiances into arrays for every footprint
     # separately.
-    radiance_dict = dict.fromkeys(range(8))
-    for fp in range(8):
+    radiance_dict = dict.fromkeys(range(N_fp))
+    for fp in range(N_fp):
         # Select for footprint
         idx_fp = bare_soundings[1] == fp
-        # And make sure that there are no Spikes in the spectral range
-        max_spikes = np.abs(all_spikes[bare_soundings[0][idx_fp], fp,
-                                       idx_min[fp]:idx_max[fp]]).max(axis=1)
+
         # Also keep very dark scenes out
-        cont_level = h5['SoundingMeasurements/rad_continuum_o2'][:][bare_soundings[0][idx_fp], fp]
+        try:
+            cont_level = h5['SoundingMeasurements/rad_continuum_o2'][:][bare_soundings[0][idx_fp], fp]
+        except:
+            cont_level = np.nanpercentile(all_radiances[bare_soundings[0][idx_fp], fp], 99, axis=1)
 
         # And also check for the quality flag
-        qual_flag = h5['FootprintGeometry/footprint_o2_qual_flag'][:][bare_soundings[0][idx_fp], fp]
+        try:
+            qual_flag = h5['FootprintGeometry/footprint_o2_qual_flag'][:][bare_soundings[0][idx_fp], fp]
+        except:
+            qual_flag = np.zeros_like(cont_level)
+
+        # And make sure that there are no Spikes in the spectral range
+        if all_spikes is not None:
+            max_spikes = np.abs(all_spikes[bare_soundings[0][idx_fp], fp,
+                                           idx_min[fp]:idx_max[fp]]).max(axis=1)
+        else:
+            max_spikes = np.zeros_like(qual_flag)
+
         # Full filter
         full_filt = ((max_spikes == 0) &
                      (cont_level > cont_threshold) &
@@ -528,12 +543,6 @@ if __name__ == '__main__':
             N_frame = lon.shape[0]
             N = N_fp * N_frame
 
-            # And print out for convenience
-            if N_fp != 8:
-                logger.critical(f"For OCO-2, we expect 8 footprints, but you "
-                                f"gave me {N_fp}!")
-                sys.exit()
-
             logger.info(f"We have {N_frame} frames at {N_fp} footprints for a "
                         f"total of {N} soundings.")
 
@@ -557,11 +566,11 @@ if __name__ == '__main__':
 
         # Grab the radiances that we need, along with pixel indices
         radiances, idx_min, idx_max = \
-            grab_radiances_oco2(h5, micro_window, bare_soundings,
+            grab_radiances_oco2(h5, micro_window, bare_soundings, N_fp,
                                 cont_threshold=1e20)
         # And normalize them w.r.t. the continuum-level slope
         norm_radiances = dict.fromkeys(radiances.keys())
-        for fp in range(8):
+        for fp in range(N_fp):
             # But we also want to filter them afterwards
             temp = normalize_radiances(radiances[fp], num_iter=3,
                                        max_filter=max_filter,

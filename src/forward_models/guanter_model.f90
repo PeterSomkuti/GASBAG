@@ -31,7 +31,7 @@ module guanter_model_mod
   ! In the Guanter-scheme, dispersion is not really touched, hence we can just
   ! keep it as a module-wide fixed set of numbers (pixel, footprint, band)
   !> \brief Dispersion array to hold the wavelength-pixel mapping
-  !> (detector pixels, footprint, band). 
+  !> (detector pixels, footprint, band).
   double precision, dimension(:,:,:), allocatable :: dispersion
   !> \brief Dispersion coefficient array that holds the polynomial coefficients
   !> required to construct the dispersion/wavelength arrays.
@@ -76,6 +76,9 @@ contains
     integer(hsize_t), dimension(2) :: out_dims2d
     integer(hsize_t), dimension(3) :: out_dims3d
     integer(hsize_t), dimension(:), allocatable :: num_pixels
+
+    ! CPU time stamps and mean duration for performance analysis
+    double precision :: cpu_time_start, cpu_time_stop, mean_duration
 
 
     integer :: i_fr, i_fp, i_win ! Indices for frames, footprints, microwindows
@@ -172,8 +175,6 @@ contains
           end do
        end do
 
-
-
     end select
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -187,10 +188,11 @@ contains
     allocate(final_SV(MCS%general%N_fp, num_frames, MCS%algorithm%n_basisfunctions + 1))
     allocate(final_SV_uncert(MCS%general%N_fp, num_frames, MCS%algorithm%n_basisfunctions + 1))
 
-    allocate(final_radiance(size(dispersion, 1), MCS%general%N_fp, num_frames))
-    allocate(measured_radiance(size(dispersion, 1), MCS%general%N_fp, num_frames))
-    allocate(noise_radiance(size(dispersion, 1), MCS%general%N_fp, num_frames))
-
+    if (MCS%output%save_radiances) then
+       allocate(final_radiance(size(dispersion, 1), MCS%general%N_fp, num_frames))
+       allocate(measured_radiance(size(dispersion, 1), MCS%general%N_fp, num_frames))
+       allocate(noise_radiance(size(dispersion, 1), MCS%general%N_fp, num_frames))
+    end if
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     !! Loop through all frames and footprints, and perform the retrieval
@@ -202,6 +204,7 @@ contains
           cycle ! This window is not used!
        end if
 
+
        call logger%info(fname, "Processing window: " // trim(MCS%window(i_win)%name))
 
        retrieved_SIF_abs(:,:) = -9999.99d0
@@ -210,28 +213,36 @@ contains
        final_SV_uncert(:,:,:) = -9999.99d0
        chi2(:,:) = -9999.99d0
 
-       final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-       measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-       noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       if (MCS%output%save_radiances) then
+          final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+          noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       end if
 
        cnt = 0
-       do i_fr=1, num_frames
+       do i_fr=1, MCS%general%N_frame
           do i_fp=1, MCS%general%N_fp
 
              write(tmp_str,'(A,I7.1,A,I1.1)') "Frame: ", i_fr, ", FP: ", i_fp
              call logger%trivia(fname, trim(tmp_str))
 
              ! Retrieval time!
+             call cpu_time(cpu_time_start)
              call guanter_FM(my_instrument, i_fr, i_fp, i_win)
+             call cpu_time(cpu_time_stop)
 
-             ! Print out progress..
-             if (MODULO(cnt, floor(0.05 * num_total_soundings)) == 0) then
-                write(tmp_str, "(A, F6.2, A)") "Progress: ", (1.0 * cnt) / num_total_soundings * 100.0,  "%"
-                call logger%info(fname, trim(tmp_str))
+             if (mod(cnt, 1) == 0) then
+                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F12.6, A)') &
+                     "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
+                     dble(100 * dble(cnt) / dble(MCS%general%N_frame * MCS%general%N_fp)), "%) - ", &
+                     (cpu_time_stop - cpu_time_start), ' sec.'
+                call logger%debug(fname, trim(tmp_str))
              end if
+
              cnt = cnt + 1
           end do
        end do
+
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
@@ -269,24 +280,25 @@ contains
             trim(tmp_str), &
             chi2, out_dims2d, -9999.99d0)
 
-       out_dims3d = shape(final_radiance)
-       write(tmp_str, '(A,A)') "/linear_fluorescence_results/modelled_radiance_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            final_radiance, out_dims3d)
+       if (MCS%output%save_radiances) then
+          out_dims3d = shape(final_radiance)
+          write(tmp_str, '(A,A)') "/linear_fluorescence_results/modelled_radiance_" // MCS%window(i_win)%name
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               final_radiance, out_dims3d)
 
-       out_dims3d = shape(measured_radiance)
-       write(tmp_str, '(A,A)') "/linear_fluorescence_results/measured_radiance_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            measured_radiance, out_dims3d)
+          out_dims3d = shape(measured_radiance)
+          write(tmp_str, '(A,A)') "/linear_fluorescence_results/measured_radiance_" // MCS%window(i_win)%name
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               measured_radiance, out_dims3d)
 
-       out_dims3d = shape(noise_radiance)
-       write(tmp_str, '(A,A)') "/linear_fluorescence_results/noise_radiance_" // MCS%window(i_win)%name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), &
-            noise_radiance, out_dims3d)
-
+          out_dims3d = shape(noise_radiance)
+          write(tmp_str, '(A,A)') "/linear_fluorescence_results/noise_radiance_" // MCS%window(i_win)%name
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               noise_radiance, out_dims3d)
+       end if
        call logger%info(fname, "Finished writing out results.")
     end do ! microwindow loop
   end subroutine guanter_retrieval
@@ -321,8 +333,8 @@ contains
 
     logical :: success_inv_mat
 
-    double precision :: tmp_chi2, BIC
-    logical :: BIC_converged
+    double precision :: tmp_chi2
+    double preicison, allocatable :: BIC_last_iteration(:), BIC_this_iteration(:)
 
     !! Here are all the retrieval scheme matrices, quantities, etc., and
     !! temporary matrices
@@ -422,6 +434,7 @@ contains
     ! Initial statevector number: amount of basisfunctions plus 1 for SIF
     N_sv = MCS%algorithm%n_basisfunctions + 1
 
+
     !! Calculate the inverse(!) noise matrix Se_inv
     allocate(Se_inv(N_spec, N_spec))
     ! Since we work in slope-normalized space, we also need to scale our
@@ -482,6 +495,13 @@ contains
     xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
     final_SV(i_fp, i_fr, :) = xhat(:)
 
+    !BIC = -2.0d0 * dot_product(&
+    !     radiance_work - matmul(K, xhat), &
+    !matmul(Se_inv, radiance_work - matmul(K, xhat)) &
+    !     ) + N_sv * log(real(N_spec))
+    !write(*,*) BIC
+    !read(*,*)
+
     allocate(rad_conv, mold=radiance_work)
     rad_conv(:) = 0.0d0
     !! Calculate the modeled radiance via xhat
@@ -508,10 +528,11 @@ contains
     ! Get the spectral residual
     residual(:) = rad_conv(:) - radiance_work(:)
 
-    final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = rad_conv(:)
-    measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_work(:)
-    noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
-
+    if (MCS%output%save_radiances) then
+       final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = rad_conv(:)
+       measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_work(:)
+       noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+    end if
     ! reduced chi2
     tmp_chi2 = SUM((residual ** 2) / (noise_work ** 2))
     tmp_chi2 = tmp_chi2 / (N_spec - N_sv)

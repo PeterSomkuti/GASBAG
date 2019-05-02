@@ -485,33 +485,38 @@ contains
           call fini_extract(fini, tmp_str, 'wl_max', .true., fini_val)
           MCS%window(window_nr)%wl_max = fini_val
 
-          call fini_extract(fini, tmp_str, 'wl_spacing', .true., fini_val)
-          MCS%window(window_nr)%wl_spacing = fini_val
-
           call fini_extract(fini, tmp_str, 'band', .true., fini_int)
           MCS%window(window_nr)%band = fini_int
 
-          call fini_extract(fini, tmp_str, 'inverse_method', .true., fini_char)
-          MCS%window(window_nr)%inverse_method = trim(fini_char)
+          if (MCS%algorithm%using_physical) then
+             ! The following are only required by the physical retrieval
 
-          call fini_extract(fini, tmp_str, 'max_iterations', .true., fini_int)
-          if (fini_int > 0) then
-             MCS%window(window_nr)%max_iterations = fini_int
-          else
-             call logger%fatal(fname, "Max iterations has to be > 0")
-             stop 1
+             call fini_extract(fini, tmp_str, 'wl_spacing', .true., fini_val)
+             MCS%window(window_nr)%wl_spacing = fini_val
+
+             call fini_extract(fini, tmp_str, 'inverse_method', .true., fini_char)
+             MCS%window(window_nr)%inverse_method = trim(fini_char)
+
+             call fini_extract(fini, tmp_str, 'max_iterations', .true., fini_int)
+             if (fini_int > 0) then
+                MCS%window(window_nr)%max_iterations = fini_int
+             else
+                call logger%fatal(fname, "Max iterations has to be > 0")
+                stop 1
+             end if
+
+             call fini_extract(fini, tmp_str, 'lm_gamma', .true., fini_val)
+             if (fini_val >= 0) then
+                MCS%window(window_nr)%lm_gamma = fini_val
+             else
+                call logger%fatal(fname, "LM-Gamma needs to be >= 0")
+                stop 1
+             end if
+
+             call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
+             MCS%window(window_nr)%SV_string = fini_char
+
           end if
-
-          call fini_extract(fini, tmp_str, 'lm_gamma', .true., fini_val)
-          if (fini_val >= 0) then
-             MCS%window(window_nr)%lm_gamma = fini_val
-          else
-             call logger%fatal(fname, "LM-Gamma needs to be >= 0")
-             stop 1
-          end if
-
-          call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
-          MCS%window(window_nr)%SV_string = fini_char
 
           ! The rest is potentially optional. Whether a certain option is
           ! required for a given retrieval setting, will be checked later

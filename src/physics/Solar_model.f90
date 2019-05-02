@@ -16,10 +16,10 @@ module solar_model_mod
   use logger_mod, only: logger => master_logger
 
   implicit none
-  
+
   public :: read_toon_spectrum, calculate_solar_planck_function
   private
-  
+
 contains
 
   !> @brief Subroutine to load a text file based solar transmittance spectrum
@@ -27,7 +27,7 @@ contains
   !> @param filename Path to the text file
   !> @param solar_spectrum Output array containing the transmittance spectrum
   !> @param wl_min Lower wavelength at which the spectrum will be truncated
-  !> @param wl_max Higher wavelength at which the spectrum will be truncated  
+  !> @param wl_max Higher wavelength at which the spectrum will be truncated
   subroutine read_toon_spectrum(filename, solar_spectrum, wl_min, wl_max)
 
     implicit none

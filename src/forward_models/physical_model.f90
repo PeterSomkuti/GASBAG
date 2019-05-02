@@ -303,7 +303,6 @@ contains
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-
        ! Read in the sounding id's
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
        ! Read the time strings
@@ -314,9 +313,9 @@ contains
 
        ! Read in Spike filter data, if it exists in this file
        call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
-       !if (spike_exists) then
-       !   call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
-       !end if
+       if (spike_exists) then
+          call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+       end if
 
        ! Read in bad sample list (if it exists)
        call h5lexists_f(met_file_id, "/InstrumentHeader/bad_sample_list", bad_sample_exists, hdferr)
@@ -1865,6 +1864,7 @@ contains
        write(tmp_str, *) MCS%window(i_win)%inverse_method%chars()
        if (MCS%window(i_win)%inverse_method%lower() == "imap") then
           ! Use iterative maximum a-posteriori solution (linear retrieval)
+          ! (IMAP) as done by Christian Frankenberg
 
           ! K^T Se^-1 K
           KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
@@ -2070,7 +2070,7 @@ contains
           end if
 
           ! Write a debug message
-          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration ,&
+          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration , &
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", this_psurf, &

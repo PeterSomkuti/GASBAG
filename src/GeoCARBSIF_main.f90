@@ -33,7 +33,6 @@ program GeoCARBSIF
   type(file_ini) :: fini ! The config file structure
   class(generic_instrument), allocatable :: my_instrument ! The used instrument type
   integer :: hdferr ! HDF error variable
-  character(len=999) :: tmp_str
 
 
   ! Initilize the HDF5 library program-wide

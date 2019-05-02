@@ -47,6 +47,8 @@ module oco2_mod
 
 contains
 
+  !> @brief Scans the L1B file and extracts some global information
+  !> @param l1b_file Path to L1B file
   subroutine scan_l1b_file(l1b_file)
     !! Checks whether this is indeed a valid OCO-2 l1b file that has all
     !! the required fields and variables..
@@ -63,14 +65,15 @@ contains
     call h5fopen_f(l1b_file%chars(), H5F_ACC_RDONLY_F, file_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(l1b_file%chars()))
 
-    ! Let's start with the sounding IDs and have a look how many we actually
-    ! have in this file.
+    ! Let's start with the sounding IDs and have a look how many frames and footprints
+    ! we actually have in this file.
     call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
     if (size(n_fp_frames) /= 2) then
        call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
        stop 1
     end if
 
+    ! Let the user know how many
     write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), &
          ", number of frames: ", n_fp_frames(2)
     call logger%info(fname, trim(msg))
@@ -95,6 +98,10 @@ contains
     MCS%general%N_spec(2) = dim_spec(1)
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
     MCS%general%N_spec(3) = dim_spec(1)
+
+    ! Close this instance, as it will be loaded by "perform_retrievals" again
+    call h5fclose_f(file_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error closing HDF file: " // trim(l1b_file%chars()))
 
   end subroutine scan_l1b_file
 

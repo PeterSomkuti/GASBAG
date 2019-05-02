@@ -1003,7 +1003,7 @@ contains
     if (allocated(MCS%window(i_win)%smart_scale_first_guess_wl_in)) then
 
        allocate(scale_first_guess(size(MCS%window(i_win)%smart_scale_first_guess_wl_in)))
-       
+
        call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
             radiance_l1b, &
             MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &!expected_wavelengths_in, &
@@ -1053,7 +1053,7 @@ contains
     ! Allocate the micro-window bounded solar arrays
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
-    
+
     ! THIS IS "BORROWED" FROM THE MS3 CODE
     call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
          epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
@@ -1114,7 +1114,7 @@ contains
             solar_spectrum_regular(:,1), solar_irrad)
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(solar_irrad) * mu0)       
+            (1.0d0 * maxval(solar_irrad) * mu0)
     end select
 
 
@@ -1992,7 +1992,8 @@ contains
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
-                      this_vmr_profile(s_start(i):s_stop(i),j) = this_vmr_profile(s_start(i):s_stop(i),j) &
+                      this_vmr_profile(s_start(i):s_stop(i),j) = &
+                           this_vmr_profile(s_start(i):s_stop(i),j) &
                            * SV%svsv(SV%idx_gas(i,1))
 
                       ! We also want to have the corresponding number of molecules of dry air
@@ -2038,8 +2039,7 @@ contains
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
 
-          ! Save retrieved CHI2 - this is the predicted chi2 from the 'last+1'
-          ! linear step that is not evaluated.
+          ! Save retrieved CHI2 (before the last update)
           results%chi2(i_fp, i_fr) = this_chi2
 
           ! Get an SNR (mean and std) estimate
@@ -2054,7 +2054,8 @@ contains
              results%sv_retrieved(i_fp, i_fr,i) = SV%svsv(i)
           end do
 
-          ! Save the number of iterations
+          ! Save the number of iterations, remember we start counting at 1,
+          ! so the first update is the 2nd iteration etc.
           results%num_iterations(i_fp, i_fr) = iteration
 
           if (MCS%output%save_radiances) then
@@ -2187,7 +2188,7 @@ contains
        !read(*,*)
     end do
     !read(*,*)
-    
+
   end function physical_FM
 
 

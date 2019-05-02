@@ -2,7 +2,6 @@
 !> @file Control.f90
 !> @author Peter Somkuti
 !>
-!> @detail
 !> This module is for easy access of important quantities throughout the
 !> program, such as instrument name and retrieval settings, algorithm modes, ..
 !> the whole shebang. A lot of other modules and subroutines access variables
@@ -13,6 +12,9 @@
 
 module control_mod
 
+  ! User modules
+  use file_utils_mod, only: check_config_files_exist, check_fini_error, &
+       fini_extract, string_to_bool
   ! System modules
   use HDF5
 
@@ -20,8 +22,7 @@ module control_mod
   use stringifor
   use finer, only: file_ini
   use logger_mod, only: logger => master_logger
-  use file_utils_mod, only: check_config_files_exist, check_fini_error, &
-       fini_extract, string_to_bool
+
 
 
   implicit none
@@ -261,8 +262,6 @@ contains
     type(string), allocatable :: fini_string_array(:)
     ! If we want to read an integer from FINER
     integer :: fini_int
-    ! Split string
-    type(string), allocatable :: split_strings(:)
 
     ! Loop variables
     integer :: window_nr, gas_nr

@@ -260,6 +260,9 @@ contains
        ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
        ! which one exists (priority given to /Meteorology) and take it from there
 
+       MET_exists = .false.
+       ECMWF_exists = .false.
+
        call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
        if (.not. MET_exists) then
           call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)

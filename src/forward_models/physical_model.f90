@@ -312,10 +312,10 @@ contains
             ils_relative_response)
 
        ! Read in Spike filter data, if it exists in this file
-       call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
-       if (spike_exists) then
-          call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
-       end if
+       !call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
+       !if (spike_exists) then
+       !   call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+       !end if
 
        ! Read in bad sample list (if it exists)
        call h5lexists_f(met_file_id, "/InstrumentHeader/bad_sample_list", bad_sample_exists, hdferr)

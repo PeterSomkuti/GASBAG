@@ -54,7 +54,6 @@ module guanter_model_mod
   ! Final SIF value in physical radiance units, chi2
   double precision, dimension(:,:), allocatable :: retrieved_SIF_abs, &
        retrieved_SIF_rel, chi2
-
   double precision, dimension(:,:,:), allocatable :: final_radiance, &
        measured_radiance, &
        noise_radiance
@@ -312,7 +311,7 @@ contains
     integer, intent(in) :: i_fr, i_fp, i_win
 
     integer :: l1b_wl_idx_min, l1b_wl_idx_max
-    integer :: i, j, i_all
+    integer :: i, j, l, i_all, cnt
     integer(hid_t) :: l1b_file_id
 
     character(len=*), parameter :: fname = "guanter_FM"
@@ -334,13 +333,24 @@ contains
     logical :: success_inv_mat
 
     double precision :: tmp_chi2
-    double preicison, allocatable :: BIC_last_iteration(:), BIC_this_iteration(:)
+    double precision :: BIC_all, this_BIC, min_BIC
+    integer :: BIC_pos
+    double precision, allocatable :: BIC_last_iteration(:), BIC_this_iteration(:)
+    integer :: N_eliminated
+    logical, allocatable :: used_basisfunctions(:), dropped_basisfunctions(:)
 
     !! Here are all the retrieval scheme matrices, quantities, etc., and
     !! temporary matrices
 
     integer :: N_sv ! Number of statevector elements
-    integer :: N_spec
+    integer :: N_spec ! Number of spectral points
+    integer :: N_basisfunctions ! Number of available basisfunctions
+
+    logical :: finished_elimination
+    logical :: zeroth_iteration
+    integer :: zeroth_adjust
+
+    integer :: funit
 
     double precision, dimension(:), allocatable :: xhat
     double precision, dimension(:,:), allocatable :: K, Se_inv, Shat, Shat_inv
@@ -423,18 +433,6 @@ contains
     call slope_correction(radiance_work, 40.0d0, fit_intercept)
     ! And we have our "y" mesurement vector ready!!
 
-    ! NOTE: HERE, RADIANCE_L1B IS IS IN PHYSICAL UNITS, AS IS NOISE_WORK.
-    ! RADIANCE_WORK, HOWEVER, HAS BEEN SLOPE-NORMALIZED AND IS OF UNIT 1.
-    ! WE THUS NORMALIZE THE NOISE DATA AS WELL (see lines below)
-
-!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-    !! And here is the whole retrieval magic. Simple stuff, linear retrieval
-    !! see Rodgers (2000) for the usual details.
-
-    ! Initial statevector number: amount of basisfunctions plus 1 for SIF
-    N_sv = MCS%algorithm%n_basisfunctions + 1
-
-
     !! Calculate the inverse(!) noise matrix Se_inv
     allocate(Se_inv(N_spec, N_spec))
     ! Since we work in slope-normalized space, we also need to scale our
@@ -446,34 +444,219 @@ contains
        Se_inv(i,i) = 1 / (noise_work(i) ** 2)
     end do
 
-    allocate(xhat(N_sv))
-    allocate(Shat(N_sv, N_sv))
-    allocate(Shat_inv(N_sv, N_sv))
+    ! NOTE: HERE, RADIANCE_L1B IS IS IN PHYSICAL UNITS, AS IS NOISE_WORK.
+    ! RADIANCE_WORK, HOWEVER, HAS BEEN SLOPE-NORMALIZED AND IS OF UNIT 1.
+    ! WE THUS NORMALIZE THE NOISE DATA AS WELL (see lines below)
 
-    !! Stick basisfunctions into Jacobian matrix, which has following
-    !! structure: first M entries are the M basisfunctions, and then there
-    !! is the fluorescence as the last entry
-    allocate(K(N_spec, N_sv))
-    do i=1, MCS%algorithm%n_basisfunctions
-       K(:,i) = basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i)
+    ! We use P. Koehler's backward elimination algorithm here. Retrieval
+    ! solutions (xhat) are calculated for all cases of removing one SV
+    ! element (basisfunction, not the SIF), and then we assess the BIC to
+    ! see if any of the cases with a removed one is lowest. This is then
+    ! the new baseline, and the process is repeated for removing another
+    ! basisfunction, until no further improvement is seen.
+
+    N_basisfunctions = MCS%algorithm%n_basisfunctions
+    N_eliminated = 0
+
+    allocate(BIC_this_iteration(N_basisfunctions))
+    allocate(dropped_basisfunctions(N_basisfunctions))
+    dropped_basisfunctions(:) = .false.
+
+    finished_elimination = .true.
+    zeroth_iteration = .true.
+
+    ! Do initial retrieval, using all supplied basisfunctions
+    call calculate_xhat(basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, :), &
+         radiance_work, noise_work, Se_inv, &
+         xhat, Shat, tmp_chi2, BIC_all)
+    deallocate(xhat)
+    deallocate(Shat)
+
+    min_BIC = BIC_all
+    write(*,*) "Initial BIC: ", BIC_all
+    write(*,*) "Initial CHI2: ", tmp_chi2
+
+    N_eliminated = 0
+    do while (.not. finished_elimination)
+
+       if (count(dropped_basisfunctions .eqv. .true.) == (N_basisfunctions - 1)) then
+          exit
+       end if
+
+       BIC_this_iteration(:) = 0.0d0
+       do i=2, N_basisfunctions
+
+          allocate(used_basisfunctions(N_basisfunctions))
+
+          used_basisfunctions(:) = .true.
+          used_basisfunctions(i) = .false.
+
+          do l=2, size(used_basisfunctions)
+             if (dropped_basisfunctions(l)) used_basisfunctions(l) = .false.
+          end do
+
+          if (dropped_basisfunctions(i)) then
+             deallocate(used_basisfunctions)
+             cycle
+          end if
+
+
+!!$       N_sv = count(used_basisfunctions .eqv. .true.) + 1
+!!$
+!!$       write(*,*) "Iteration", i
+!!$
+          call calculate_xhat(basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, :), &
+               radiance_work, noise_work, Se_inv, &
+               xhat, Shat, tmp_chi2, this_BIC, used_basisfunctions)
+          deallocate(Shat)
+
+          BIC_this_iteration(i) = this_BIC
+!!$
+          !write(*,*) used_basisfunctions
+          !write(*,*) "BIC: ", this_BIC,  min_BIC
+          !write(*,*) "CHI2: ", tmp_chi2
+!!$
+          deallocate(used_basisfunctions, xhat)
+       end do
+
+       !write(*,*) "Iterations: ", i
+       BIC_pos = minloc(BIC_this_iteration, dim=1)
+       !write(*,*) "MIN BIC POS: ", BIC_pos
+
+       ! We want the BIC to improve by some value
+       if ((BIC_this_iteration(BIC_pos) - min_BIC) > -5.0d0) then
+          finished_elimination = .true.
+       else
+          !write(*, *) "BIC is better by: ", BIC_this_iteration(BIC_pos) - min_BIC
+          min_BIC = BIC_this_iteration(BIC_pos)
+          dropped_basisfunctions(BIC_pos) = .true.
+       end if
+
+       !if (count(dropped_basisfunctions .eqv. .true.) > 5) finished_elimination = .true.
+
     end do
-    K(:, N_sv) = 1.0d0 ! fluorescence jacobian is flat!
 
-    !! Easy check if we did everything right - are there NaNs in K?
-    do i=1, size(K, 1)
-       do j=1, size(K, 2)
-          if (ieee_is_nan(K(i,j))) then
-             call logger%fatal(fname, "There are NaN's in the Jacobian.")
-             stop 1
+    allocate(used_basisfunctions(N_basisfunctions))
+
+    used_basisfunctions(:) = .true.
+
+    do l=1, size(used_basisfunctions)
+       if (dropped_basisfunctions(l)) used_basisfunctions(l) = .false.
+    end do
+
+    call calculate_xhat(basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, :), &
+         radiance_work, noise_work, Se_inv, &
+         xhat, Shat, tmp_chi2, this_BIC, used_basisfunctions)
+
+    !write(*,*) "FINAL BIC: ", this_BIC
+    !write(*,*) "FINAL CHI2: ", tmp_chi2
+
+    ! Report the state vector posteriori uncertainty
+    do i=1, N_sv
+       final_SV_uncert(i_fp, i_fr, i) = sqrt(Shat(i,i))
+    end do
+    deallocate(Shat)
+
+    !final_SV(i_fp, i_fr, :) = xhat(:)
+
+    N_sv = size(xhat)
+    retrieved_SIF_abs(i_fp, i_fr) = xhat(N_sv) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
+    write(tmp_str, '(A, E12.5)') "SIF abs: ", xhat(N_sv) * fit_intercept !cont_rad ! radiance_l1b(l1b_wl_idx_min)
+    call logger%trivia(fname, trim(tmp_str))
+
+    retrieved_SIF_rel(i_fp, i_fr) = xhat(N_sv)
+    write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
+    call logger%trivia(fname, trim(tmp_str))
+
+    if (MCS%output%save_radiances) then
+       final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = rad_conv(:)
+       measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_work(:)
+       noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+    end if
+
+    write(tmp_str, '(A, I3.1)') "N_sv: ", N_sv
+    call logger%trivia(fname, trim(tmp_str))
+    write(tmp_str, '(A,F7.3)') "Chi2: ", tmp_chi2
+    call logger%trivia(fname, trim(tmp_str))
+
+    chi2(i_fp, i_fr) = tmp_chi2
+
+  end subroutine guanter_FM
+
+
+
+  subroutine calculate_xhat(basisfunctions, radiance_work, noise_work, Se_inv, &
+       xhat, Shat, chi2, BIC, used_basisfunctions)
+
+    ! Basisfunction array (spectral index, basisfunc. index)
+    double precision, intent(in) :: basisfunctions(:,:)
+    ! Radiance for this sounding
+    double precision, intent(in) :: radiance_work(:)
+    double precision, intent(in) :: noise_work(:)
+    ! Noise covariance matrix
+    double precision, intent(in) :: Se_inv(:,:)
+    ! Statevector
+    double precision, intent(inout), allocatable :: xhat(:)
+    double precision, allocatable, intent(inout) :: Shat(:,:)
+    ! Chi^2
+    double precision, intent(inout) :: chi2
+    double precision, intent(inout) :: BIC
+    logical, intent(in), optional :: used_basisfunctions(:)
+
+    character(len=*), parameter :: fname = "calculate_xhat"
+
+    integer :: N_sv
+    integer :: N_spec
+    double precision, allocatable :: K(:,:), G(:,:), AK(:,:)
+    double precision, allocatable :: Shat_inv(:,:)
+    double precision, allocatable :: m_tmp1(:,:), m_tmp2(:,:)
+    double precision, allocatable :: rad_conv(:)
+    logical :: success_inv_mat
+    integer :: i, j, l, cnt
+
+    if (present(used_basisfunctions)) then
+       N_sv = count(used_basisfunctions .eqv. .true.) + 1
+    else
+       N_sv = size(basisfunctions, 2) + 1
+    end if
+
+    N_spec = size(basisfunctions, 1)
+
+    allocate(xhat(N_sv))
+    xhat(:) = 0.0d0
+    allocate(Shat(N_sv, N_sv))
+    Shat(:,:) = 0.0d0
+    allocate(Shat_inv(N_sv, N_sv))
+    Shat_inv(:,:) = 0.0d0
+    allocate(K(N_spec, N_sv))
+    K(:,:) = 0.0d0
+    allocate(G(N_sv, N_spec))
+    G(:,:) = 0.0d0
+    allocate(AK(N_sv, N_sv))
+    AK(:,:) = 0.0d0
+
+    ! Fill Jacobian with the basisfunctions
+    if (present(used_basisfunctions)) then
+       cnt = 1
+       do i=1, size(basisfunctions, 2)
+          if (used_basisfunctions(i)) then
+             K(:, cnt) = basisfunctions(:, i)
+             cnt = cnt + 1
           end if
        end do
-    end do
+    else
+       do i=1, size(basisfunctions, 2)
+          K(:, i) = basisfunctions(:, i)
+       end do
+    end if
 
+    ! SIF Jacobian - REPLACE THIS BY SHAPE IF YOU REALLY WANT TO
+    K(:, N_sv) = 1.0d0
 
-    !! Start by calculating posterior covariance for linear case
-    !! Shat = (K^T S_e^-1 K)^-1 (Rodgers 2.27 when S_a is large)
+    ! Start by calculating posterior covariance for linear case
+    ! Shat = (K^T S_e^-1 K)^-1 (Rodgers 2.27 when S_a is large)
     allocate(m_tmp1, mold=Shat)
-    m_tmp1 = matmul(matmul(transpose(K), Se_inv), K) ! this is K^T Se_inv K
+    m_tmp1 = matmul(matmul(transpose(K), Se_inv), K) ! this is (K^T Se_inv K)^-1
     Shat_inv(:,:) = m_tmp1
 
     allocate(m_tmp2, mold=m_tmp1)
@@ -486,70 +669,29 @@ contains
     ! m_tmp2 is know (K^T Se_inv K)^-1 = Shat
     Shat(:,:) = m_tmp2(:,:)
 
-    ! Report the state vector posteriori uncertainty
-    do i=1, N_sv
-       final_SV_uncert(i_fp, i_fr, i) = sqrt(Shat(i,i))
-    end do
-
-    !! Calculate xhat!
+    ! Calculate xhat!
     xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
-    final_SV(i_fp, i_fr, :) = xhat(:)
-
-    !BIC = -2.0d0 * dot_product(&
-    !     radiance_work - matmul(K, xhat), &
-    !matmul(Se_inv, radiance_work - matmul(K, xhat)) &
-    !     ) + N_sv * log(real(N_spec))
-    !write(*,*) BIC
-    !read(*,*)
 
     allocate(rad_conv, mold=radiance_work)
     rad_conv(:) = 0.0d0
     !! Calculate the modeled radiance via xhat
-    do i=1, N_sv
-       !write(*,*) i, xhat(i), sqrt(Shat(i,i))
-       rad_conv(:) = rad_conv(:) + K(:,i) * xhat(i)
+    do l=1, N_sv
+       !write(*,*) l, xhat(l), sqrt(Shat(l,l))
+       rad_conv(:) = rad_conv(:) + K(:,l) * xhat(l)
     end do
 
+    !G = matmul(matmul(Shat, transpose(K)), Se_inv)
+    !AK = matmul(G, K)
 
-    noise_work(:) = noise_work(:) * fit_intercept
-    retrieved_SIF_abs(i_fp, i_fr) = xhat(N_sv) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
-    write(tmp_str, '(A, E12.5)') "SIF abs: ", xhat(N_sv) * fit_intercept !cont_rad ! radiance_l1b(l1b_wl_idx_min)
-    call logger%trivia(fname, trim(tmp_str))
+    chi2 = calculate_chi2(radiance_work, rad_conv, &
+         noise_work, N_spec - N_sv)
 
-    retrieved_SIF_rel(i_fp, i_fr) = xhat(N_sv)
-    write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
-    call logger%trivia(fname, trim(tmp_str))
+    BIC = -2.0d0 * (&
+         dot_product(radiance_work - rad_conv, &
+         matmul(Se_inv, radiance_work - rad_conv))) &
+         + N_sv * log(real(N_spec))
 
-    !! Now we still are in a unitless world, so let's get back to the
-    !! realm of physical units by back-scaling our result here with the first
-    !! pixel of the microwindow.
-    radiance_work(:) = radiance_work(:) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
-    rad_conv(:) = rad_conv(:) * fit_intercept !cont_rad !radiance_l1b(l1b_wl_idx_min)
-    ! Get the spectral residual
-    residual(:) = rad_conv(:) - radiance_work(:)
-
-    if (MCS%output%save_radiances) then
-       final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = rad_conv(:)
-       measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_work(:)
-       noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
-    end if
-    ! reduced chi2
-    tmp_chi2 = SUM((residual ** 2) / (noise_work ** 2))
-    tmp_chi2 = tmp_chi2 / (N_spec - N_sv)
-    chi2(i_fp, i_fr) = tmp_chi2
-
-    BIC = N_spec * log(SUM(residual ** 2) / N_spec) + N_sv * log(1.0 * N_spec)
-
-    write(tmp_str, '(A, I3.1)') "N_sv: ", N_sv
-    call logger%trivia(fname, trim(tmp_str))
-    write(tmp_str, '(A,F7.3)') "Chi2: ", tmp_chi2
-    call logger%trivia(fname, trim(tmp_str))
-
-  end subroutine guanter_FM
-
-
-
-
+  end subroutine calculate_xhat
 
 
   subroutine slope_correction(radiance, perc, intercept)

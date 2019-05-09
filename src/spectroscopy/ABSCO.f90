@@ -66,7 +66,7 @@ contains
        call logger%debug(fname, "ABSCO file has 3 dimensions")
        call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", tmp_absco_3D, dset_dims)
        ! Copy to gas structure
-       allocate(gas%cross_section(dset_dims(1), dset_dims(2), dset_dims(3), 1))
+       allocate(gas%cross_section(dset_dims(1), 1, dset_dims(2), dset_dims(3)))
        gas%cross_section(:,1,:,:) = tmp_absco_3D(:,:,:)
        gas%has_h2o = .false.
     else

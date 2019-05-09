@@ -104,7 +104,7 @@ contains
     gas_tau_dvmr(:,:) = 0.0d0
     ndry(:) = 0.0d0
 
-    ! Pre-compute the indicies of the ABSCO wavlength dimension at which
+    ! Pre-compute the indicies of the ABSCO wavelength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
     ! want to calculate the optical depths.
     ! If the spectroscopy comes pre-gridded already, this step is not

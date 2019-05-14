@@ -10,8 +10,8 @@ contains
 
   subroutine calculate_gas_tau(pre_gridded, is_H2O, &
        wl, gas_vmr, psurf, p, T, sh, &
-       gas, N_sub, need_psurf_jac, need_gas_jac, &
-       gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
+       gas, N_sub, need_psurf_jac, &
+       gas_tau, gas_tau_dpsurf, &
        ndry, success)
 
     implicit none
@@ -24,14 +24,11 @@ contains
     double precision, intent(in) :: p(:), T(:), sh(:)
     type(CS_gas), intent(in) :: gas ! Gas structure which contains the cross sections
     integer, intent(in) :: N_sub ! How many sublayers for more accurate calculation?
-    logical, intent(in) :: need_psurf_jac, need_gas_jac
-
+    logical, intent(in) :: need_psurf_jac
     ! Gas optical depth - wavelength, layer
     double precision, intent(inout) :: gas_tau(:,:)
     ! Gas optical depth after psurf pert. - wavelength, layer
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
-    ! dtau / dvmr
-    double precision, intent(inout) :: gas_tau_dvmr(:,:)
     ! dry air mass per layer
     double precision, intent(inout) :: ndry(:)
     ! Success?
@@ -49,7 +46,7 @@ contains
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
          sh_lower_pert, VMR_lower_pert, VMR_sigma_pert, this_VMR_pert, this_M_pert, &
          this_T_pert, this_sh_pert
-    double precision :: C_tmp, dCS_dVMR_lower(size(wl)), p_lower_gas_pert, this_p_fac_lower
+    double precision :: C_tmp, p_lower_gas_pert, this_p_fac_lower
     double precision, allocatable :: gas_tmp(:), this_CS_value(:)
     integer, allocatable :: wl_left_indices(:)
 
@@ -101,7 +98,6 @@ contains
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
-    gas_tau_dvmr(:,:) = 0.0d0
     ndry(:) = 0.0d0
 
     ! Pre-compute the indicies of the ABSCO wavelength dimension at which
@@ -281,18 +277,6 @@ contains
 
           ! Add sublayer contribution to full layer tau
           gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry(l-1) * this_CS_value(:) * this_VMR)
-
-          if (need_gas_jac) then
-
-             gas_tau_dvmr(:,l) = gas_tau_dvmr(:,l) + (&
-                  gas_tmp(:) / this_VMR * (this_p_fac))
-
-             if (l == 2) then
-                gas_tau_dvmr(:,1) = gas_tau_dvmr(:,1) + (&
-                     gas_tmp(:) / this_VMR * (1.0d0 - this_p_fac))
-             end if
-
-          end if
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer

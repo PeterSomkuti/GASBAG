@@ -871,7 +871,7 @@ contains
     integer :: num_gases, num_levels, num_active_levels
     ! Various arrays for gas optical depths
     double precision, allocatable :: gas_tau(:,:,:) ! Gas optical depth (spectral, layer, gas number)
-    double precision, allocatable :: gas_tau_dvmr(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
+    double precision, allocatable :: gas_tau_dtemp(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
     double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
     double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
     double precision :: gas_pert_step_size
@@ -906,6 +906,9 @@ contains
     double precision :: this_sif_radiance
     ! ZLO - same as SIF essentially
     double precision :: this_zlo_radiance
+
+    ! Temperature
+    double precision :: this_temp_offset
 
     ! Gases
     ! Do we want to calculate gas Jacobians
@@ -1150,6 +1153,11 @@ contains
        SV%svap(SV%idx_zlo(1)) = 0.0d0
     end if
 
+    ! ZLO starts with zero too
+    if (SV%num_temp > 0) then
+       SV%svap(SV%idx_temp(1)) = 0.0d0
+    end if
+
     ! Dispersion
     if (SV%num_dispersion > 0) then
        ! Start with the L1b dispersion values as priors
@@ -1353,7 +1361,7 @@ contains
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
           allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
-          allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
+          allocate(gas_tau_dtemp(N_hires, num_levels-1, num_gases))
           allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels, num_gases))
@@ -1482,6 +1490,30 @@ contains
                 is_H2O = .false.
              end if
 
+             if (SV%num_temp == 1) then
+                this_temp_offset = SV%svsv(SV%idx_temp(1))
+             else
+                this_temp_offset = 0.0d0
+             end if
+
+             ! First, we calculate gas OD's with a 1K temperature perturbation
+             call calculate_gas_tau( &
+                  .true., & ! We are using pre-gridded spectroscopy!
+                  is_H2O, & ! Is this gas H2O?
+                  hires_grid, & ! The high-resolution wavelength grid
+                  this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
+                  this_psurf, & ! Surface pressure
+                  this_atm%p(:), & ! Atmospheric profile pressures
+                  this_atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
+                  this_atm%sh(:), & ! Atmospheric profile humidity
+                  MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
+                  MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
+                  do_psurf_jac, & ! Do we require surface pressure jacobians?
+                  gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
+                  gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                  ndry_tmp, & ! Output: ndry molecules per m2
+                  success_gas) ! Output: Was the calculation successful?
+
              ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
@@ -1490,15 +1522,13 @@ contains
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   this_psurf, & ! Surface pressure
                   this_atm%p(:), & ! Atmospheric profile pressures
-                  this_atm%T(:), & ! Atmospheric profile temperature
+                  this_atm%T(:) + this_temp_offset, & ! Atmospheric profile temperature
                   this_atm%sh(:), & ! Atmospheric profile humidity
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                   MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
-                  do_gas_jac, & ! Do we require gas OD jacobians?
                   gas_tau(:,:,j), & ! Output: Gas ODs
                   gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                  gas_tau_dvmr(:,:,j), & ! Output: dTau/dVMR
                   ndry_tmp, & ! Output: ndry molecules per m2
                   success_gas) ! Output: Was the calculation successful?
 
@@ -1635,6 +1665,12 @@ contains
        if (SV%num_solar_stretch == 1) then
           K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_work_hi(:) &
                / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
+       end if
+
+       ! Temperature offset Jacobian
+       if (SV%num_temp == 1) then
+          K_hi(:, SV%idx_temp(1)) =  -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
+               * (sum(sum(gas_tau_dtemp, dim=2), dim=2) - total_tau)
        end if
 
        ! Gas jacobians
@@ -2179,7 +2215,7 @@ contains
 
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
-       if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
+       if (allocated(gas_tau_dtemp)) deallocate(gas_tau_dtemp)
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
        if (allocated(ray_tau)) deallocate(ray_tau)
        if (allocated(total_tau)) deallocate(total_tau)
@@ -2245,6 +2281,11 @@ contains
     if (SV%num_zlo > 0) then
        ! Put ZLO prior covariance at the continuum level of the band
        Sa(SV%idx_zlo(1), SV%idx_zlo(1)) = continuum * continuum
+    end if
+
+    if (SV%num_temp > 0) then
+       ! Put ZLO prior covariance at the continuum level of the band
+       Sa(SV%idx_temp(1), SV%idx_temp(1)) = sqrt(5.0d0)
     end if
 
     if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1.0d6
@@ -2458,9 +2499,17 @@ contains
           end if
        end do
 
+       ! ZLO name
        do j=1, SV%num_zlo
           if (SV%idx_zlo(j) == i) then
              write(tmp_str, '(A)') "ZLO"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       do j=1, SV%num_temp
+          if (SV%idx_temp(j) == i) then
+             write(tmp_str, '(A)') "temperature"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do

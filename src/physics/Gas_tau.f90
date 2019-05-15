@@ -1,13 +1,47 @@
+!> @brief Gas optical depth calculations
+!> @file gas_tau.f90
+!> @author Peter Somkuti
+!>
+!! This module provides functions to calculate the gas optical depths for a given
+!! model atmosphere for one specific gas. There are essentially two functions:
+!! one to extract the cross section value from a given (wavelength,H2O,p,T)-coordinate
+!! via linear interpolation (get_CS_value_at). The other function (calculate_gas_tau)
+!! does the physics to calculate the layer and sub-layer ODs, and calls the other
+!! to grab the cross section values needed for the calculations.
+
 module gas_tau_mod
 
+  ! User modules
   use control_mod, only: CS_gas
   use math_utils_mod
 
-  public calculate_gas_tau, get_CS_value_at
+  public :: calculate_gas_tau, get_CS_value_at
 
 contains
 
 
+  !> @brief Calculate the per-layer and gas optical depths
+  !> @param pre_gridded Do we use (wavelength) pre-gridded spectroscopy?
+  !> @param is_H2O Is this gas water vapour?
+  !> @param wl Wavelength array
+  !> @param gas_vmr Gas VMR array
+  !> @param psurf Surface pressure
+  !> @param p Pressure levels array
+  !> @param T Temperature levels array
+  !> @param sh Specific humidity levels array
+  !> @param gas MCS%gas object
+  !> @param N_sub Number of sublayers for the sublayer integration
+  !> @param need_psurf_jac Do we want to return surface pressure jacobians?
+  !> @param gas_tau Per-layer gas optical depths
+  !> @param gas_tau_dpsurf Jacobian: dtau/dpsurf
+  !> @param ndry Number of dry air molecules
+  !> @param success Was the calculation successful?
+  !>
+  !> "calculate_gas_tau" uses Gauss-Kronrod integration to calculate per-layer
+  !> gas optical depths for a given gas. This is probably quite similar to the
+  !> OCO full-physics way of doing it, but somewhat optimized for speed, since
+  !> all variables are loaded into memory. Using pre-gridded spectroscopy makes
+  !> this a bit faster than having to interpolate into the ABSCO wavelength grid.
   subroutine calculate_gas_tau(pre_gridded, is_H2O, &
        wl, gas_vmr, psurf, p, T, sh, &
        gas, N_sub, need_psurf_jac, &
@@ -15,61 +49,75 @@ contains
        ndry, success)
 
     implicit none
-    logical, intent(in) :: pre_gridded ! Is the spectroscopy pre-gridded?
-    logical, intent(in) :: is_H2O ! Is this gas water vapor?
-    double precision, intent(in) :: wl(:) ! Wavelength array
-    double precision, intent(in) :: gas_vmr(:) ! Gas volume mixing ratio
-    double precision, intent(in) :: psurf ! Surface pressure
-    ! Pressure, temperature and specific humidity profiles
-    double precision, intent(in) :: p(:), T(:), sh(:)
-    type(CS_gas), intent(in) :: gas ! Gas structure which contains the cross sections
-    integer, intent(in) :: N_sub ! How many sublayers for more accurate calculation?
+    logical, intent(in) :: pre_gridded
+    logical, intent(in) :: is_H2O
+    double precision, intent(in) :: wl(:)
+    double precision, intent(in) :: gas_vmr(:)
+    double precision, intent(in) :: psurf
+    double precision, intent(in) :: p(:)
+    double precision, intent(in) :: T(:)
+    double precision, intent(in) :: sh(:)
+    type(CS_gas), intent(in) :: gas
+    integer, intent(in) :: N_sub
     logical, intent(in) :: need_psurf_jac
-    ! Gas optical depth - wavelength, layer
     double precision, intent(inout) :: gas_tau(:,:)
-    ! Gas optical depth after psurf pert. - wavelength, layer
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
-    ! dry air mass per layer
     double precision, intent(inout) :: ndry(:)
-    ! Success?
     logical, intent(inout) :: success
 
 
-    character(len=999) :: tmp_str
-    character(len=*), parameter :: fname = "calculate_gas_tau"
-    logical :: log_scaling
+    character(len=999) :: tmp_str ! Temporary string
+    character(len=*), parameter :: fname = "calculate_gas_tau" ! Function name
+    logical :: log_scaling ! Are we interpolating in log-p space? (rather than linear p space)
+    ! Placeholders to store the lower and higher (in altitude, i.e. layer boundaries)
+    ! values of p,T,sh, etc.
     double precision :: p_lower, p_higher, T_lower, T_higher, sh_lower, sh_higher
     double precision :: VMR_lower, VMR_higher
+    ! For H2O, we need a different factor to calculate the ODs (no SH-adjustment)
     double precision :: H2O_corr
+    ! Values for this particular layer, and perturbations for psurf Jacobian
     double precision :: this_H2O, this_H2O_pert
     double precision :: this_p, p_fac, this_p_fac, this_T, this_sh, this_VMR, this_M
-    double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert, T_lower_pert, &
-         sh_lower_pert, VMR_lower_pert, VMR_sigma_pert, this_VMR_pert, this_M_pert, &
-         this_T_pert, this_sh_pert
-    double precision :: C_tmp, p_lower_gas_pert, this_p_fac_lower
+    double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert
+    double precision :: T_lower_pert, this_T_pert
+    double precision :: VMR_lower_pert, this_VMR_pert
+    double precision :: sh_lower_pert, this_sh_pert
+    double precision :: this_M_pert
+    double precision :: C_tmp
     double precision, allocatable :: gas_tmp(:), this_CS_value(:)
     integer, allocatable :: wl_left_indices(:)
 
+    ! Variables related to the Gauss-Kronrod weights
     double precision, allocatable :: GK_abscissae(:), GK_weights(:), G_weights(:)
     double precision, allocatable :: GK_abscissae_f(:), GK_weights_f(:), G_weights_f(:)
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
 
+    ! Various counter and size variables
     integer :: N_lay, N_lev, N_wl, num_active_levels
-    integer :: i,j,k,l
-    integer :: funit
-
-    double precision :: gas_wl_step_avg, gas_wl_start
-    integer :: gas_idx_fg
-
-    double precision :: cpu_start, cpu_end
+    integer :: j,k,l
 
     allocate(this_CS_value(size(wl)))
     allocate(wl_left_indices(size(wl)))
 
+    ! Notes to Gauss-Kronrod integration:
+    ! According to GK-rules, the knots ("x-coords") and weights are symmetric
+    ! around 0. So the GK algorithm used here (third_party/kronrod/kronrod.f90)
+    ! will calculate N+1 knots and weights, where N is the number you supply to
+    ! the function "kronrod". To perform the integration, we then just mirror those
+    ! points to eventually end up with 2N+1 knots and weights. The user here supplies
+    ! "N_sub", the number of sublayers used for the integration. We don't want the
+    ! user to have to think too much, we convert these numbers accordingly.
+    ! If the user says: Nsub=5, then we supply N=(N_sub+1)/2=3 to the function,
+    ! which gives us 3 GK points (including 0), which is then later on mirrored
+    ! to obtain back our requested 5.
+
+    ! These three are the placeholders for GK knots (abscissae) and weights
+    ! that come out of the kronrod function.
     allocate(GK_abscissae((N_sub+1)/2))
     allocate(GK_weights((N_sub+1)/2))
     allocate(G_weights((N_sub+1)/2))
 
+    ! These are the fully-back-mirrored GK knots and weights
     allocate(GK_abscissae_f(N_sub))
     allocate(GK_weights_f(N_sub))
     allocate(G_weights_f(N_sub))
@@ -91,6 +139,8 @@ contains
        return
     end if
 
+    ! Maybe some time later we will let the user decide if log-scaling should be
+    ! used or not, but I don't see a reason why you would ever NOT want to use this.
     log_scaling = .true.
 
     allocate(gas_tmp(N_wl))
@@ -353,7 +403,6 @@ contains
 
    ! These here are the indices between which the CS array will
    ! be linearly interpolated: e.g. idx_(left, right)_(pressure)
-   integer :: idx_closest
    integer :: idx_l_p, idx_r_p ! Pressure
    integer :: idx_lr_T, idx_ll_T, idx_rl_T, idx_rr_T ! Temperature has two dimensions
    integer :: idx_l_H2O, idx_r_H2O
@@ -361,7 +410,7 @@ contains
    double precision :: C3(0:1, 0:1, 0:1) ! 0 is 'left', 1 is 'right'
    double precision :: C2(0:1, 0:1), C1(0:1)
    double precision :: wl_d, p_d, T_d_l, T_d_r, H2O_d
-   integer :: i,j,k
+   integer :: i
 
 
    ! This next section here "just" finds the left and right indices of p,T,H2O,wl values within the

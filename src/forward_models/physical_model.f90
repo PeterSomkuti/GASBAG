@@ -565,6 +565,7 @@ contains
              this_thread = OMP_GET_THREAD_NUM()
              cpu_time_start = omp_get_wtime()
 #else
+             this_thread = 0
              call cpu_time(cpu_time_start)
 #endif
              ! --------------------------------------------- !
@@ -1496,23 +1497,26 @@ contains
                 this_temp_offset = 0.0d0
              end if
 
-             ! First, we calculate gas OD's with a 1K temperature perturbation
-             call calculate_gas_tau( &
-                  .true., & ! We are using pre-gridded spectroscopy!
-                  is_H2O, & ! Is this gas H2O?
-                  hires_grid, & ! The high-resolution wavelength grid
-                  this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
-                  this_psurf, & ! Surface pressure
-                  this_atm%p(:), & ! Atmospheric profile pressures
-                  this_atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
-                  this_atm%sh(:), & ! Atmospheric profile humidity
-                  MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
-                  MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
-                  do_psurf_jac, & ! Do we require surface pressure jacobians?
-                  gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
-                  gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                  ndry_tmp, & ! Output: ndry molecules per m2
-                  success_gas) ! Output: Was the calculation successful?
+             if (SV%num_temp == 1) then
+                ! First, we calculate gas OD's with a 1K temperature perturbation, but we only need
+                ! to do this if we retrieve the T offset.
+                call calculate_gas_tau( &
+                     .true., & ! We are using pre-gridded spectroscopy!
+                     is_H2O, & ! Is this gas H2O?
+                     hires_grid, & ! The high-resolution wavelength grid
+                     this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
+                     this_psurf, & ! Surface pressure
+                     this_atm%p(:), & ! Atmospheric profile pressures
+                     this_atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
+                     this_atm%sh(:), & ! Atmospheric profile humidity
+                     MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
+                     MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
+                     do_psurf_jac, & ! Do we require surface pressure jacobians?
+                     gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
+                     gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                     ndry_tmp, & ! Output: ndry molecules per m2
+                     success_gas) ! Output: Was the calculation successful?
+             end if
 
              ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &

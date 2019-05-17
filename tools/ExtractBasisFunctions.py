@@ -142,6 +142,7 @@ dividing through a best-fit slope that characterises the continuum
     # that the continuum level should be more or less sitting around 1.0 for
     # normalized radiances. If this is not the case, consider the spectrum
     # dropped.
+
     good_spectra = np.where(rad_norm.max(axis=1) < max_filter)[0]
     perc_good = 100.0 * len(good_spectra) / rad_norm.shape[0]
     logger.info("Keeping {:.2f}% after normalization.".format(perc_good))
@@ -204,6 +205,7 @@ OCO-2 specific things like checking for spikes etc.
 
     # Similarly, store all the radiances into arrays for every footprint
     # separately.
+
     radiance_dict = dict.fromkeys(range(N_fp))
     for fp in range(N_fp):
         # Select for footprint
@@ -567,7 +569,8 @@ if __name__ == '__main__':
         # Grab the radiances that we need, along with pixel indices
         radiances, idx_min, idx_max = \
             grab_radiances_oco2(h5, micro_window, bare_soundings, N_fp,
-                                cont_threshold=1e20)
+                                cont_threshold=-1)
+                                #cont_threshold=1e20)
         # And normalize them w.r.t. the continuum-level slope
         norm_radiances = dict.fromkeys(radiances.keys())
         for fp in range(N_fp):

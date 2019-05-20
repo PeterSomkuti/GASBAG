@@ -171,6 +171,7 @@ OCO-2 specific things like checking for spikes etc.
 
     """
 
+    embed()
 
     disp_coeffs = h5['InstrumentHeader/dispersion_coef_samp'][0,:,:]
     wl_grid = np.zeros(h5['SoundingMeasurements/radiance_o2'].shape[1:])
@@ -193,7 +194,9 @@ OCO-2 specific things like checking for spikes etc.
         # Note! The -1 and +1 are required such that the dispersion limits match
         # up with how it's done in the retrieval algorithm.
         idx_min[fp] = np.searchsorted(wl_grid[fp], mwin_min) - 1
+        idx_min[fp] = max(0, idx_min[fp])
         idx_max[fp] = np.searchsorted(wl_grid[fp], mwin_max) + 1
+
 
     # Read all radiances in for faster access:
     all_radiances = h5['SoundingMeasurements/radiance_o2'][:]

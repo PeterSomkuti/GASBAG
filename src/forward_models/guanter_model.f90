@@ -52,8 +52,12 @@ module guanter_model_mod
   double precision, allocatable :: final_SV_uncert(:,:,:)
   !> Final SIF value in physical radiance units
   double precision, allocatable :: retrieved_SIF_abs(:,:)
+  !> Final SIF uncertainty in physical radiance units
+  double precision, allocatable :: retrieved_SIF_abs_uncertainty(:,:)
   !> Final SIF value as a fraction of continuum level radiance
   double precision, allocatable :: retrieved_SIF_rel(:,:)
+  !> Final SIF uncertainty as a fraction of continuum level radiance
+  double precision, allocatable :: retrieved_SIF_rel_uncertainty(:,:)
   !> Final retrieved CHI2
   double precision, allocatable :: chi2(:,:)
 
@@ -208,9 +212,14 @@ contains
 
     allocate(retrieved_SIF_abs(N_fp, N_fr))
     allocate(retrieved_SIF_rel(N_fp, N_fr))
+
+    allocate(retrieved_SIF_abs_uncertainty(N_fp, N_fr))
+    allocate(retrieved_SIF_rel_uncertainty(N_fp, N_fr))
+
     allocate(chi2(N_fp, N_fr))
     allocate(final_SV(N_fp, N_fr, MCS%algorithm%n_basisfunctions + 1))
     allocate(final_SV_uncert(N_fp, N_fr, MCS%algorithm%n_basisfunctions + 1))
+
 
     ! Allocate radiance containers if requested by user
     if (MCS%output%save_radiances) then
@@ -235,6 +244,9 @@ contains
        ! Fill result containers with NaNs
        retrieved_SIF_abs(:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        retrieved_SIF_rel(:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       retrieved_SIF_abs_uncertainty(:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+       retrieved_SIF_rel_uncertainty(:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
        final_SV(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        final_SV_uncert(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        chi2(:,:) =IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -286,12 +298,14 @@ contains
           out_dims2d(2) = N_fr
 
           write(tmp_str, '(A,A,G0.1)') trim(group_name), "/basisfunction_coefficient_", i
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                final_SV(:,:,i), out_dims2d)
 
           write(tmp_str, '(A,A,G0.1,A)') trim(group_name), &
                "/basisfunction_coefficient_", i, "_uncertainty"
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                final_SV_uncert(:,:,i), out_dims2d)
@@ -299,18 +313,37 @@ contains
 
        out_dims2d = shape(retrieved_SIF_rel)
        write(tmp_str, '(A,A)') trim(group_name), "/SIF_relative"
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             retrieved_SIF_rel, out_dims2d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
 
+       out_dims2d = shape(retrieved_SIF_rel)
+       write(tmp_str, '(A,A)') trim(group_name), "/SIF_relative_uncertainty"
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            retrieved_SIF_rel_uncertainty(:,:), &
+            out_dims2d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
+
        out_dims2d = shape(retrieved_SIF_abs)
        write(tmp_str, '(A,A)') trim(group_name), "/SIF_absolute"
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             retrieved_SIF_abs, out_dims2d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
 
+       out_dims2d = shape(retrieved_SIF_rel)
+       write(tmp_str, '(A,A)') trim(group_name), "/SIF_absolute_uncertainty"
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            retrieved_SIF_abs_uncertainty(:,:), &
+            out_dims2d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
+
        out_dims2d = shape(chi2)
        write(tmp_str, '(A,A)') trim(group_name), "/retrieved_chi2"
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             chi2, out_dims2d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
@@ -318,18 +351,21 @@ contains
        if (MCS%output%save_radiances) then
           out_dims3d = shape(final_radiance)
           write(tmp_str, '(A,A)') trim(group_name), "/modelled_radiance"
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                final_radiance, out_dims3d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
 
           out_dims3d = shape(measured_radiance)
           write(tmp_str, '(A,A)') trim(group_name), "/measured_radiance"
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                measured_radiance, out_dims3d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
 
           out_dims3d = shape(noise_radiance)
           write(tmp_str, '(A,A)') trim(group_name), "/noise_radiance"
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                noise_radiance, out_dims3d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
@@ -447,6 +483,12 @@ contains
        end if
     end do
 
+    ! If window lower limit is below the first wavelength value, set it
+    ! to the beginning (index 1)
+    if (l1b_wl_idx_min == 0) then
+       l1b_wl_idx_min = 1
+    end if
+
     if (l1b_wl_idx_max < size(dispersion, 1)) then
        l1b_wl_idx_max = l1b_wl_idx_max + 1
     end if
@@ -458,6 +500,7 @@ contains
     ! Allocate some space for the new work array which we can do the
     ! retrieval with, and copy over the corrsponding part of the spectrum
     allocate(radiance_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
+    allocate(rad_conv(l1b_wl_idx_max - l1b_wl_idx_min + 1))
     allocate(noise_work(l1b_wl_idx_max - l1b_wl_idx_min + 1))
 
     ! Copy the relevant part of the spectrum to radiance_work
@@ -569,7 +612,8 @@ contains
 !!$
           call calculate_xhat(basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, :), &
                radiance_work, noise_work, Se_inv, &
-               xhat, Shat, tmp_chi2, this_BIC, used_basisfunctions)
+               xhat, rad_conv, &
+               Shat, tmp_chi2, this_BIC, used_basisfunctions)
           deallocate(Shat)
 
           BIC_this_iteration(i) = this_BIC
@@ -609,7 +653,8 @@ contains
     ! Calculate the maximum posterior statevector for the purely linear case
     call calculate_xhat(basisfunctions(i_win, l1b_wl_idx_min:l1b_wl_idx_max, i_fp, :), &
          radiance_work, noise_work, Se_inv, &
-         xhat, Shat, tmp_chi2, this_BIC, used_basisfunctions)
+         xhat, rad_conv, &
+         Shat, tmp_chi2, this_BIC, used_basisfunctions)
 
     ! Store the calculated CHI2 value
     chi2(i_fp, i_fr) = tmp_chi2
@@ -621,7 +666,7 @@ contains
     do i=1, N_sv
        final_SV_uncert(i_fp, i_fr, i) = sqrt(Shat(i,i))
     end do
-    deallocate(Shat)
+
 
     ! Plug the final value into the container
     final_SV(i_fp, i_fr, :) = xhat(:)
@@ -632,6 +677,8 @@ contains
     !call logger%trivia(fname, trim(tmp_str))
 
     retrieved_SIF_rel(i_fp, i_fr) = xhat(N_sv)
+    retrieved_SIF_rel_uncertainty(i_fp, i_fr) = sqrt(Shat(N_sv, N_sv))
+    retrieved_SIF_abs_uncertainty(i_fp, i_fr) = retrieved_SIF_rel_uncertainty(i_fp, i_fr) * fit_intercept
     !write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
     !call logger%trivia(fname, trim(tmp_str))
 
@@ -647,14 +694,13 @@ contains
     write(tmp_str, '(A,F7.3)') "Chi2: ", tmp_chi2
     !call logger%trivia(fname, trim(tmp_str))
 
-    
-
+    !deallocate(Shat)
   end subroutine guanter_FM
 
 
 
   subroutine calculate_xhat(basisfunctions, radiance_work, noise_work, Se_inv, &
-       xhat, Shat, chi2, BIC, used_basisfunctions)
+       xhat, rad_conv, Shat, chi2, BIC, used_basisfunctions)
 
     ! Basisfunction array (spectral index, basisfunc. index)
     double precision, intent(in) :: basisfunctions(:,:)
@@ -665,6 +711,7 @@ contains
     double precision, intent(in) :: Se_inv(:,:)
     ! Statevector
     double precision, intent(inout), allocatable :: xhat(:)
+    double precision, intent(inout) :: rad_conv(:)
     double precision, allocatable, intent(inout) :: Shat(:,:)
     ! Chi^2
     double precision, intent(inout) :: chi2
@@ -678,7 +725,6 @@ contains
     double precision, allocatable :: K(:,:), G(:,:), AK(:,:)
     double precision, allocatable :: Shat_inv(:,:)
     double precision, allocatable :: m_tmp1(:,:), m_tmp2(:,:)
-    double precision, allocatable :: rad_conv(:)
     logical :: success_inv_mat
     integer :: i, j, l, cnt
 
@@ -740,7 +786,6 @@ contains
     ! Calculate xhat!
     xhat = matmul(matmul(matmul(Shat, transpose(K)), Se_inv), radiance_work)
 
-    allocate(rad_conv, mold=radiance_work)
     rad_conv(:) = 0.0d0
     !! Calculate the modeled radiance via xhat
     do l=1, N_sv

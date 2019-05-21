@@ -361,8 +361,9 @@ contains
              C_tmp = 1.0d0 / (9.80665d0 * this_M) * NA * 0.1d0 * H2O_corr
 
              if (log_scaling) then
+                ! this_p_pert is already exponentiated here!!
                 gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) &
-                * this_VMR_pert * C_tmp * exp(this_p_pert)
+                * this_VMR_pert * C_tmp * this_p_pert
              else
                 gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) &
                      * this_VMR_pert * C_tmp

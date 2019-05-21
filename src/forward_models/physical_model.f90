@@ -1648,6 +1648,7 @@ contains
        radiance_tmp_work_hi(:) = radiance_calc_work_hi(:)
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
 
+
        ! JACOBIAN CALCULATIONS
 
        ! Surface pressure Jacobian

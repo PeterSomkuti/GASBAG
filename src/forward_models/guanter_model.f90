@@ -667,7 +667,6 @@ contains
        final_SV_uncert(i_fp, i_fr, i) = sqrt(Shat(i,i))
     end do
 
-
     ! Plug the final value into the container
     final_SV(i_fp, i_fr, :) = xhat(:)
 
@@ -698,58 +697,80 @@ contains
   end subroutine guanter_FM
 
 
-
+  !> @brief Function for performing the actual retrieval and calculating xhat solution
+  !> @param basisfunctions Array that contains the (pixel, j) basisfunctions
+  !> @param radiance_work The normalized and slope-corrected measured radiances
+  !> @param noise_work The normalized per-pixel noise-equivalent radiance
+  !> @param Se_inv Inverse noise error covariance (must correspond to noise_work)
+  !> @param x_hat Linear solution (maximum a-posteriori)
+  !> @param rad_conv Modelled radiances
+  !> @param Shat Posterior convariance matrix
+  !> @param chi2 Retrieved CHI2 (no prior)
+  !> @param BIC Bayesian information content of this retrieval
+  !> @param used_basisfunctions Whicih basisfunctions to use in the retrieval?
   subroutine calculate_xhat(basisfunctions, radiance_work, noise_work, Se_inv, &
        xhat, rad_conv, Shat, chi2, BIC, used_basisfunctions)
 
-    ! Basisfunction array (spectral index, basisfunc. index)
     double precision, intent(in) :: basisfunctions(:,:)
-    ! Radiance for this sounding
     double precision, intent(in) :: radiance_work(:)
     double precision, intent(in) :: noise_work(:)
-    ! Noise covariance matrix
     double precision, intent(in) :: Se_inv(:,:)
-    ! Statevector
     double precision, intent(inout), allocatable :: xhat(:)
     double precision, intent(inout) :: rad_conv(:)
     double precision, allocatable, intent(inout) :: Shat(:,:)
-    ! Chi^2
     double precision, intent(inout) :: chi2
     double precision, intent(inout) :: BIC
     logical, intent(in), optional :: used_basisfunctions(:)
 
+    ! Function name
     character(len=*), parameter :: fname = "calculate_xhat"
 
+    ! Array sizes
     integer :: N_sv
     integer :: N_spec
+    ! Jacobian, gain matrix, averaging kernel
     double precision, allocatable :: K(:,:), G(:,:), AK(:,:)
+    ! Inverse of posterior covariance matrix
     double precision, allocatable :: Shat_inv(:,:)
+    ! Temp. matrices for calculations
     double precision, allocatable :: m_tmp1(:,:), m_tmp2(:,:)
+    ! Was matrix inversion successful?
     logical :: success_inv_mat
+    ! Loop and counter variables
     integer :: i, j, l, cnt
 
+    ! If requested by the user, we can choose to only use
+    ! certain basisfunctions (required by the backward elimination algorithm)
     if (present(used_basisfunctions)) then
        N_sv = count(used_basisfunctions .eqv. .true.) + 1
     else
        N_sv = size(basisfunctions, 2) + 1
     end if
 
+    ! Determine the number of pixels
     N_spec = size(basisfunctions, 1)
 
     allocate(xhat(N_sv))
     xhat(:) = 0.0d0
+
     allocate(Shat(N_sv, N_sv))
     Shat(:,:) = 0.0d0
+
     allocate(Shat_inv(N_sv, N_sv))
     Shat_inv(:,:) = 0.0d0
+
     allocate(K(N_spec, N_sv))
     K(:,:) = 0.0d0
+
     allocate(G(N_sv, N_spec))
     G(:,:) = 0.0d0
+
     allocate(AK(N_sv, N_sv))
     AK(:,:) = 0.0d0
 
-    ! Fill Jacobian with the basisfunctions
+    ! Fill Jacobian with the basisfunctions. This needs to be populated
+    ! here as the used basisfunctions might change and thus K will look
+    ! different with every retrieval.
     if (present(used_basisfunctions)) then
        cnt = 1
        do i=1, size(basisfunctions, 2)

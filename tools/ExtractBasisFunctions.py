@@ -171,8 +171,6 @@ OCO-2 specific things like checking for spikes etc.
 
     """
 
-    embed()
-
     disp_coeffs = h5['InstrumentHeader/dispersion_coef_samp'][0,:,:]
     wl_grid = np.zeros(h5['SoundingMeasurements/radiance_o2'].shape[1:])
 

@@ -260,6 +260,9 @@ contains
        ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
        ! which one exists (priority given to /Meteorology) and take it from there
 
+       MET_exists = .false.
+       ECMWF_exists = .false.
+
        call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
        if (.not. MET_exists) then
           call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
@@ -300,7 +303,6 @@ contains
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-
        ! Read in the sounding id's
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
        ! Read the time strings
@@ -310,7 +312,7 @@ contains
             ils_relative_response)
 
        ! Read in Spike filter data, if it exists in this file
-       call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
+       !call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
        !if (spike_exists) then
        !   call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
        !end if
@@ -563,6 +565,7 @@ contains
              this_thread = OMP_GET_THREAD_NUM()
              cpu_time_start = omp_get_wtime()
 #else
+             this_thread = 0
              call cpu_time(cpu_time_start)
 #endif
              ! --------------------------------------------- !
@@ -869,7 +872,7 @@ contains
     integer :: num_gases, num_levels, num_active_levels
     ! Various arrays for gas optical depths
     double precision, allocatable :: gas_tau(:,:,:) ! Gas optical depth (spectral, layer, gas number)
-    double precision, allocatable :: gas_tau_dvmr(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
+    double precision, allocatable :: gas_tau_dtemp(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
     double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
     double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
     double precision :: gas_pert_step_size
@@ -904,6 +907,9 @@ contains
     double precision :: this_sif_radiance
     ! ZLO - same as SIF essentially
     double precision :: this_zlo_radiance
+
+    ! Temperature
+    double precision :: this_temp_offset
 
     ! Gases
     ! Do we want to calculate gas Jacobians
@@ -1003,7 +1009,7 @@ contains
     if (allocated(MCS%window(i_win)%smart_scale_first_guess_wl_in)) then
 
        allocate(scale_first_guess(size(MCS%window(i_win)%smart_scale_first_guess_wl_in)))
-       
+
        call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
             radiance_l1b, &
             MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &!expected_wavelengths_in, &
@@ -1053,7 +1059,7 @@ contains
     ! Allocate the micro-window bounded solar arrays
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
-    
+
     ! THIS IS "BORROWED" FROM THE MS3 CODE
     call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
          epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
@@ -1114,7 +1120,7 @@ contains
             solar_spectrum_regular(:,1), solar_irrad)
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(solar_irrad) * mu0)       
+            (1.0d0 * maxval(solar_irrad) * mu0)
     end select
 
 
@@ -1146,6 +1152,11 @@ contains
     ! ZLO starts with zero too
     if (SV%num_zlo > 0) then
        SV%svap(SV%idx_zlo(1)) = 0.0d0
+    end if
+
+    ! ZLO starts with zero too
+    if (SV%num_temp > 0) then
+       SV%svap(SV%idx_temp(1)) = 0.0d0
     end if
 
     ! Dispersion
@@ -1351,7 +1362,7 @@ contains
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
           allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
-          allocate(gas_tau_dvmr(N_hires, num_levels, num_gases))
+          allocate(gas_tau_dtemp(N_hires, num_levels-1, num_gases))
           allocate(ray_tau(N_hires, num_levels-1))
           allocate(vmr_pert(num_levels))
           allocate(this_vmr_profile(num_levels, num_gases))
@@ -1480,6 +1491,33 @@ contains
                 is_H2O = .false.
              end if
 
+             if (SV%num_temp == 1) then
+                this_temp_offset = SV%svsv(SV%idx_temp(1))
+             else
+                this_temp_offset = 0.0d0
+             end if
+
+             if (SV%num_temp == 1) then
+                ! First, we calculate gas OD's with a 1K temperature perturbation, but we only need
+                ! to do this if we retrieve the T offset.
+                call calculate_gas_tau( &
+                     .true., & ! We are using pre-gridded spectroscopy!
+                     is_H2O, & ! Is this gas H2O?
+                     hires_grid, & ! The high-resolution wavelength grid
+                     this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
+                     this_psurf, & ! Surface pressure
+                     this_atm%p(:), & ! Atmospheric profile pressures
+                     this_atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
+                     this_atm%sh(:), & ! Atmospheric profile humidity
+                     MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
+                     MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
+                     do_psurf_jac, & ! Do we require surface pressure jacobians?
+                     gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
+                     gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                     ndry_tmp, & ! Output: ndry molecules per m2
+                     success_gas) ! Output: Was the calculation successful?
+             end if
+
              ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
@@ -1488,15 +1526,13 @@ contains
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   this_psurf, & ! Surface pressure
                   this_atm%p(:), & ! Atmospheric profile pressures
-                  this_atm%T(:), & ! Atmospheric profile temperature
+                  this_atm%T(:) + this_temp_offset, & ! Atmospheric profile temperature
                   this_atm%sh(:), & ! Atmospheric profile humidity
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                   MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
-                  do_gas_jac, & ! Do we require gas OD jacobians?
                   gas_tau(:,:,j), & ! Output: Gas ODs
                   gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                  gas_tau_dvmr(:,:,j), & ! Output: dTau/dVMR
                   ndry_tmp, & ! Output: ndry molecules per m2
                   success_gas) ! Output: Was the calculation successful?
 
@@ -1612,6 +1648,7 @@ contains
        radiance_tmp_work_hi(:) = radiance_calc_work_hi(:)
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
 
+
        ! JACOBIAN CALCULATIONS
 
        ! Surface pressure Jacobian
@@ -1633,6 +1670,12 @@ contains
        if (SV%num_solar_stretch == 1) then
           K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_work_hi(:) &
                / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
+       end if
+
+       ! Temperature offset Jacobian
+       if (SV%num_temp == 1) then
+          K_hi(:, SV%idx_temp(1)) =  -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
+               * (sum(sum(gas_tau_dtemp, dim=2), dim=2) - total_tau)
        end if
 
        ! Gas jacobians
@@ -1862,6 +1905,7 @@ contains
        write(tmp_str, *) MCS%window(i_win)%inverse_method%chars()
        if (MCS%window(i_win)%inverse_method%lower() == "imap") then
           ! Use iterative maximum a-posteriori solution (linear retrieval)
+          ! (IMAP) as done by Christian Frankenberg
 
           ! K^T Se^-1 K
           KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
@@ -1992,7 +2036,8 @@ contains
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
-                      this_vmr_profile(s_start(i):s_stop(i),j) = this_vmr_profile(s_start(i):s_stop(i),j) &
+                      this_vmr_profile(s_start(i):s_stop(i),j) = &
+                           this_vmr_profile(s_start(i):s_stop(i),j) &
                            * SV%svsv(SV%idx_gas(i,1))
 
                       ! We also want to have the corresponding number of molecules of dry air
@@ -2038,8 +2083,7 @@ contains
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
 
-          ! Save retrieved CHI2 - this is the predicted chi2 from the 'last+1'
-          ! linear step that is not evaluated.
+          ! Save retrieved CHI2 (before the last update)
           results%chi2(i_fp, i_fr) = this_chi2
 
           ! Get an SNR (mean and std) estimate
@@ -2054,7 +2098,8 @@ contains
              results%sv_retrieved(i_fp, i_fr,i) = SV%svsv(i)
           end do
 
-          ! Save the number of iterations
+          ! Save the number of iterations, remember we start counting at 1,
+          ! so the first update is the 2nd iteration etc.
           results%num_iterations(i_fp, i_fr) = iteration
 
           if (MCS%output%save_radiances) then
@@ -2066,7 +2111,7 @@ contains
           end if
 
           ! Write a debug message
-          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration ,&
+          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration , &
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", this_psurf, &
@@ -2175,7 +2220,7 @@ contains
 
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
-       if (allocated(gas_tau_dvmr)) deallocate(gas_tau_dvmr)
+       if (allocated(gas_tau_dtemp)) deallocate(gas_tau_dtemp)
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
        if (allocated(ray_tau)) deallocate(ray_tau)
        if (allocated(total_tau)) deallocate(total_tau)
@@ -2187,7 +2232,7 @@ contains
        !read(*,*)
     end do
     !read(*,*)
-    
+
   end function physical_FM
 
 
@@ -2241,6 +2286,11 @@ contains
     if (SV%num_zlo > 0) then
        ! Put ZLO prior covariance at the continuum level of the band
        Sa(SV%idx_zlo(1), SV%idx_zlo(1)) = continuum * continuum
+    end if
+
+    if (SV%num_temp > 0) then
+       ! Put ZLO prior covariance at the continuum level of the band
+       Sa(SV%idx_temp(1), SV%idx_temp(1)) = sqrt(5.0d0)
     end if
 
     if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1.0d6
@@ -2454,9 +2504,17 @@ contains
           end if
        end do
 
+       ! ZLO name
        do j=1, SV%num_zlo
           if (SV%idx_zlo(j) == i) then
              write(tmp_str, '(A)') "ZLO"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       do j=1, SV%num_temp
+          if (SV%idx_temp(j) == i) then
+             write(tmp_str, '(A)') "temperature"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do

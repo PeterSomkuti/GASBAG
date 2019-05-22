@@ -29,7 +29,6 @@ module oco2_mod
      procedure, nopass :: scan_l1b_file
      procedure, nopass :: read_l1b_dispersion
      procedure, nopass :: read_l1b_snr_coef
-     procedure, nopass :: read_num_frames_and_fp
      procedure, nopass :: calculate_dispersion
      procedure, nopass :: read_one_spectrum
      procedure, nopass :: calculate_noise
@@ -47,6 +46,8 @@ module oco2_mod
 
 contains
 
+  !> @brief Scans the L1B file and extracts some global information
+  !> @param l1b_file Path to L1B file
   subroutine scan_l1b_file(l1b_file)
     !! Checks whether this is indeed a valid OCO-2 l1b file that has all
     !! the required fields and variables..
@@ -63,14 +64,15 @@ contains
     call h5fopen_f(l1b_file%chars(), H5F_ACC_RDONLY_F, file_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(l1b_file%chars()))
 
-    ! Let's start with the sounding IDs and have a look how many we actually
-    ! have in this file.
+    ! Let's start with the sounding IDs and have a look how many frames and footprints
+    ! we actually have in this file.
     call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
     if (size(n_fp_frames) /= 2) then
        call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
        stop 1
     end if
 
+    ! Let the user know how many
     write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), &
          ", number of frames: ", n_fp_frames(2)
     call logger%info(fname, trim(msg))
@@ -95,6 +97,10 @@ contains
     MCS%general%N_spec(2) = dim_spec(1)
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
     MCS%general%N_spec(3) = dim_spec(1)
+
+    ! Close this instance, as it will be loaded by "perform_retrievals" again
+    call h5fclose_f(file_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error closing HDF file: " // trim(l1b_file%chars()))
 
   end subroutine scan_l1b_file
 
@@ -139,24 +145,6 @@ contains
 
   end subroutine read_l1b_snr_coef
 
-
-  subroutine read_num_frames_and_fp(l1b_file_id, num_frames, num_fp)
-
-    integer(hid_t), intent(in) :: l1b_file_id
-    integer, intent(out) :: num_frames, num_fp
-
-    integer(hsize_t), allocatable :: num_frames_shape(:)
-    integer :: hdferr
-    character(len=*), parameter :: fname = "read_num_frames(oco2)"
-    character(len=*), parameter :: dset_name = "/SoundingGeometry/sounding_id"
-
-    call get_HDF5_dset_dims(l1b_file_id, trim(dset_name), num_frames_shape)
-    call check_hdf_error(hdferr, fname, "Error reading data set dimesions at: " // trim(dset_name))
-
-    num_fp = num_frames_shape(1)
-    num_frames = num_frames_shape(2)
-
-  end subroutine read_num_frames_and_fp
 
   !> @brief Calculate the dispersion array, based on the dispersion coefficients
   !> @param disp_coef dispersion_coefficients (coef, fp, band)
@@ -472,7 +460,7 @@ contains
     double precision, allocatable, intent(inout) :: ils_delta_lambda(:,:,:,:), &
          ils_relative_response(:,:,:,:)
 
-    character(len=*), parameter :: fname = "read_sounding_location(oco2)"
+    character(len=*), parameter :: fname = "read_ils_data(oco2)"
     integer(hsize_t), dimension(:), allocatable :: dset_dims
 
     call read_DP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_delta_lambda", &
@@ -512,7 +500,9 @@ contains
     altitude(:,:) = tmp_array(band,:,:)
 
     allocate(rel_vel(dset_dims(2), dset_dims(3)))
+    rel_vel(:,:) = 0.0d0
     allocate(rel_solar_vel(dset_dims(2), dset_dims(3)))
+    rel_solar_vel(:,:) = 0.0d0
 
   end subroutine read_sounding_location
 

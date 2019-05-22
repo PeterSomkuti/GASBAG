@@ -46,7 +46,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O2 -mtune=native")
+  set(opt "-O3 -mtune=native")
   set(bounds "-fbounds-check")
 else()
   # only support Gfortran for now
@@ -68,7 +68,7 @@ set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg -fprofile-arcs -ftest-coverage")
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran)
-find_package(NETCDF REQUIRED COMPONENTS Fortran)
+#find_package(NETCDF REQUIRED COMPONENTS Fortran)
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 

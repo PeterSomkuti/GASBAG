@@ -7,10 +7,10 @@ module statevector_mod
     type statevector
         ! Number of state vector elements per type
        integer :: num_albedo, num_sif, num_dispersion, num_psurf, num_gas, &
-            num_solar_shift, num_solar_stretch, num_zlo
+            num_solar_shift, num_solar_stretch, num_zlo, num_temp
         integer, dimension(:), allocatable :: idx_albedo, idx_sif, &
              idx_dispersion, idx_psurf, idx_solar_shift, idx_solar_stretch, &
-             idx_zlo, gas_idx_lookup
+             idx_zlo, idx_temp, gas_idx_lookup
         double precision, allocatable :: gas_retrieve_scale_start(:), &
              gas_retrieve_scale_stop(:)
         double precision, allocatable :: gas_retrieve_scale_cov(:)
@@ -37,6 +37,7 @@ contains
     if (allocated(SV%idx_solar_shift)) deallocate(SV%idx_solar_shift)
     if (allocated(SV%idx_solar_stretch)) deallocate(SV%idx_solar_stretch)
     if (allocated(SV%idx_zlo)) deallocate(SV%idx_zlo)
+    if (allocated(SV%idx_temp)) deallocate(SV%idx_temp)
 
     if (allocated(SV%svap)) deallocate(SV%svap)
     if (allocated(SV%svsv)) deallocate(SV%svsv)
@@ -59,6 +60,7 @@ contains
     SV%num_solar_shift = -1
     SV%num_solar_stretch = -1
     SV%num_zlo = -1
+    SV%num_temp = -1
 
   end subroutine clear_SV
 
@@ -85,7 +87,7 @@ contains
 
     integer :: num_albedo_parameters, num_dispersion_parameters, &
          num_sif_parameters, num_psurf_parameters, num_solar_shift_parameters, &
-         num_solar_stretch_parameters, num_zlo_parameters
+         num_solar_stretch_parameters, num_zlo_parameters, num_temp_parameters
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
@@ -104,7 +106,8 @@ contains
     known_SV(5) = "solar_shift"
     known_SV(6) = "solar_stretch"
     known_SV(7) = "zlo"
-    last_known = 7
+    known_SV(8) = "temp"
+    last_known = 8
 
     ! Add gases as 'known' state vector elements. CAUTION! There is
     ! obviously a danger if someone decides to name their gas "psurf".
@@ -176,6 +179,7 @@ contains
     num_solar_shift_parameters = 0
     num_solar_stretch_parameters = 0
     num_zlo_parameters = 0
+    num_temp_parameters = 0
 
     ! Again, we can do these only if the arrays are allocated,
     ! which they aren't if no gases are defined..
@@ -249,6 +253,11 @@ contains
        ! We are retrieving ZLO! (this is the SAME as SIF essentially)
        if (split_string(i)%lower() == "zlo") then
           num_zlo_parameters = 1
+       end if
+
+       ! We are retrieving a temperature offset!
+       if (split_string(i)%lower() == "temp") then
+          num_temp_parameters = 1
        end if
 
        ! We are retrieving surface pressure!
@@ -375,6 +384,7 @@ contains
          num_solar_shift_parameters, &
          num_solar_stretch_parameters, &
          num_zlo_parameters, &
+         num_temp_parameters, &
          gas_retr_count)
 
   end subroutine parse_and_initialize_SV
@@ -384,14 +394,15 @@ contains
 
   subroutine initialize_statevector(i_win, num_levels, sv, &
        count_albedo, count_sif, count_dispersion, count_psurf, &
-       count_solar_shift, count_solar_stretch, count_zlo, gas_retr_count)
+       count_solar_shift, count_solar_stretch, count_zlo, &
+       count_temp, gas_retr_count)
 
     implicit none
     integer, intent(in) :: i_win, num_levels
     type(statevector), intent(inout) :: sv
     integer, intent(in) :: count_albedo, count_sif, &
          count_dispersion, count_psurf, count_solar_shift, &
-         count_solar_stretch, count_zlo, gas_retr_count(:)
+         count_solar_stretch, count_zlo, count_temp, gas_retr_count(:)
 
     integer :: count_gas
     character(len=*), parameter :: fname = "initialize_statevector"
@@ -407,6 +418,7 @@ contains
     sv%num_solar_shift = count_solar_shift
     sv%num_solar_stretch = count_solar_stretch
     sv%num_zlo = count_zlo
+    sv%num_temp = count_temp
     sv%num_gas = 0
 
     sv_count = 0
@@ -461,6 +473,20 @@ contains
     else
        allocate(sv%idx_zlo(1))
        sv%idx_zlo(1) = -1
+    end if
+
+    if (sv%num_temp > 0) then
+       write(tmp_str, '(A, G0.1)') "Number of Temperature SV elements: ", sv%num_temp
+       call logger%info(fname, trim(tmp_str))
+
+       allocate(sv%idx_temp(sv%num_temp))
+       do i=1, sv%num_temp
+          sv_count = sv_count + 1
+          sv%idx_temp(i) = sv_count
+       end do
+    else
+       allocate(sv%idx_temp(1))
+       sv%idx_temp(1) = -1
     end if
 
     ! Dispersion: we do arbitrary coefficients here, and we'll have to check

@@ -63,10 +63,17 @@ contains
             gas%cross_section, dset_dims)
        gas%has_h2o = .true.
     else if (absco_dims == 3) then
+       ! The gas%cross_section array is 4-dimensional, so we need an in-between step to
+       ! copy the 3-dimensional HDF array into the 4-dimensional array. We simply copy it
+       ! all into a 3-dim array first, and then allocate the gas%cross_section array, but
+       ! leave the H2O-dimension (dim number 2) as 1-element wide. Then it's simply copied
+       ! over, skipping the H2O dimension.
+
        call logger%debug(fname, "ABSCO file has 3 dimensions")
        call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", tmp_absco_3D, dset_dims)
        ! Copy to gas structure
-       allocate(gas%cross_section(dset_dims(1), dset_dims(2), dset_dims(3), 1))
+       if (allocated(gas%cross_section)) deallocate(gas%cross_section)
+       allocate(gas%cross_section(dset_dims(1), 1, dset_dims(2), dset_dims(3)))
        gas%cross_section(:,1,:,:) = tmp_absco_3D(:,:,:)
        gas%has_h2o = .false.
     else

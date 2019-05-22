@@ -10,7 +10,7 @@ module math_utils_mod
 
   ! User modules
   use logger_mod, only: logger => master_logger
-  
+
   ! System modules
   use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
   use :: iso_fortran_env
@@ -30,7 +30,7 @@ module math_utils_mod
   double precision, parameter :: PLANCK_CONST = 6.62607015d-34
   double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
   double precision, parameter :: SOLAR_RADIUS = 695.660d6 ! [m]
-  
+
 contains
 
   !> @brief Calculates reduced CHI2 statistic for two spectra
@@ -47,7 +47,7 @@ contains
 
     chi2 = sum(((array1 - array2) * (array1 - array2)) / (std_dev * std_dev)) / dble(dof)
   end function calculate_chi2
-  
+
 
   !> @brief Simple function to calculate the mean for double-precision arrays
   !> @param array Array you want the mean of
@@ -74,11 +74,13 @@ contains
 
 
   !> @brief Calculates the O'Dell-ian pressure weighting function
-  !> see O'Dell et al. (2012) for details (ACOS paper)
+  !
   !> @param p_levels Pressure level array
   !> @param psurf Surface pressure
   !> @param vrms Volume mixing ratio array for this gas
   !> @param pwgts Pressure weights
+  !
+  !> @detail For details of the calculation go and read O'Dell et al. (2012 ACOS paper)
   subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
     implicit none
     double precision, intent(in) :: p_levels(:)
@@ -140,8 +142,10 @@ contains
 
 
   !> @brief Piecewise linear interpolation, based on the code
-  !> by John Burkardt, but slightly modified for speed.
+  !> by John Burkardt - should be roughly the same speed.
+  !
   ! NOTE: THIS ASSUMES AN ORDERED ARRAY!
+  !
   !> @param nd Number of data points given
   !> @param xd x-coordinates of data
   !> @param yd y-coordinates of data
@@ -153,8 +157,8 @@ contains
     implicit none
 
     integer, intent(in) :: nd, ni
-    double precision, intent(in) :: xd(:), yd(:), xi(:)
-    double precision, intent(inout) :: yi(:)
+    double precision, intent(in) :: xd(nd), yd(nd), xi(ni)
+    double precision, intent(inout) :: yi(ni)
 
     double precision :: fac
     integer :: i, d, last_d
@@ -176,30 +180,32 @@ contains
 
                 fac = (xi(i) - xd(d)) / (xd(d+1) - xd(d))
                 yi(i) = (1.0d0 - fac) * yd(d) + fac * yd(d+1)
+                exit
 
              end if
           end do
        end if
     end do
-    
+
   end subroutine pwl_value_1d_v2
+
 
   !> @brief See Numpy's searchsorted function, using binary search
   !> @param x Array to be searched for
   !> @param val Value, whose position in the array needs determining
   !> @param left Left insert? (or right if set to .false.)
-  !> @param idx The index at which val is inserted in x
+  !> @param idx The index at which val would be inserted in x
   pure function searchsorted_dp(x, val, left) result(idx)
-    implicit none
-    double precision, intent(in) :: x(:), val
-    logical, intent(in), optional :: left
-    integer :: idx
+  implicit none
+  double precision, intent(in) :: x(:), val
+  logical, intent(in), optional :: left
+  integer :: idx
 
-    logical :: from_left
-    integer :: L, R, m
+  logical :: from_left
+  integer :: L, R, m
 
-    ! Insert to the left of value is the standard
-    if (.not. present(left)) then
+  ! Insert to the left of value is the standard
+  if (.not. present(left)) then
        from_left = .true.
     else
        from_left = left
@@ -248,7 +254,7 @@ contains
     ! WHERE THE ILS CHANGES WITH EVERY PIXEL AND EVERY FOOTPRINT. I ALSO DOUBT
     ! IT WOULD MAKE THE CODE MUCH FASTER. I WILL LEAVE THIS IN FOR COMPLETENESS,
     ! HOWEVER NONE OF THE CODE CURRENTLY USES THIS FEATURE (APRIL 2019)
-    
+
     implicit none
     double precision, intent(in) :: input(:), kernel(:), wl_input(:), wl_output(:)
     double precision, intent(inout) :: output(:)
@@ -443,7 +449,7 @@ contains
     ! Since the doppler shift changes the wavelength grid, one can end up with misaligned
     ! spectra if the ILS convolution (however it is done) does work accordingly and shifts
     ! the line cores around..
-    
+
     ! High-resolution bits
     double precision, intent(in) :: wl_input(:), input(:)
     ! "Convolution" wavelengths and kernels
@@ -576,7 +582,7 @@ contains
   !> @param x Array you want the perc'th percentile of
   !> @param perc Percentile to be calculated
   function percentile(x, perc)
-    
+
     implicit none
     double precision :: percentile
 

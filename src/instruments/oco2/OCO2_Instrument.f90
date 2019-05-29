@@ -383,28 +383,40 @@ contains
   end subroutine read_time_strings
 
 
-  subroutine convert_time_string_to_date(time_string, date)
+  subroutine convert_time_string_to_date(time_string, date, success)
 
     ! Turn a OCO-2 time string into a datetype object
 
     implicit none
     character(len=25), intent(in) :: time_string
     type(datetime), intent(out) :: date
+    logical, intent(inout) :: success
+    integer :: iostat
     integer :: year, month, day, hour, minute, second, millisecond
 
+    success = .false.
     ! Grab the various fields/positions from the string and stick them into
     ! the corresponding date/time variables
-    read(time_string(1:4), *) year
-    read(time_string(6:7), *) month
-    read(time_string(9:10), *) day
-    read(time_string(12:13), *) hour
-    read(time_string(15:16), *) minute
-    read(time_string(18:19), *) second
-    read(time_string(21:23), *) millisecond
+    read(time_string(1:4), *, iostat=iostat) year
+    if (iostat /= 0) return
+    read(time_string(6:7), *, iostat=iostat) month
+    if (iostat /= 0) return
+    read(time_string(9:10), *, iostat=iostat) day
+    if (iostat /= 0) return
+    read(time_string(12:13), *, iostat=iostat) hour
+    if (iostat /= 0) return
+    read(time_string(15:16), *, iostat=iostat) minute
+    if (iostat /= 0) return
+    read(time_string(18:19), *, iostat=iostat) second
+    if (iostat /= 0) return
+    read(time_string(21:23), *, iostat=iostat) millisecond
+    if (iostat /= 0) return
 
     ! Create datetime object
     date = datetime(year, month, day, hour, minute, &
          second, millisecond)
+
+    success = .true.
 
   end subroutine convert_time_string_to_date
 

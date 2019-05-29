@@ -92,6 +92,12 @@ module control_mod
      double precision, allocatable :: dispersion_pert(:)
      !> Dispersion prior covariance value
      double precision, allocatable :: dispersion_cov(:)
+     !> Number of ILS coefficients to be retrieved
+     integer :: ils_stretch_order
+     !> ILS perturbation value for Jacobians
+     double precision, allocatable :: ils_stretch_pert(:)
+     !> ILS prior covariance value
+     double precision, allocatable :: ils_stretch_cov(:)
      !> Names of gases which are present in the window
      type(string), allocatable :: gases(:)
      !> This gas_index variable holds the information about which gas-section (CS_gas)
@@ -617,6 +623,27 @@ contains
 
           call fini_extract(fini, tmp_str, 'albedo_order', .false., fini_int)
           MCS%window(window_nr)%albedo_order = fini_int
+
+          call fini_extract(fini, tmp_str, 'ils_stretch_order', .false., fini_int)
+          MCS%window(window_nr)%ils_stretch_order = fini_int
+
+          call fini_extract(fini, tmp_str, 'ils_stretch_perturbation', .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%ils_stretch_pert(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%ils_stretch_pert(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
+
+          call fini_extract(fini, tmp_str, 'ils_stretch_covariance', .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%ils_stretch_cov(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%ils_stretch_cov(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
 
           call fini_extract(fini, tmp_str, 'dispersion_order', .false., fini_int)
           MCS%window(window_nr)%dispersion_order = fini_int

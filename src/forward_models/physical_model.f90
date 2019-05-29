@@ -942,6 +942,14 @@ contains
     logical :: success_inv_mat
     ! Was the convolution operation successful?
     logical :: ILS_success
+    ! Was the time string conversion successful?
+    logical :: success_time_convert
+
+    ! ILS stuff
+    double precision, allocatable :: this_ILS_stretch(:), &
+         this_ILS_stretch_pert(:)
+    double precision, allocatable :: this_ILS_delta_lambda(:,:), &
+         this_ILS_delta_lambda_pert(:,:)
 
     ! The SV from last iteration, as well as last successful (non-divergent) iteration
     ! shape (N_sv)
@@ -999,7 +1007,12 @@ contains
        call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
             MCS%general%N_spec(band), radiance_l1b)
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
-       call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
+       call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), &
+            date, success_time_convert)
+       if (.not. success_time_convert) then
+          call logger%error(fname, "Time string conversion error!")
+          return
+       end if
 
     end select
 
@@ -1164,6 +1177,16 @@ contains
        ! Start with the L1b dispersion values as priors
        do i=1, SV%num_dispersion
           SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i, i_fp, band)
+       end do
+    end if
+
+    ! ILS stretch
+    if (SV%num_ils_stretch > 0) then
+       ! Set the first coefficient to 1.0d0, i.e. no stretch
+       SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
+       do i=2, SV%num_ils_stretch
+          ! And set all other coefficients to zero at first
+          SV%svap(SV%idx_ils_stretch(i)) = 0.0d0
        end do
     end if
 
@@ -1758,6 +1781,32 @@ contains
           Se_inv(i,i) = 1.0d0 / (noise_work(i) ** 2)
        end do
 
+
+       ! Allocate ILS stretch factor (pixel dependent)
+       allocate(this_ILS_stretch(N_spec))
+       this_ILS_stretch(:) = 0.0d0
+       ! Build the ILS stretch polynomial
+       if (SV%num_ils_stretch > 0) then
+          do i=1, N_spec
+             do j=1, SV%num_ils_stretch
+                this_ILS_stretch(i) = this_ILS_stretch(i) &
+                     + (dble(i) ** (j-1) * SV%svsv(SV%idx_ils_stretch(j)))
+             end do
+          end do
+       end if
+
+       ! Allocate the CURRENTLY USED ILS wavelength array
+       allocate(this_ILS_delta_lambda(size(ils_delta_lambda, 1), N_spec))
+       this_ILS_delta_lambda(:,:) = ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band)
+
+       ! If we retrieve an ILS stretch, then apply the stretch factor to the ILS
+       ! delta lambda data here.
+       if (SV%num_ils_stretch > 0) then
+          do i=1, N_spec
+             this_ILS_delta_lambda(:,i) = this_ILS_delta_lambda(:,i) * this_ILS_stretch(i)
+          end do
+       end if
+
        ! Convolution with the instrument line shape function(s)
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
@@ -1767,7 +1816,7 @@ contains
 
           ! Convolution of the TOA radiances
           call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-               ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+               this_ILS_delta_lambda(:,:), &
                ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
                ILS_success)
@@ -1817,7 +1866,7 @@ contains
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
              call oco_type_convolution(hires_grid, K_hi(:,i), &
-                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  this_ILS_delta_lambda(:,:), &
                   ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
                   ILS_success)
@@ -1880,7 +1929,7 @@ contains
 
                 ! Convolve the perturbed TOA radiance
                 call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-                     ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                     this_ILS_delta_lambda(:,:), &
                      ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                      this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
                      ILS_success)
@@ -1897,6 +1946,64 @@ contains
 
           end do
        end if
+
+
+       ! ILS Jacobians are produced via finite differencing
+       if (SV%num_ILS_stretch > 0) then
+
+          allocate(this_ILS_delta_lambda_pert, mold=this_ILS_delta_lambda)
+          allocate(this_ILS_stretch_pert, mold=this_ILS_stretch)
+
+          ! Loop over all required ILS stretch orders
+          do j=1, SV%num_ils_stretch
+
+             this_ILS_stretch_pert(:) = 0.0d0
+             this_ILS_delta_lambda_pert(:,:) = ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band)
+
+             do i=1, N_spec
+                do l=1, SV%num_ils_stretch
+                   if (l == j) then
+                      this_ILS_stretch_pert(i) = this_ILS_stretch_pert(i) &
+                           + (dble(i) ** (l-1) * (MCS%window(i_win)%ils_stretch_pert(l) + SV%svsv(SV%idx_ils_stretch(l))))
+                   else
+                      this_ILS_stretch_pert(i) = this_ILS_stretch_pert(i) &
+                           + (dble(i) ** (l-1) * SV%svsv(SV%idx_ils_stretch(l)))
+                   end if
+                end do
+
+                write(*,*) i, this_ILS_stretch(i), this_ILS_stretch_pert(i)
+             end do
+
+             do i=1, N_spec
+                this_ILS_delta_lambda_pert(:,i) =  this_ILS_delta_lambda_pert(:,i) * this_ILS_stretch_pert(i)
+             end do
+
+             call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
+                  this_ILS_delta_lambda_pert(:,:), &
+                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
+                  ILS_success)
+
+             do i=1, N_spec
+                write(*,*) i, radiance_calc_work(i), radiance_tmp_work(i)
+             end do
+
+
+             if (.not. ILS_success) then
+                call logger%error(fname, "ILS convolution error.")
+                return
+             end if
+
+             ! Compute and store the Jacobian into the right place in the matrix
+             K(:, SV%idx_ils_stretch(j)) = (radiance_tmp_work - radiance_calc_work) &
+                  / MCS%window(i_win)%ils_stretch_pert(j)
+
+          end do
+
+          deallocate(this_ILS_stretch_pert)
+          deallocate(this_ILS_delta_lambda_pert)
+       end if
+
 
        ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
 
@@ -2179,44 +2286,45 @@ contains
 
        end if
 
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)!, solar_low(i)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$
-!!$       write(*,*) num_active_levels
-!!$       do i=1, num_active_levels
-!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
-!!$       end do
-!!$
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!!$       write(*,*) "LM-Gamma: ", lm_gamma
-!!$       write(*,*) "Ratio R: ", chi2_ratio
+       open(file="jacobian.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) (K(i, j), j=1, N_sv)
+       end do
+       close(funit)
+
+
+       open(file="l1b_spec.dat", newunit=funit)
+       do i=1, N_spec
+          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+               noise_work(i)!, solar_low(i)
+       end do
+       close(funit)
+
+
+       write(*,*) num_active_levels
+       do i=1, num_active_levels
+          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
+       end do
+
+       write(*,*) "old, current and delta state vector, and errors"
+
+       write(*,*) "Iteration: ", iteration
+       do i=1, N_sv
+          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
+               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
+       end do
+       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
+       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+       write(*,*) "LM-Gamma: ", lm_gamma
+       write(*,*) "Ratio R: ", chi2_ratio
 
 
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.
        deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-            noise_work, Se_inv, K, gain_matrix, solar_irrad)
+            noise_work, Se_inv, K, gain_matrix, solar_irrad, &
+            this_ILS_stretch, this_ILS_delta_lambda)
 
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
@@ -2229,7 +2337,8 @@ contains
        if (allocated(ndry)) deallocate(ndry)
        if (allocated(ndry_tmp)) deallocate(ndry_tmp)
 
-       !read(*,*)
+
+       read(*,*)
     end do
     !read(*,*)
 
@@ -2299,7 +2408,17 @@ contains
     if (SV%num_dispersion > 0) then
        do i=1, SV%num_dispersion
           Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = &
-               (10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
+               MCS%window(i_win)%dispersion_cov(i)**2
+               !(10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
+       end do
+    end if
+
+    ! Make the ILS stretch prior covariance about ten times the perturbation value
+    if (SV%num_ils_stretch > 0) then
+       do i=1, SV%num_ils_stretch
+          Sa(SV%idx_ils_stretch(i), SV%idx_ils_stretch(i)) = &
+               MCS%window(i_win)%ils_stretch_cov(i)**2
+               !(10.0d0 * MCS%window(i_win)%ils_stretch_pert(i))**2
        end do
     end if
 
@@ -2543,6 +2662,14 @@ contains
        do j=1, SV%num_dispersion
           if (SV%idx_dispersion(j) == i) then
              write(tmp_str, '(A,G0.1)') "dispersion_coef_", j
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! ILS parameter names
+       do j=1, SV%num_ils_stretch
+          if (SV%idx_ils_stretch(j) == i) then
+             write(tmp_str, '(A,G0.1)') "ILS_stretch_coef_", j
              results%sv_names(i) = trim(tmp_str)
           end if
        end do

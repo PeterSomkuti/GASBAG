@@ -127,6 +127,9 @@ contains
        valid_options(this_idx,26) = "smart_scale_first_guess_wl_in"
        valid_options(this_idx,27) = "smart_scale_first_guess_wl_out"
        valid_options(this_idx,28) = "smart_scale_first_guess_delta_tau"
+       valid_options(this_idx,29) = "ils_stretch_order"
+       valid_options(this_idx,30) = "ils_stretch_perturbation"
+       valid_options(this_idx,31) = "ils_stretch_covariance"
     end do
 
     ! Section for gases

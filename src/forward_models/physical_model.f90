@@ -107,7 +107,7 @@ module physical_model_mod
   !> Sounding IDs (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
   integer(8), allocatable :: sounding_ids(:,:)
   !> Sounding time strings
-  character(len=25), allocatable :: sounding_time_strings(:,:)
+  character(len=25), allocatable :: frame_time_strings(:)
   !> Solar zenith angles
   double precision, allocatable :: SZA(:,:)
   !> Solar azimuth angles
@@ -234,13 +234,16 @@ contains
     integer :: fp_start, fp_skip
 
     ! Open up the MET file
-    call h5fopen_f(MCS%input%met_filename%chars(), &
-         H5F_ACC_RDONLY_F, MCS%input%met_file_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening MET file: " &
-         // trim(MCS%input%met_filename%chars()))
+    if (MCS%algorithm%observation_mode == "downlooking") then
+       call h5fopen_f(MCS%input%met_filename%chars(), &
+            H5F_ACC_RDONLY_F, MCS%input%met_file_id, hdferr)
+       call check_hdf_error(hdferr, fname, "Error opening MET file: " &
+            // trim(MCS%input%met_filename%chars()))
+       ! Store HDF file handler for more convenient access
+       met_file_id = MCS%input%met_file_id
+    end if
 
     ! Store HDF file handler for more convenient access
-    met_file_id = MCS%input%met_file_id
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
     this_thread = 0
@@ -256,57 +259,67 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! Get the necesary MET data profiles. OCO-like MET data can have either
-       ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
-       ! which one exists (priority given to /Meteorology) and take it from there
+       ! MET data read-in is not required for space-solar observation modes
+       if (MCS%algorithm%observation_mode == "downlooking") then
+          ! Get the necesary MET data profiles. OCO-like MET data can have either
+          ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
+          ! which one exists (priority given to /Meteorology) and take it from there
 
-       MET_exists = .false.
-       ECMWF_exists = .false.
+          MET_exists = .false.
+          ECMWF_exists = .false.
 
-       call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
-       if (.not. MET_exists) then
-          call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
+          call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
+          if (.not. MET_exists) then
+             call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
+          end if
+
+          ! Let the user know which one we picked.
+          if (MET_exists) then
+             call logger%info(fname, "Taking MET data from /Meteorology")
+          else if (ECMWF_exists) then
+             call logger%info(fname, "Taking MET data from /ECMWF")
+          else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
+             ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
+             ! MET file. Can't really go on without MET data.
+             call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
+             stop 1
+          end if
+
+          ! Read the complete MET arrays from the corresponding HDF5 fields
+          if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
+          if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
+          call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
+          call logger%trivia(fname, "Finished reading in pressure levels.")
+
+          if (MET_exists) dset_name = "/Meteorology/temperature_profile_met"
+          if (ECMWF_exists) dset_name = "/ECMWF/temperature_profile_ecmwf"
+          call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
+          call logger%trivia(fname, "Finished reading in temperature profiles.")
+
+          if (MET_exists) dset_name = "/Meteorology/specific_humidity_profile_met"
+          if (ECMWF_exists) dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
+          call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
+          call logger%trivia(fname, "Finished reading in specific humidity profiles.")
+
+          if (MET_exists) dset_name = "/Meteorology/surface_pressure_met"
+          if (ECMWF_exists) dset_name = "/ECMWF/surface_pressure_ecmwf"
+          call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
+          call logger%trivia(fname, "Finished reading in surface pressure.")
+
        end if
-
-       ! Let the user know which one we picked.
-       if (MET_exists) then
-          call logger%info(fname, "Taking MET data from /Meteorology")
-       else if (ECMWF_exists) then
-          call logger%info(fname, "Taking MET data from /ECMWF")
-       else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
-          ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
-          ! MET file. Can't really go on without MET data.
-          call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
-          stop 1
-       end if
-
-       ! Read the complete MET arrays from the corresponding HDF5 fields
-       if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
-       call logger%trivia(fname, "Finished reading in pressure levels.")
-
-       if (MET_exists) dset_name = "/Meteorology/temperature_profile_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/temperature_profile_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
-       call logger%trivia(fname, "Finished reading in temperature profiles.")
-
-       if (MET_exists) dset_name = "/Meteorology/specific_humidity_profile_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
-       call logger%trivia(fname, "Finished reading in specific humidity profiles.")
-
-       if (MET_exists) dset_name = "/Meteorology/surface_pressure_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/surface_pressure_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
-       call logger%trivia(fname, "Finished reading in surface pressure.")
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-       ! Read in the sounding id's
-       call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
+
+       if (MCS%algorithm%observation_mode == "downlooking") then
+          ! These here also only make sense in a downlooking position.
+          ! Read in the sounding id's
+          call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
+       end if
+
        ! Read the time strings
-       call my_instrument%read_time_strings(l1b_file_id, sounding_time_strings)
+       call my_instrument%read_time_strings(l1b_file_id, frame_time_strings)
+
        ! Read in the instrument ILS data
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
@@ -318,7 +331,8 @@ contains
        !end if
 
        ! Read in bad sample list (if it exists)
-       call h5lexists_f(met_file_id, "/InstrumentHeader/bad_sample_list", bad_sample_exists, hdferr)
+       call h5lexists_f(l1b_file_id, "/InstrumentHeader/bad_sample_list", &
+            bad_sample_exists, hdferr)
        if (bad_sample_exists) then
           call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
        end if
@@ -405,6 +419,7 @@ contains
        ! but why not make use of per-band data (like for OCO-2).
        select type(my_instrument)
        type is (oco2_instrument)
+
           ! Read in the measurement geometries - per band
           call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
           ! Read in the measurement location
@@ -412,8 +427,6 @@ contains
                altitude, relative_velocity, relative_solar_velocity)
 
        end select
-
-
 
        ! Find the smallest and largest delta-lambda values for all ILSs
        ! in this given band to calculate hires_pad.
@@ -556,8 +569,8 @@ contains
        ! enough for my humble purposes.
        ! As you can see, it does not require much, whereas MPI would be more effort.
 
-!$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
-!$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
+       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, num_frames, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
@@ -595,7 +608,7 @@ contains
 
           end do
        end do
-!$OMP END PARALLEL DO
+       !$OMP END PARALLEL DO
 
        ! Create an HDF group for all windows separately
        group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
@@ -1007,7 +1020,7 @@ contains
        call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
             MCS%general%N_spec(band), radiance_l1b)
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
-       call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), &
+       call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
             date, success_time_convert)
        if (.not. success_time_convert) then
           call logger%error(fname, "Time string conversion error!")
@@ -1035,6 +1048,7 @@ contains
        scale_first_guess(1) = 1.0d0
     end if
 
+
     ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
     epoch(1) = date%getYear()
@@ -1055,10 +1069,11 @@ contains
          " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
     call logger%debug(fname, trim(tmp_str))
 
-    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2)") &
+    write(tmp_str, "(A, F6.2, A, F6.2, A, E8.3)") &
          "Longitude: ", lon(i_fp, i_fr), &
          " Latitude: ", lat(i_fp, i_fr), &
          " Altitude: ", altitude(i_fp, i_fr)
+    call logger%debug(fname, trim(tmp_str))
 
     ! Dispersion array that contains the wavelenghts per pixel
     allocate(this_dispersion(size(radiance_l1b)))
@@ -1073,11 +1088,21 @@ contains
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
 
-    ! THIS IS "BORROWED" FROM THE MS3 CODE
-    call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
-         epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
-    solar_doppler = solar_rv / SPEED_OF_LIGHT
-    instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+    ! The "instrument doppler shift" is caused by the relative velocity
+    ! between the point on the surface and the spacecraft. Obviously, this
+    ! contribution is zero for space-solar geometries.
+    if (MCS%algorithm%observation_mode == "downlooking") then
+       instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+
+       ! THIS IS "BORROWED" FROM THE MS3 CODE
+       call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
+            epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
+       solar_doppler = solar_rv / SPEED_OF_LIGHT
+
+    else if (MCS%algorithm%observation_mode == "space_solar") then
+       instrument_doppler = 0.0d0
+       solar_doppler = 0.0d0
+    end if
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
@@ -1293,14 +1318,6 @@ contains
                    ! atmosphere text file.
                    this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
 
-                   ! DELETE ME!
-                   ! This modifies the first-guess profile magnitude of H2O, otherwise
-                   ! we are just using the "true" value in the case of simulations.
-                   !call random_number(random_dp)
-                   !random_dp = 0.25 + random_dp * (4.0d0 - 0.25d0)
-
-                   !this_atm%gas_vmr(:,i) = this_atm%gas_vmr(:,i) * random_dp
-
                 end if
              end do
 
@@ -1380,7 +1397,7 @@ contains
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
 
-       if (num_gases > 0) then
+       if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
@@ -1801,8 +1818,10 @@ contains
 
        ! If we retrieve an ILS stretch, then apply the stretch factor to the ILS
        ! delta lambda data here.
+
        if (SV%num_ils_stretch > 0) then
           do i=1, N_spec
+             write(*,*) i, this_ILS_stretch(i)
              this_ILS_delta_lambda(:,i) = this_ILS_delta_lambda(:,i) * this_ILS_stretch(i)
           end do
        end if
@@ -1970,8 +1989,6 @@ contains
                            + (dble(i) ** (l-1) * SV%svsv(SV%idx_ils_stretch(l)))
                    end if
                 end do
-
-                write(*,*) i, this_ILS_stretch(i), this_ILS_stretch_pert(i)
              end do
 
              do i=1, N_spec
@@ -1983,11 +2000,6 @@ contains
                   ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
                   ILS_success)
-
-             do i=1, N_spec
-                write(*,*) i, radiance_calc_work(i), radiance_tmp_work(i)
-             end do
-
 
              if (.not. ILS_success) then
                 call logger%error(fname, "ILS convolution error.")
@@ -2072,9 +2084,12 @@ contains
           end do
        end do
 
-       if (SV%num_albedo > 0) then
-          if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
-             SV%svsv(SV%idx_albedo(1)) = 1.0d-4
+       ! We limit the retrieved albedo, but only in downlooking mode
+       if (MCS%algorithm%observation_mode == "downlooking") then
+          if (SV%num_albedo > 0) then
+             if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
+                SV%svsv(SV%idx_albedo(1)) = 1.0d-4
+             end if
           end if
        end if
 

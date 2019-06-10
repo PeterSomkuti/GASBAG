@@ -70,6 +70,7 @@ contains
     valid_options(2,1) = "sif_algorithm"
     valid_options(2,2) = "n_basisfunctions"
     valid_options(2,3) = "solar_dopper_shift"
+    valid_options(2,4) = "observation_mode"
 
     ! Related to the instrument in question
     valid_sections(3) = "instrument"

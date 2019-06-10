@@ -64,6 +64,8 @@ module control_mod
      type(string) :: solar_file
      !> Which type of solar model?
      type(string) :: solar_type
+     !> What is the observation mode? (downlooking, space-solar)
+     type(string) :: observation_mode
   end type CS_algorithm
 
   type, private :: CS_window
@@ -364,6 +366,17 @@ contains
        MCS%algorithm%N_basisfunctions = int(fini_val)
     end if
 
+    call fini_extract(fini, tmp_str, 'observation_mode', .false., fini_char)
+    MCS%algorithm%observation_mode = trim(fini_char)
+    ! Replace empty string (i.e. not supplied) by "downlooking" mode
+    if (MCS%algorithm%observation_mode == "") then
+       MCS%algorithm%observation_mode = "downlooking"
+       call logger%trivia(fname, "No observation mode supplied - setting to: downlooking")
+    else
+       call logger%trivia(fname, "Observation mode - setting to: " &
+            // MCS%algorithm%observation_mode%chars())
+    end if
+
     ! Algorithm section over------------------------------------------------
 
     ! Inputs section -------------------------------------------------------
@@ -386,8 +399,9 @@ contains
     end if
 
     ! Do the same for the MET file
-    ! If doing physical retrieval, we MUST have the MET file
-    if (MCS%algorithm%using_physical .eqv. .true.) then
+    ! If doing physical retrieval and downlooking mode, we MUST have the MET file
+    if ((MCS%algorithm%using_physical .eqv. .true.) &
+         .and. (MCS%algorithm%observation_mode == "downlooking")) then
        tmp_str = "input"
        if (.not. fini%has_option(section_name=tmp_str, &
             option_name="met_file")) then
@@ -527,7 +541,6 @@ contains
           ! The rest is potentially optional. Whether a certain option is
           ! required for a given retrieval setting, will be checked later
           ! on in the code, usually when it's needed the first time
-
 
           ! Arrays that are used for our super-duper smart first guess for the
           ! scalar gas retrieval

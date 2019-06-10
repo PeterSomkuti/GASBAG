@@ -144,7 +144,7 @@ contains
   !> @brief Piecewise linear interpolation, based on the code
   !> by John Burkardt - should be roughly the same speed.
   !
-  ! NOTE: THIS ASSUMES AN ORDERED ARRAY!
+  ! NOTE: THIS ASSUMES AN ORDERED ARRAY! THE ORDERING IS NOT CHECKED!
   !
   !> @param nd Number of data points given
   !> @param xd x-coordinates of data

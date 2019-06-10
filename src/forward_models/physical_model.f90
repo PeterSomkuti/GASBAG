@@ -27,6 +27,7 @@ module physical_model_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
   use smart_first_guess_mod
+  use jacobians_mod
 
   ! Third-party modules
   use logger_mod, only: logger => master_logger
@@ -1652,31 +1653,11 @@ contains
        ! wavelength: dsolar_dlambda
        if ((SV%num_solar_shift == 1) .or. (SV%num_solar_stretch == 1)) then
 
-          ! Sample doppler-shifted and scaled solar spectrum at hires grid
-          allocate(solar_tmp(N_hires))
-          call pwl_value_1d( &
-               N_hires, &
-               this_solar(:,1), &
-               solar_spectrum_regular(:, 2), &
-               N_hires, &
-               hires_grid, solar_tmp(:))
+          call calculate_solar_jacobian(this_solar(:,1), this_solar(:,2), &
+               solar_irrad, hires_grid, solar_tmp, dsolar_dlambda)
 
           this_solar(:,2) = solar_tmp(:) * solar_irrad(:)
           deallocate(solar_tmp)
-
-          ! If needed, calculate dSolar / dlambda using central differences
-          ! apart from the first and last point obviously. This is required for
-          ! the solar parameter Jacobians.
-
-          dsolar_dlambda(1) = (this_solar(2,2) - this_solar(1,2)) / &
-               (this_solar(2,1) - this_solar(1,1))
-          dsolar_dlambda(N_hires) = (this_solar(N_hires-1,2) - this_solar(N_hires,2)) / &
-               (this_solar(N_hires-1,1) - this_solar(N_hires,1))
-
-          do i=2, N_hires-1
-             dsolar_dlambda(i) = (this_solar(i+1,2) - this_solar(i-1,2)) / &
-                  (this_solar(i+1,1) - this_solar(i-1,1))
-          end do
 
        end if
 
@@ -1870,13 +1851,6 @@ contains
              if (i == SV%idx_sif(1)) skip_jacobian = .true.
              if (i == SV%idx_zlo(1)) skip_jacobian = .true.
 
-             ! Albedo jacobians can be calculated later as well
-!!$             do j=1, SV%num_albedo
-!!$                if (i == SV%idx_albedo(j)) then
-!!$                   skip_jacobian = .true.
-!!$                end if
-!!$             end do
-
              ! If we have any reason to skip this Jacobian index for convolution,
              ! do it now.
              if (skip_jacobian) cycle
@@ -1898,70 +1872,16 @@ contains
           end do
        end select
 
-       ! Calculate albedo Jacobians
-       ! We could just convolve the high-res albedo jacobian, however the convolution
-       ! is probably a good chunk slower than this little section here.
-!!$       if (SV%num_albedo > 0) then
-!!$
-!!$          allocate(albedo_low(N_spec))
-!!$
-!!$          ! In order to calculate the low-resolution albedo Jacobian, we also
-!!$          ! need the low-resolution albedo, which we calculate here.
-!!$          albedo_low(:) = 0.0d0
-!!$          do i=1, SV%num_albedo
-!!$             albedo_low(:) = albedo_low(:) + SV%svsv(SV%idx_albedo(i)) * &
-!!$                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
-!!$                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
-!!$          end do
-!!$
-!!$          ! And calculate the derivative ..
-!!$          do i=1, SV%num_albedo
-!!$             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance - this_zlo_radiance) / albedo_low(:) * &
-!!$                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
-!!$                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
-!!$          end do
-!!$
-!!$          deallocate(albedo_low)
-!!$       end if
-
-       ! Disperion Jacobians are produced via finite differencing
+       ! Calculate disperion Jacobians
        if (SV%num_dispersion > 0) then
           do i=1, SV%num_dispersion
 
-             ! Perturb dispersion coefficient by user-supplied value
-             this_dispersion_coefs_pert(:) = this_dispersion_coefs(:)
-             this_dispersion_coefs_pert(i) = this_dispersion_coefs_pert(i) &
-                  + MCS%window(i_win)%dispersion_pert(i)
-
-             ! And finally do the convolution and create the Jacobian by
-             ! differencing / dividing.
-             select type(my_instrument)
-             type is (oco2_instrument)
-
-                ! Calculate new dispersion grid using perturbed coefficients
-                call my_instrument%calculate_dispersion(this_dispersion_coefs_pert, &
-                     this_dispersion_tmp(:), band, i_fp)
-
-                ! Apply instrument Doppler shift
-                this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
-
-                ! Convolve the perturbed TOA radiance
-                call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-                     this_ILS_delta_lambda(:,:), &
-                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                     this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
-                     ILS_success)
-
-                if (.not. ILS_success) then
-                   call logger%error(fname, "ILS convolution error.")
-                   return
-                end if
-
-                ! Compute and store the Jacobian into the right place in the matrix
-                K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
-                     / MCS%window(i_win)%dispersion_pert(i)
-             end select
-
+             call calculate_dispersion_jacobian(my_instrument, i, &
+                  this_dispersion_coefs, band, i_win, i_fp, N_spec, &
+                  this_ILS_delta_lambda, ILS_relative_response, &
+                  l1b_wl_idx_min, l1b_wl_idx_max, &
+                  instrument_doppler, hires_grid, radiance_calc_work, &
+                  radiance_calc_work_hi, K(:, SV%idx_dispersion(i)))
           end do
        end if
 
@@ -1969,50 +1889,19 @@ contains
        ! ILS Jacobians are produced via finite differencing
        if (SV%num_ILS_stretch > 0) then
 
-          allocate(this_ILS_delta_lambda_pert, mold=this_ILS_delta_lambda)
-          allocate(this_ILS_stretch_pert, mold=this_ILS_stretch)
-
           ! Loop over all required ILS stretch orders
           do j=1, SV%num_ils_stretch
 
-             this_ILS_stretch_pert(:) = 0.0d0
-             this_ILS_delta_lambda_pert(:,:) = ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band)
-
-             do i=1, N_spec
-                do l=1, SV%num_ils_stretch
-                   if (l == j) then
-                      this_ILS_stretch_pert(i) = this_ILS_stretch_pert(i) &
-                           + (dble(i) ** (l-1) * (MCS%window(i_win)%ils_stretch_pert(l) + SV%svsv(SV%idx_ils_stretch(l))))
-                   else
-                      this_ILS_stretch_pert(i) = this_ILS_stretch_pert(i) &
-                           + (dble(i) ** (l-1) * SV%svsv(SV%idx_ils_stretch(l)))
-                   end if
-                end do
-             end do
-
-             do i=1, N_spec
-                this_ILS_delta_lambda_pert(:,i) =  this_ILS_delta_lambda_pert(:,i) * this_ILS_stretch_pert(i)
-             end do
-
-             call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-                  this_ILS_delta_lambda_pert(:,:), &
-                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                  this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
-                  ILS_success)
-
-             if (.not. ILS_success) then
-                call logger%error(fname, "ILS convolution error.")
-                return
-             end if
-
-             ! Compute and store the Jacobian into the right place in the matrix
-             K(:, SV%idx_ils_stretch(j)) = (radiance_tmp_work - radiance_calc_work) &
-                  / MCS%window(i_win)%ils_stretch_pert(j)
+             call calculate_ILS_stretch_jacobian(my_instrument, j, SV, &
+                  band, i_win, i_fp, N_spec, &
+                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  ILS_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  this_ILS_stretch, this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                  l1b_wl_idx_min, l1b_wl_idx_max, &
+                  hires_grid, radiance_calc_work, &
+                  radiance_calc_work_hi, K(:, SV%idx_ils_stretch(j)))
 
           end do
-
-          deallocate(this_ILS_stretch_pert)
-          deallocate(this_ILS_delta_lambda_pert)
        end if
 
 
@@ -2035,9 +1924,12 @@ contains
              return
           end if
 
-          !          tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
-          !               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
+          !
+          ! tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
+          !          radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
 
+          ! This here updates the AP essentially, so the next step launches from the
+          ! last iteration's result.
           tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
                radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - old_sv))
 
@@ -2047,21 +1939,21 @@ contains
        else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
 
           ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
-          ! tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
+          tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
 
           ! K^T Se^-1 K
-          !KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
+          KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
 
-          !tmp_m1 = Sa_inv + KtSeK
-          !call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
-          !if (.not. success_inv_mat) then
-          !   call logger%error(fname, "Failed to invert K^T Se K")
-          !   return
-          !end if
+          tmp_m1 = Sa_inv + KtSeK
+          call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
+          if (.not. success_inv_mat) then
+             call logger%error(fname, "Failed to invert K^T Se K")
+             return
+          end if
 
-          !tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-          !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
-          !SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+          tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
+          tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+          SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
        else
           call logger%error(fname, "Inverse method: " // trim(tmp_str) // ", not known!")
           stop 1
@@ -2069,7 +1961,8 @@ contains
 
 
        ! In the case of retrieving gases - we have to adjust the retrieved state vector
-       ! if the retrieval wants to push it below 0.
+       ! if the retrieval wants to push it below 0. Also, we do not allow the gas scale
+       ! factors to drop below 50% of the last iteration's value.
        do i=1, SV%num_gas
           do j=1, size(sv%idx_gas(i,:))
              if (SV%idx_gas(i,j) /= -1) then

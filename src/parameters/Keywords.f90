@@ -36,6 +36,8 @@ contains
   !> checks all entries in the config file against this list, and exits
   !> if there is a section or option that is not known. This should prevent
   !> (some) unwanted errors in the config file.
+  !> Note that the order of the keywords is NOT meaningful, and mostly a
+  !> record of when a function was implemented.
   subroutine initialize_valid_sections()
 
     implicit none
@@ -131,6 +133,7 @@ contains
        valid_options(this_idx,29) = "ils_stretch_order"
        valid_options(this_idx,30) = "ils_stretch_perturbation"
        valid_options(this_idx,31) = "ils_stretch_covariance"
+       valid_options(this_idx,32) = "rt_model"
     end do
 
     ! Section for gases

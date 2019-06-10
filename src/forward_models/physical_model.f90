@@ -22,7 +22,7 @@ module physical_model_mod
   use solar_model_mod
   use math_utils_mod
   use statevector_mod
-  use radiance_mod
+  use Beer_Lambert_mod
   use absco_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
@@ -1631,7 +1631,7 @@ contains
 
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
-       call calculate_Beer_Lambert(hires_grid, mu0, mu, &
+       call calculate_Beer_Lambert_radiance(hires_grid, mu0, mu, &
             albedo, total_tau, &
             radiance_calc_work_hi)
 
@@ -1821,7 +1821,6 @@ contains
 
        if (SV%num_ils_stretch > 0) then
           do i=1, N_spec
-             write(*,*) i, this_ILS_stretch(i)
              this_ILS_delta_lambda(:,i) = this_ILS_delta_lambda(:,i) * this_ILS_stretch(i)
           end do
        end if

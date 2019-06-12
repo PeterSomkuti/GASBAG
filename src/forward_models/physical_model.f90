@@ -37,7 +37,7 @@ module physical_model_mod
   ! System modules
   use ISO_FORTRAN_ENV
   USE OMP_LIB
-  use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
@@ -231,7 +231,7 @@ contains
     integer :: funit
     ! CPU time stamps and mean duration for performance analysis
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
-    integer :: frame_start, frame_skip
+    integer :: frame_start, frame_skip, frame_stop
     integer :: fp_start, fp_skip
 
     ! Open up the MET file
@@ -553,14 +553,25 @@ contains
 
 
        call logger%info(fname, "Starting main retrieval loop!")
-       frame_start = 1
-       frame_skip = MCS%window(i_win)%frame_skip
+
+       ! If we use averaging for solar spectra, we really only have to retrieve
+       ! one frame.
+       if ((MCS%algorithm%solar_footprint_averaging) .and. &
+            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
+          frame_start = 1
+          frame_skip = 1
+          frame_stop = 1
+       else
+          frame_start = 1
+          frame_skip = MCS%window(i_win)%frame_skip
+          frame_stop = num_frames
+       end if
 
        ! retr_count keeps track of the number of retrievals processed
        ! so far, and the mean_duration keeps track of the average
        ! processing time.
        retr_count = 0
-       total_number_todo = (num_fp * num_frames / frame_skip) / &
+       total_number_todo = (num_fp * frame_stop / frame_skip) / &
             (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
 
@@ -572,7 +583,7 @@ contains
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
-       do i_fr=frame_start, num_frames, frame_skip
+       do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
 #ifdef _OPENMP
@@ -621,11 +632,13 @@ contains
        out_dims2d(1) = num_fp
        out_dims2d(2) = num_frames
 
-       ! Writing out the prior surface pressure
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/prior_psurf")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/prior_psurf"
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
+       ! Writing out the prior surface pressure, but obviously only if allocated
+       if (allocated(met_psurf)) then
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/prior_psurf")
+          write(tmp_str, '(A,A,A)') trim(group_name) // "/prior_psurf"
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
+       end if
 
        ! Save the prior state vectors
        do i=1, size(global_SV%svsv)
@@ -825,9 +838,13 @@ contains
          radiance_tmp_work(:), &
          radiance_meas_work(:), &
          radiance_calc_work(:), &
-         radiance_tmp_work_hi(:), &
+         radiance_tmp_hi_nosif_nozlo(:), &
          radiance_calc_work_hi(:), &
          noise_work(:)
+
+    ! Radiative transfer models
+    integer :: RT_model
+    integer, parameter :: RT_BEER_LAMBERT = 0
 
     ! The current atmosphere. This will be a copy from the initial_atm
     ! constructed in the physical_retrieval subroutine, but T and SH
@@ -845,6 +862,7 @@ contains
     double precision :: mu0, mu ! cos(sza) and cos(vza)
     ! Epoch, which is just the date split into an integer array
     integer, dimension(7) :: epoch
+    double precision :: solar_distance, solar_velocity
 
     ! Instrument stuff
     ! Instrument doppler shift based on relative motion between ground footprint
@@ -958,6 +976,8 @@ contains
     logical :: ILS_success
     ! Was the time string conversion successful?
     logical :: success_time_convert
+    ! Are the radiances proper and valid?
+    logical :: radiance_OK
 
     ! ILS stuff
     double precision, allocatable :: this_ILS_stretch(:), &
@@ -1003,6 +1023,14 @@ contains
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
+    ! Set the used radiative transfer model
+    if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
+       RT_model = RT_BEER_LAMBERT
+    else
+       call logger%error(fname, "RT Method: " // MCS%window(i_win)%RT_model%chars() // " unknown.")
+       stop 1
+    end if
+
     ! What is the total number of gases in this window,
     ! regardless of whether they are retrieved or not.
     if (allocated(MCS%window(i_win)%gases)) then
@@ -1017,18 +1045,29 @@ contains
 
     select type(my_instrument)
     type is (oco2_instrument)
-       ! Read the L1B spectrum for this one measurement!
-       call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
-            MCS%general%N_spec(band), radiance_l1b)
+       ! READ THE MEASUREMENT
+       if ((MCS%algorithm%solar_footprint_averaging) .and. &
+            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
+
+          call my_instrument%read_spectra_and_average_by_fp(l1b_file_id, i_fp, band, &
+               MCS%general%N_spec(band), radiance_l1b)
+
+       else
+          ! Read the L1B spectrum for this one measurement in normal mode!
+          call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+               MCS%general%N_spec(band), radiance_l1b)
+
+       end if
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
             date, success_time_convert)
-       if (.not. success_time_convert) then
-          call logger%error(fname, "Time string conversion error!")
-          return
-       end if
-
     end select
+
+
+    if (.not. success_time_convert) then
+       call logger%error(fname, "Time string conversion error!")
+       return
+    end if
 
 
     ! Estimate a smart first guess for the gas scale factor, if the user supplied
@@ -1101,7 +1140,12 @@ contains
        solar_doppler = solar_rv / SPEED_OF_LIGHT
 
     else if (MCS%algorithm%observation_mode == "space_solar") then
-       instrument_doppler = 0.0d0
+
+       ! For space-solar observation mode, the doppler is obviously different
+       ! so we need to change the calculation slightly.
+       call solar_distance_and_velocity_v2(epoch, solar_distance, solar_velocity)
+
+       instrument_doppler = solar_velocity / SPEED_OF_LIGHT
        solar_doppler = 0.0d0
     end if
 
@@ -1136,7 +1180,7 @@ contains
     allocate(solar_irrad(N_hires))
 
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
-    allocate(radiance_tmp_work_hi(size(this_solar, 1)))
+    allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
 
 
@@ -1322,6 +1366,10 @@ contains
                 end if
              end do
 
+          else
+             ! If we don't do gases, just set this variable to zero, mainly to avoid
+             ! potential problems .. nasty segfaults etc.
+             num_active_levels = 0
           end if
 
        else
@@ -1630,9 +1678,29 @@ contains
        allocate(radiance_tmp_work(N_spec))
        allocate(noise_work(N_spec))
 
+       !---------------------------------------------------------------------
+       ! RT CALCULATIONS
+       !---------------------------------------------------------------------
+
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
-       call calculate_Beer_Lambert_radiance(hires_grid, mu0, mu, &
+
+       ! One last check if the radiances (measured) are valid
+
+       select type(my_instrument)
+       type is (oco2_instrument)
+          call my_instrument%check_radiance_valid(l1b_file_id, radiance_l1b, &
+               l1b_wl_idx_min, l1b_wl_idx_max, radiance_OK)
+       end select
+
+       if (radiance_OK .eqv. .false.) then
+          write(tmp_str, '(A,G0.1,A,G0.1,A)') "Sounding (", i_fr, ",", i_fp, &
+               ") has invalid radiances. Skipping."
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       call calculate_BL_radiance(hires_grid, mu0, mu, &
             albedo, total_tau, &
             radiance_calc_work_hi)
 
@@ -1666,51 +1734,88 @@ contains
        ! For various Jacobian calculations we also need the radiance MINUS the additive
        ! contributions, so we store them in a separate array.
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
-       radiance_tmp_work_hi(:) = radiance_calc_work_hi(:)
+       radiance_tmp_hi_nosif_nozlo(:) = radiance_calc_work_hi(:)
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
 
+       !---------------------------------------------------------------------
+       ! JACOBIAN CALCULATIONS - FOR HIGH-RES SPECTRA BEFORE CONVOLUTION
+       !---------------------------------------------------------------------
 
-       ! JACOBIAN CALCULATIONS
-
-       ! Surface pressure Jacobian
-       if (SV%num_psurf == 1) then
-          ! This equation requires the TOA radiance before SIF is added, so if we have
-          ! SIF in it, take it out beforehand.
-          K_hi(:, SV%idx_psurf(1)) = radiance_tmp_work_hi(:) &
-               * (1.0d0 / mu0 + 1.0d0 / mu) &
-               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
-       end if
+       ! Solar jacobians - these are independent of the RT model, since the solar
+       ! transmittance is just multiplied onto the TOA spectrum after RT calls
 
        ! Solar shift jacobian
        if (SV%num_solar_shift == 1) then
-          K_hi(:, SV%idx_solar_shift(1)) = -radiance_tmp_work_hi(:) &
+          K_hi(:, SV%idx_solar_shift(1)) = -radiance_tmp_hi_nosif_nozlo(:) &
                / this_solar(:,2) * dsolar_dlambda(:)
        end if
 
        ! Solar stretch jacobian
        if (SV%num_solar_stretch == 1) then
-          K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_work_hi(:) &
-               / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
+          K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_hi_nosif_nozlo(:) &
+               / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) &
+               / (1.0d0 - solar_doppler)
+       end if
+
+       ! Surface pressure Jacobian
+       if (SV%num_psurf == 1) then
+          ! This equation requires the TOA radiance before SIF is added, so if we have
+          ! SIF in it, take it out beforehand.
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+             call calculate_BL_psurf_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                  gas_tau_dpsurf, mu0, mu, K_hi(:, SV%idx_psurf(1)))
+          case default
+             call logger%error(fname, "Surface pressure Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
        end if
 
        ! Temperature offset Jacobian
        if (SV%num_temp == 1) then
-          K_hi(:, SV%idx_temp(1)) =  -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
-               * (sum(sum(gas_tau_dtemp, dim=2), dim=2) - total_tau)
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+             call calculate_BL_temp_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                  gas_tau, gas_tau_dtemp, mu0, mu,  K_hi(:, SV%idx_temp(1)))
+          case default
+             call logger%error(fname, "Temperature offset Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
        end if
 
        ! Gas jacobians
        if (SV%num_gas > 0) then
-
           do i=1, SV%num_gas
              ! Jacobian for a scalar-type gas retrieval
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-                K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
-                     * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) &
-                     / SV%svsv(SV%idx_gas(i,1))
+                select case (RT_model)
+                case (RT_BEER_LAMBERT)
+                   call calculate_BL_gas_subcolumn_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                        mu0, mu, gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), &
+                        SV%svsv(SV%idx_gas(i,1)), K_hi(:, SV%idx_gas(i,1)))
+                case default
+                   call logger%error(fname, "Gas sub-column Jacobian not implemented " &
+                        // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                end select
              end if
-
           end do
+       end if
+
+       ! Albedo Jacobians
+       if (SV%num_albedo > 0) then
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+             do i=1, SV%num_albedo
+                call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo, albedo, &
+                     hires_grid, i, K_hi(:, SV%idx_albedo(i)))
+             end do
+          case default
+             call logger%error(fname, "Albedo Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
        end if
 
 
@@ -1722,6 +1827,7 @@ contains
        ! Grab a copy of the L1b radiances
        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
 
+       ! These are the 'trivial' Jacobians that don't really need their own functions
        ! We add the SIF jacobian AFTER the K matrix is allocated
        if (SV%num_sif > 0) then
           ! Plug in the Jacobians (SIF is easy)
@@ -1730,13 +1836,6 @@ contains
        ! Same for ZLO
        if (SV%num_zlo > 0) then
           K(:, SV%idx_zlo(1)) = 1.0d0
-       end if
-
-       if (SV%num_albedo > 0) then
-          do i=1, SV%num_albedo
-             K_hi(:, SV%idx_albedo(i)) = (radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) / albedo * &
-                  ((hires_grid(:) - hires_grid(1)) ** (i-1))
-          end do
        end if
 
        ! Now calculate the noise-equivalent radiances
@@ -1771,6 +1870,15 @@ contains
           end if
 
        end select
+
+       ! If we are doing solar measurements and average spectra,
+       ! we also need to re-scale the noise to get adjusted CHI2
+       if ((MCS%algorithm%solar_footprint_averaging) .and. &
+            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
+
+          noise_work(:) = noise_work(:) / sqrt(dble(MCS%general%N_frame))
+
+       end if
 
        allocate(Se_inv(N_spec, N_spec))
        ! Inverse noise covariance, we keep it diagonal, as usual
@@ -1872,10 +1980,14 @@ contains
           end do
        end select
 
+
+       !---------------------------------------------------------------------
+       ! JACOBIAN CALCULATIONS - FOR SPECTRA AFTER CONVOLUTION
+       !---------------------------------------------------------------------
+
        ! Calculate disperion Jacobians
        if (SV%num_dispersion > 0) then
           do i=1, SV%num_dispersion
-
              call calculate_dispersion_jacobian(my_instrument, i, &
                   this_dispersion_coefs, band, i_win, i_fp, N_spec, &
                   this_ILS_delta_lambda, ILS_relative_response, &
@@ -1888,28 +2000,24 @@ contains
 
        ! ILS Jacobians are produced via finite differencing
        if (SV%num_ILS_stretch > 0) then
-
           ! Loop over all required ILS stretch orders
-          do j=1, SV%num_ils_stretch
-
-             call calculate_ILS_stretch_jacobian(my_instrument, j, SV, &
+          do i=1, SV%num_ils_stretch
+             call calculate_ILS_stretch_jacobian(my_instrument, i, SV, &
                   band, i_win, i_fp, N_spec, &
                   ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   ILS_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_ILS_stretch, this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
                   l1b_wl_idx_min, l1b_wl_idx_max, &
                   hires_grid, radiance_calc_work, &
-                  radiance_calc_work_hi, K(:, SV%idx_ils_stretch(j)))
-
+                  radiance_calc_work_hi, K(:, SV%idx_ils_stretch(i)))
           end do
        end if
 
 
-       ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
+       !---------------------------------------------------------------------
+       ! INVERSE SOLVER
+       !---------------------------------------------------------------------
 
-
-       ! Inverse method solver
-       write(tmp_str, *) MCS%window(i_win)%inverse_method%chars()
        if (MCS%window(i_win)%inverse_method%lower() == "imap") then
           ! Use iterative maximum a-posteriori solution (linear retrieval)
           ! (IMAP) as done by Christian Frankenberg
@@ -1955,7 +2063,8 @@ contains
           tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
           SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
        else
-          call logger%error(fname, "Inverse method: " // trim(tmp_str) // ", not known!")
+          call logger%error(fname, "Inverse method: " &
+               // MCS%window(i_win)%inverse_method%lower() // ", not known!")
           stop 1
        end if
 
@@ -2013,7 +2122,6 @@ contains
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
             ((abs(this_chi2 - old_chi2) / old_chi2) < 0.01) .or. &
-                                !(abs(sqrt(old_chi2) - sqrt(this_chi2)) < 0.01) .or. &
             (num_divergent_steps > 1) &
             ) then
 
@@ -2029,15 +2137,16 @@ contains
              results%converged(i_fp, i_fr) = 0
           end if
 
-          ! Allocate array for pressure weights
-          allocate(pwgts(num_active_levels))
-
           ! Calculate the XGAS for every retreived gas only, same as above with the
           ! gas OD calculation, we loop through all gases, apply the gas scaling
           ! factor from the state vector, and calculate the pressure weighting function
           ! as well as the XGAS.
 
           if (SV%num_gas > 0) then
+
+             ! Allocate array for pressure weights
+             allocate(pwgts(num_active_levels))
+
              do j=1, num_gases
 
                 ! Here we need to do the same thing as before when calculating
@@ -2074,6 +2183,8 @@ contains
                      )
 
              end do
+
+             deallocate(pwgts)
           end if
 
           ! Save the final dSigma-squared value (in case anyone needs it)
@@ -2083,16 +2194,12 @@ contains
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Calculate the averaging kernel
-          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K)
+          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
              SV%sver(i) = sqrt(Shat(i,i))
           end do
-
-!!$          do i=1, N_sv
-!!$             write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
-!!$          end do
 
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
@@ -2193,38 +2300,39 @@ contains
 
        end if
 
-       open(file="jacobian.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) (K(i, j), j=1, N_sv)
-       end do
-       close(funit)
-
-
-       open(file="l1b_spec.dat", newunit=funit)
-       do i=1, N_spec
-          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-               noise_work(i)!, solar_low(i)
-       end do
-       close(funit)
-
-
-       write(*,*) num_active_levels
-       do i=1, num_active_levels
-          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
-       end do
-
-       write(*,*) "old, current and delta state vector, and errors"
-
-       write(*,*) "Iteration: ", iteration
-       do i=1, N_sv
-          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
-               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
-       end do
-       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-       write(*,*) "LM-Gamma: ", lm_gamma
-       write(*,*) "Ratio R: ", chi2_ratio
+!!$       open(file="jacobian.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) (K(i, j), j=1, N_sv)
+!!$       end do
+!!$       close(funit)
+!!$
+!!$
+!!$       open(file="l1b_spec.dat", newunit=funit)
+!!$       do i=1, N_spec
+!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
+!!$               noise_work(i)!, solar_low(i)
+!!$       end do
+!!$       close(funit)
+!!$
+!!$
+!!$       write(*,*) num_active_levels
+!!$       do i=1, num_active_levels
+!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
+!!$       end do
+!!$
+!!$       write(*,*) "old, current and delta state vector, and errors"
+!!$
+!!$       write(*,*) "Iteration: ", iteration
+!!$       do i=1, N_sv
+!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+!!$               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
+!!$               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
+!!$       end do
+!!$       write(*,*) "Old Chi2: ", old_chi2
+!!$       write(*,*) "Chi2:    ", this_chi2
+!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
+!!$       write(*,*) "LM-Gamma: ", lm_gamma
+!!$       write(*,*) "Ratio R: ", chi2_ratio
 
 
        ! These quantities are all allocated within the iteration loop, and
@@ -2244,8 +2352,8 @@ contains
        if (allocated(ndry)) deallocate(ndry)
        if (allocated(ndry_tmp)) deallocate(ndry_tmp)
 
+       !read(*,*)
 
-       read(*,*)
     end do
     !read(*,*)
 
@@ -2584,10 +2692,8 @@ contains
        ! Retrieved gas names (scalar retrieval only so far)
        k = 1
        do j=1, SV%num_gas
-
           ! Check if this SV element is a scalar retrieval
           if (SV%idx_gas(j,1) == i) then
-
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
                 if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
 
@@ -2600,9 +2706,7 @@ contains
 
                 k = k + 1
              end if
-
           end if
-
        end do
 
        i = i+1

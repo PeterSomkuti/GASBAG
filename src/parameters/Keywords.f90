@@ -71,8 +71,8 @@ contains
     ! Which SIF algorithm(s) to use?
     valid_options(2,1) = "sif_algorithm"
     valid_options(2,2) = "n_basisfunctions"
-    valid_options(2,3) = "solar_dopper_shift"
-    valid_options(2,4) = "observation_mode"
+    valid_options(2,3) = "observation_mode"
+    valid_options(2,4) = "solar_footprint_averaging"
 
     ! Related to the instrument in question
     valid_sections(3) = "instrument"

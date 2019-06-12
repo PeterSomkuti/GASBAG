@@ -66,6 +66,9 @@ module control_mod
      type(string) :: solar_type
      !> What is the observation mode? (downlooking, space-solar)
      type(string) :: observation_mode
+     !> For solar observations, do we want to average all solar
+     !> spectra within a L1B file (according to footprint)?
+     logical :: solar_footprint_averaging
   end type CS_algorithm
 
   type, private :: CS_window
@@ -148,6 +151,8 @@ module control_mod
      integer :: footprint_skip
      !> Type of inverse method to use
      type(string) :: inverse_method
+     !> Type of Radiative Transfer model to use
+     type(string) :: RT_model
   end type CS_window
 
   type, private :: CS_input
@@ -377,6 +382,15 @@ contains
             // MCS%algorithm%observation_mode%chars())
     end if
 
+    call fini_extract(fini, tmp_str, 'solar_footprint_averaging', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%algorithm%solar_footprint_averaging = .false.
+    else
+       MCS%algorithm%solar_footprint_averaging = string_to_bool(fini_string)
+    end if
+
     ! Algorithm section over------------------------------------------------
 
     ! Inputs section -------------------------------------------------------
@@ -536,11 +550,16 @@ contains
              call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
              MCS%window(window_nr)%SV_string = fini_char
 
+             call fini_extract(fini, tmp_str, 'rt_model', .true., fini_char)
+             MCS%window(window_nr)%RT_model = trim(fini_char)
+
           end if
 
           ! The rest is potentially optional. Whether a certain option is
           ! required for a given retrieval setting, will be checked later
           ! on in the code, usually when it's needed the first time
+
+
 
           ! Arrays that are used for our super-duper smart first guess for the
           ! scalar gas retrieval

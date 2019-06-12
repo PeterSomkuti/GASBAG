@@ -19,6 +19,7 @@ module oco2_mod
   ! System modules
   use HDF5
   use OMP_LIB
+  use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
@@ -31,6 +32,7 @@ module oco2_mod
      procedure, nopass :: read_l1b_snr_coef
      procedure, nopass :: calculate_dispersion
      procedure, nopass :: read_one_spectrum
+     procedure, nopass :: read_spectra_and_average_by_fp
      procedure, nopass :: calculate_noise
      procedure, nopass :: check_radiance_valid
      procedure, nopass :: read_sounding_ids
@@ -292,6 +294,48 @@ contains
   end subroutine read_one_spectrum
 
 
+  subroutine read_spectra_and_average_by_fp(l1b_file_id, i_fp, band, N_spec, radiance_l1b)
+
+    integer(hid_t) :: l1b_file_id
+    integer, intent(in) :: i_fp, band, N_spec
+    double precision, allocatable, intent(inout) :: radiance_l1b(:)
+
+    character(len=*), parameter :: fname = "read_spectra_and_average_by_fp(oco2)"
+    double precision, allocatable :: tmp_radiance(:)
+    integer :: i_fr, i, funit
+    logical :: radiance_OK
+    character(len=50) :: tmp_str
+
+    allocate(radiance_l1b(N_spec))
+    radiance_l1b(:) = 0.0d0
+
+    do i_fr=1, MCS%general%N_frame
+       call read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+            MCS%general%N_spec(band), tmp_radiance)
+
+       call check_radiance_valid(l1b_file_id, tmp_radiance, &
+            1, size(tmp_radiance), radiance_OK)
+
+       if (i_fr == 1) then
+          radiance_l1b(:) = tmp_radiance(:)
+          deallocate(tmp_radiance)
+          cycle
+       end if
+
+       if (radiance_OK) then
+          radiance_l1b(:) = (radiance_l1b(:) * dble(i_fr - 1)) / dble(i_fr) &
+               + (tmp_radiance(:) / i_fr)
+       else
+          cycle
+       end if
+
+       deallocate(tmp_radiance)
+
+    end do
+
+  end subroutine read_spectra_and_average_by_fp
+
+
   !> @brief Calculate the noise-equivalent radiances from the SNR coefficients
   !> @param snr_coefs SNR coefficients (coef, pixel, fp, band)
   !> @param radiance L1B Radiance
@@ -345,6 +389,10 @@ contains
     ! For OCO-2, "bad" radiance points might be flagged by
     ! -999999 values.
     if (COUNT(radiance == -999999.0d0) > 0) then
+       valid = .false.
+    end if
+
+    if (any(ieee_is_nan(radiance))) then
        valid = .false.
     end if
 

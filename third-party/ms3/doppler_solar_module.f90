@@ -28,7 +28,7 @@ IMPLICIT NONE
 
 
 PRIVATE
-PUBLIC :: solar_doppler_velocity
+PUBLIC :: solar_doppler_velocity, solar_distance_and_velocity, solar_distance_and_velocity_v2
 
 CONTAINS
 

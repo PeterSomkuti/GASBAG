@@ -69,6 +69,8 @@ module control_mod
      !> For solar observations, do we want to average all solar
      !> spectra within a L1B file (according to footprint)?
      logical :: solar_footprint_averaging
+     !> Do we want to step through for debugging?
+     logical :: step_through
   end type CS_algorithm
 
   type, private :: CS_window
@@ -389,6 +391,18 @@ contains
        MCS%algorithm%solar_footprint_averaging = .false.
     else
        MCS%algorithm%solar_footprint_averaging = string_to_bool(fini_string)
+    end if
+
+    call fini_extract(fini, tmp_str, 'step_through', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%algorithm%step_through = .false.
+    else
+       MCS%algorithm%step_through = string_to_bool(fini_string)
+       if (MCS%algorithm%step_through) then
+          call logger%debug(fname, "Using step-through mode for debugging!")
+       end if
     end if
 
     ! Algorithm section over------------------------------------------------

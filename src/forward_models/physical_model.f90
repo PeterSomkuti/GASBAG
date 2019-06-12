@@ -980,7 +980,8 @@ contains
     ! Chi2-related variables. Chi2 of last and this current iteration,
     ! chi2 calculated from a linear prediction, and the chi2 ratio needed
     ! to adjust lm_gamma and determine a divergent step.
-    double precision :: old_chi2, this_chi2, linear_prediction_chi2, chi2_ratio
+    double precision :: old_chi2, this_chi2, &
+         linear_prediction_chi2, chi2_ratio, chi2_rel_change
 
     ! Iteration-related
     ! Current iteration number (starts at 1), number of divergent steps allowed.
@@ -1286,6 +1287,7 @@ contains
           divergent_step = .false.
           ! Initialise Chi2 with an insanely large value
           this_chi2 = 9.9d9
+          old_chi2 = 9.9d10
           linear_prediction_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
@@ -2097,16 +2099,12 @@ contains
        this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
             noise_work, N_spec - N_sv)
 
-       !write(*,*) "Chi2: ", this_chi2
-       !write(*,*) "Linear prediction: ", linear_prediction_chi2
-       !write(*,*) "Ratio R: ", (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
-
-
+       chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
        ! Now we check for convergence!
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
-            ((abs(this_chi2 - old_chi2) / old_chi2) < 0.01) .or. &
+            (chi2_rel_change < 0.01) .or. &
             (num_divergent_steps > 1) &
             ) then
 
@@ -2231,11 +2229,6 @@ contains
           !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
           !! we revert to the last state vector, and increase lm_gamma
 
-          if (.not. divergent_step) then
-             ! Make sure we keep the 'old' Chi2 only from a valid iteration
-             old_chi2 = this_chi2
-          end if
-
           if (iteration == 1) then
              chi2_ratio = 0.5d0
              ! For very first iteration, we set R in the trust region, so
@@ -2285,40 +2278,101 @@ contains
 
        end if
 
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)!, solar_low(i)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$
-!!$       write(*,*) num_active_levels
-!!$       do i=1, num_active_levels
-!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
-!!$       end do
-!!$
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Old Chi2: ", old_chi2
-!!$       write(*,*) "Chi2:    ", this_chi2
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!!$       write(*,*) "LM-Gamma: ", lm_gamma
-!!$       write(*,*) "Ratio R: ", chi2_ratio
+       if (MCS%algorithm%step_through) then
 
+          call logger%debug(fname, "---------------------------------")
+
+          ! Calculate the Gain matrix
+          gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
+
+          ! Calculate the averaging kernel
+          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
+
+          open(file="jacobian.dat", newunit=funit)
+          do i=1, N_spec
+             write(funit,*) (K(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: jacobian.dat (spectral x statevector)")
+
+          open(file="ak_matrix.dat", newunit=funit)
+          do i=1, N_sv
+             write(funit,*) (AK(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: ak_matrix.dat (statevector x statevector)")
+
+          open(file="gain_matrix.dat", newunit=funit)
+          do i=1, N_spec
+             write(funit,*) (gain_matrix(j, i), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: gain_matrix.dat (spectral x statevector)")
+
+          open(file="spectra.dat", newunit=funit)
+          do i=1, N_spec
+             write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), &
+                  radiance_calc_work(i), noise_work(i)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: spectra.dat (wavelength, measured, modelled, noise)")
+
+          if (num_active_levels > 0) then
+             call logger%debug(fname, "Model atmosphere: (pressure, gas vmrs, ndry)")
+             call logger%debug(fname, "Gas names: ")
+             do i=1, num_gases
+                write(tmp_str, '(A,G0.1,A,A)') "Gas #", i, ": ", MCS%window(i_win)%gases(i)%chars()
+                call logger%debug(fname, trim(tmp_str))
+             end do
+             do i=1, num_active_levels
+                write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
+             end do
+
+          end if
+
+
+          write(tmp_str, '(A,G0.1)') "Iteration: ", iteration
+          call logger%debug(fname, trim(tmp_str))
+
+          write(tmp_str,*) "SV index, SV name, SV prior, SV last iteration, " &
+               // "SV current, SV delta, prior cov., posterior cov., diagonal of AK"
+          call logger%debug(fname, trim(tmp_str))
+
+          do i=1, N_sv
+             write(tmp_str, '(I3.1,A25,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+                  i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
+                  SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i)), AK(i,i)
+             call logger%debug(fname, trim(tmp_str))
+          end do
+
+          call logger%debug(fname, "---------------------------------")
+
+          write(tmp_str, '(A,F10.3)') "Chi2 (linear prediction): ", linear_prediction_chi2
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,F10.3)') "Chi2 (this iteration):    ", this_chi2
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,F10.3)') "Chi2 (last iteration):    ", old_chi2
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,F10.3)') "Chi2 (relative change):   ", abs(this_chi2 - old_chi2) / old_chi2
+          call logger%debug(fname, trim(tmp_str))
+
+          write(tmp_str, '(A,ES15.6,A,ES15.6)') "Dsigma-squared / convergence threshold: ", &
+               dsigma_sq, ' / ', dble(N_sv) * dsigma_scale
+
+          call logger%debug(fname, trim(tmp_str))
+          if (MCS%window(i_win)%allow_divergences) then
+             write(tmp_str, '(A,F10.3)') "LM-gamma: ", lm_gamma
+             call logger%debug(fname, trim(tmp_str))
+
+             write(tmp_str, '(A,F10.3)') "Chi2 ratio (R): ", chi2_ratio
+             call logger%debug(fname, trim(tmp_str))
+          end if
+
+          call logger%debug(fname, "---------------------------------")
+
+          read(*,*)
+
+       end if
 
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.
@@ -2337,7 +2391,10 @@ contains
        if (allocated(ndry)) deallocate(ndry)
        if (allocated(ndry_tmp)) deallocate(ndry_tmp)
 
-       !read(*,*)
+       if (.not. divergent_step) then
+          ! Make sure we keep the 'old' Chi2 only from a valid iteration
+          old_chi2 = this_chi2
+       end if
 
     end do
     !read(*,*)

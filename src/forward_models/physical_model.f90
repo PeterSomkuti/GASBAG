@@ -111,11 +111,11 @@ module physical_model_mod
   integer, allocatable :: spike_list(:,:,:)
 
   !> MET data temperature profiles (level, footprint, frame)
-  double precision, allocatable, dimension(:,:,:) :: met_T_profiles
+  double precision, allocatable :: met_T_profiles(:,:,:)
   !> MET data pressure levels (level, footprint, frame)
-  double precision, allocatable, dimension(:,:,:) :: met_P_levels
+  double precision, allocatable :: met_P_levels(:,:,:)
   !> MET data specific humidity profiles (level, footprint, frame)
-  double precision, allocatable, dimension(:,:,:) :: met_SH_profiles
+  double precision, allocatable :: met_SH_profiles(:,:,:)
   !> MET data surface pressure (footprint, frame)
   double precision, allocatable :: met_psurf(:,:)
 
@@ -168,7 +168,7 @@ contains
     ! Do MET or ECMWF groups exist in the MET file?
     logical :: MET_exists, ECMWF_exists
     ! Does a spike/bad_sample data field exist?
-    logical :: spike_exists, bad_sample_exists
+    logical :: spike_exists, bad_sample_exists, result_exists
     ! Fixed dimensions for the arrays to be saved into the output HDF file
     integer(hsize_t) :: out_dims2d(2), out_dims3d(3)
     ! Dimensions for the read-in of MET/L1b data
@@ -177,6 +177,8 @@ contains
     integer :: hdferr
     ! Holders for temporary strings and dataset names to grab L1b/MET data
     character(len=999) :: dset_name, tmp_str, group_name
+    ! String needed for converting to lower-case
+    type(string) :: lower_str
     ! Name of this function for debugging
     character(len=*), parameter :: fname = "physical_retrieval"
     ! What are the dimensions of the ABSCO file used?
@@ -225,7 +227,7 @@ contains
 
 
     !---------------------------------------------------------------------
-    ! INSTRUMENT - DEPENDENT SET UP OF L1B AND MET DATA
+    ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
     !---------------------------------------------------------------------
 
 
@@ -234,57 +236,8 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! MET data read-in is not required for space-solar observation modes
-       if (MCS%algorithm%observation_mode == "downlooking") then
-          ! Get the necesary MET data profiles. OCO-like MET data can have either
-          ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
-          ! which one exists (priority given to /Meteorology) and take it from there
-
-          MET_exists = .false.
-          ECMWF_exists = .false.
-
-          call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
-          if (.not. MET_exists) then
-             call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
-          end if
-
-          ! Let the user know which one we picked.
-          if (MET_exists) then
-             call logger%info(fname, "Taking MET data from /Meteorology")
-          else if (ECMWF_exists) then
-             call logger%info(fname, "Taking MET data from /ECMWF")
-          else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
-             ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
-             ! MET file. Can't really go on without MET data.
-             call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
-             stop 1
-          end if
-
-          ! Read the complete MET arrays from the corresponding HDF5 fields
-          if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
-          if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
-          call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
-          call logger%trivia(fname, "Finished reading in pressure levels.")
-
-          if (MET_exists) dset_name = "/Meteorology/temperature_profile_met"
-          if (ECMWF_exists) dset_name = "/ECMWF/temperature_profile_ecmwf"
-          call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
-          call logger%trivia(fname, "Finished reading in temperature profiles.")
-
-          if (MET_exists) dset_name = "/Meteorology/specific_humidity_profile_met"
-          if (ECMWF_exists) dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
-          call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
-          call logger%trivia(fname, "Finished reading in specific humidity profiles.")
-
-          if (MET_exists) dset_name = "/Meteorology/surface_pressure_met"
-          if (ECMWF_exists) dset_name = "/ECMWF/surface_pressure_ecmwf"
-          call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
-          call logger%trivia(fname, "Finished reading in surface pressure.")
-
-       end if
-
-       ! Grab the SNR coefficients for noise calculations
-       call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
+       call my_instrument%read_MET_data(met_file_id, l1b_file_id, &
+            met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
 
        if (MCS%algorithm%observation_mode == "downlooking") then
           ! These here also only make sense in a downlooking position.
@@ -303,19 +256,13 @@ contains
           end if
        end if
 
+       ! Grab the SNR coefficients for noise calculations
+       call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
        ! Read the time strings
        call my_instrument%read_time_strings(l1b_file_id, frame_time_strings)
-
        ! Read in the instrument ILS data
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
-
-       ! Read in Spike filter data, if it exists in this file
-       !call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
-       !if (spike_exists) then
-       !   call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
-       !end if
-
        ! Read in bad sample list (if it exists)
        call h5lexists_f(l1b_file_id, "/InstrumentHeader/bad_sample_list", &
             bad_sample_exists, hdferr)
@@ -350,8 +297,19 @@ contains
 
 
     ! Create the HDF group in which all the results go in the end
-    call h5gcreate_f(output_file_id, "physical_retrieval_results", result_gid, hdferr)
-    call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
+    call h5lexists_f(l1b_file_id, "/RetrievalResults", result_exists, hdferr)
+    if (.not. result_exists) then
+       call h5gcreate_f(output_file_id, "RetrievalResults", result_gid, hdferr)
+    end if
+    call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults")
+    call h5gcreate_f(output_file_id, "/RetrievalResults/physical", result_gid, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults/physical")
+
+
+
+    !---------------------------------------------------------------------
+    ! MAIN RETRIEVAL WINDOW LOOP
+    !---------------------------------------------------------------------
 
     ! Loop over all potential user-defined retrieval windows.
     do i_win=1, MAX_WINDOWS
@@ -411,6 +369,12 @@ contains
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
                altitude, relative_velocity, relative_solar_velocity)
+          ! Read in Spike filter data, if it exists in this file
+          call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
+          if (spike_exists) then
+             if (allocated(spike_list)) deallocate(spike_list)
+             call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+          end if
 
        end select
 
@@ -608,7 +572,7 @@ contains
        !$OMP END PARALLEL DO
 
        ! Create an HDF group for all windows separately
-       group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
+       group_name = "RetrievalResults/physical/" // trim(MCS%window(i_win)%name%chars())
        call h5gcreate_f(output_file_id, trim(group_name), result_gid, hdferr)
        call check_hdf_error(hdferr, fname, "Error. Could not create group: " &
             // trim(group_name))
@@ -619,16 +583,16 @@ contains
 
        ! Writing out the prior surface pressure, but obviously only if allocated
        if (allocated(met_psurf)) then
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/prior_psurf")
-          write(tmp_str, '(A,A,A)') trim(group_name) // "/prior_psurf"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/surface_pressure_apriori")
+          write(tmp_str, '(A,A)') trim(group_name), "/surface_pressure_apriori"
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
        end if
 
        ! Save the prior state vectors
        do i=1, size(global_SV%svsv)
-          write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" &
-               // results%sv_names(i) // "_prior"
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name) , "/", &
+               results%sv_names(i)%chars() , "_apriori_", MCS%general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -637,7 +601,8 @@ contains
 
        ! Save the retrieved state vectors
        do i=1, size(global_SV%svsv)
-          write(tmp_str, '(A,A,A,A)') trim(group_name) // "/" // results%sv_names(i)
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", results%sv_names(i)%chars(), &
+               "_", MCS%general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -646,8 +611,8 @@ contains
 
        ! Save the retrieved state vector uncertainties
        do i=1, size(global_SV%svsv)
-          write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" &
-               // results%sv_names(i) // "_uncertainty"
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+               results%sv_names(i)%chars() , "_uncertainty_", MCS%general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -677,7 +642,9 @@ contains
        do i=1,MCS%window(i_win)%num_gases
           if (MCS%window(i_win)%gas_retrieved(i)) then
              ! Save XGAS for each gas
-             write(tmp_str, '(A,A,A,A)') trim(group_name) // "/X" // MCS%window(i_win)%gases(i)
+             lower_str = MCS%window(i_win)%gases(i)%lower()
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                  lower_str%chars(), "_", MCS%general%code_name
              call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
@@ -686,73 +653,80 @@ contains
        end do
 
        ! Save number of iterations
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/num_iterations"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/num_iterations_", MCS%general%code_name
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), results%num_iterations(:,:), out_dims2d, -9999)
 
        ! Save converged status
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/converged"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/converged", MCS%general%code_name
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), results%converged(:,:), out_dims2d, -9999)
 
        ! Retrieved CHI2
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/retrieved_chi2")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/retrieved_chi2"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/reduced_chi_squared_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_ ", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
 
        ! Dsigma_sq
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/final_dsigma_sq"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/final_dsigma_sq_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/SNR")
-       write(tmp_str, '(A,A)') trim(group_name) // "/SNR"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/snr", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR, out_dims2d)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/SNR_std")
-       write(tmp_str, '(A,A)') trim(group_name) // "/SNR_std"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_std_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/snr_std_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR_std, out_dims2d)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum")
-       write(tmp_str, '(A,A)') trim(group_name) // "/continuum"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum_level_radiance_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/continuum_level_radiance_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%continuum, out_dims2d)
 
        ! Save the radiances (this should be made optional!)
        if (MCS%output%save_radiances) then
           out_dims3d = shape(final_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
-          write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               final_radiance, out_dims3d)
+               trim(tmp_str), final_radiance, out_dims3d)
 
           out_dims3d = shape(measured_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance")
-          write(tmp_str, '(A,A)') trim(group_name) // "/measured_radiance"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/measured_radiance_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               measured_radiance, out_dims3d)
+               trim(tmp_str), measured_radiance, out_dims3d)
 
           out_dims3d = shape(noise_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance")
-          write(tmp_str, '(A,A)') trim(group_name) // "/noise_radiance"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/noise_radiance_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               noise_radiance, out_dims3d)
+               trim(tmp_str), noise_radiance, out_dims3d)
 
           out_dims3d = shape(wavelength_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength")
-          write(tmp_str, '(A,A)') trim(group_name) // "/wavelength"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/wavelength_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               wavelength_radiance, out_dims3d)
+               trim(tmp_str), wavelength_radiance, out_dims3d)
 
           ! Also deallocate containers holding the radiances
           deallocate(final_radiance)
@@ -949,6 +923,8 @@ contains
     double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
     ! Posterior covariance matrix and its inverse (N_sv, N_sv)
     double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
+    ! Correlation matrix of Shat
+    double precision, allocatable :: Shat_corr(:,:)
 
 
     ! Temporary matrices and vectors for computation
@@ -1156,6 +1132,7 @@ contains
     allocate(Sa_inv(N_sv, N_sv))
     allocate(Shat_inv(N_sv, N_sv))
     allocate(Shat(N_sv, N_sv))
+    allocate(Shat_corr(N_sv, N_sv))
     allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
     allocate(tmp_v1(N_sv), tmp_v2(N_sv))
     allocate(KtSeK(N_sv, N_sv))
@@ -2278,15 +2255,32 @@ contains
 
        end if
 
+       ! If the user requests a step-through, then we print a bunch of debug information about
+       ! the retrieval for each iteration and wait for a return
        if (MCS%algorithm%step_through) then
 
           call logger%debug(fname, "---------------------------------")
+
+          ! Gain matrix and AK are normally just calculated after convergence, so
+          ! we need to compute them here per-iteration
 
           ! Calculate the Gain matrix
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
+
+          do i=1, N_sv
+             do j=1, N_sv
+                Shat_corr(i,j) = Shat(i,j) / sqrt(Shat(i,i) * Shat(j,j))
+             end do
+          end do
+          open(file="shat_corr.dat", newunit=funit)
+          do i=1, N_sv
+             write(funit,*) (Shat_corr(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: Shat_corr.dat (statevector x statevector)")
 
           open(file="jacobian.dat", newunit=funit)
           do i=1, N_spec
@@ -2325,9 +2319,9 @@ contains
                 call logger%debug(fname, trim(tmp_str))
              end do
              do i=1, num_active_levels
-                write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
+                write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), &
+                     ndry(i)
              end do
-
           end if
 
 
@@ -2369,7 +2363,7 @@ contains
           end if
 
           call logger%debug(fname, "---------------------------------")
-
+          call logger%debug(fname, "Press ENTER to continue")
           read(*,*)
 
        end if

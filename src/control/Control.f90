@@ -39,6 +39,7 @@ module control_mod
   integer, parameter :: MAX_GASES = 10
 
   type, private :: CS_general
+     character(len=6) :: code_name = "gasbag"
      !> Number of soundings to be processed
      integer :: N_soundings
      !> Number of frames and footprints

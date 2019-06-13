@@ -43,6 +43,7 @@ module oco2_mod
      procedure, nopass :: read_sounding_location
      procedure, nopass :: read_bad_sample_list
      procedure, nopass :: read_spike_filter
+     procedure, nopass :: read_MET_data
   end type oco2_instrument
 
 
@@ -686,13 +687,13 @@ contains
     integer(hsize_t), allocatable :: dset_dims(:)
 
     if (band == 1) then
-       call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_o2", &
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_o2", &
             spike_list, dset_dims)
     elseif (band == 2) then
-       call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_weak_co2", &
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_weak_co2", &
             spike_list, dset_dims)
     elseif (band == 3) then
-       call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_strong_co2", &
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_strong_co2", &
             spike_list, dset_dims)
     else
        call logger%fatal("read_spike_filter(oco2)", "Sorry - I only know bands 1 through 3!")
@@ -702,5 +703,71 @@ contains
   end subroutine read_spike_filter
 
 
+  subroutine read_MET_data(met_file_id, l1b_file_id, &
+       met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
+
+    integer(hid_t), intent(in) :: met_file_id
+    integer(hid_t), intent(in) :: l1b_file_id
+    double precision, allocatable, intent(inout) :: met_T_profiles(:,:,:)
+    double precision, allocatable, intent(inout) :: met_P_levels(:,:,:)
+    double precision, allocatable, intent(inout) :: met_SH_profiles(:,:,:)
+    double precision, allocatable, intent(inout) :: met_psurf(:,:)
+
+    logical :: MET_exists, ECMWF_exists
+    character(len=*), parameter :: fname = "read_MET_and_some_L1B_data"
+    character(len=999) :: dset_name
+    integer(hsize_t), allocatable :: dset_dims(:)
+    integer :: hdferr
+
+    ! MET data read-in is not required for space-solar observation modes
+    if (MCS%algorithm%observation_mode == "downlooking") then
+       ! Get the necesary MET data profiles. OCO-like MET data can have either
+       ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
+       ! which one exists (priority given to /Meteorology) and take it from there
+
+       MET_exists = .false.
+       ECMWF_exists = .false.
+
+       call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
+       if (.not. MET_exists) then
+          call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
+       end if
+
+       ! Let the user know which one we picked.
+       if (MET_exists) then
+          call logger%info(fname, "Taking MET data from /Meteorology")
+       else if (ECMWF_exists) then
+          call logger%info(fname, "Taking MET data from /ECMWF")
+       else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
+          ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
+          ! MET file. Can't really go on without MET data.
+          call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
+          stop 1
+       end if
+
+       ! Read the complete MET arrays from the corresponding HDF5 fields
+       if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
+       call logger%trivia(fname, "Finished reading in pressure levels.")
+
+       if (MET_exists) dset_name = "/Meteorology/temperature_profile_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/temperature_profile_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
+       call logger%trivia(fname, "Finished reading in temperature profiles.")
+
+       if (MET_exists) dset_name = "/Meteorology/specific_humidity_profile_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
+       call logger%trivia(fname, "Finished reading in specific humidity profiles.")
+
+       if (MET_exists) dset_name = "/Meteorology/surface_pressure_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/surface_pressure_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
+       call logger%trivia(fname, "Finished reading in surface pressure.")
+
+    end if
+
+  end subroutine read_MET_data
 
 end module oco2_mod

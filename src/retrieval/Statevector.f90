@@ -741,6 +741,7 @@ contains
     type(statevector), intent(in) :: SV
     integer, intent(in) :: i_win
 
+    type(string) :: lower_str
     character(len=999) :: tmp_str
     integer :: i,j,k
 
@@ -758,7 +759,7 @@ contains
        ! SIF name (really only one at this point)
        do j=1, SV%num_sif
           if (SV%idx_sif(j) == i) then
-             write(tmp_str, '(A)') "SIF_absolute"
+             write(tmp_str, '(A)') "sif_radiance"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
@@ -766,34 +767,34 @@ contains
        ! ZLO name
        do j=1, SV%num_zlo
           if (SV%idx_zlo(j) == i) then
-             write(tmp_str, '(A)') "ZLO"
+             write(tmp_str, '(A)') "zlo"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
 
        do j=1, SV%num_temp
           if (SV%idx_temp(j) == i) then
-             write(tmp_str, '(A)') "temperature"
+             write(tmp_str, '(A)') "temperature_"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
 
        ! Solar shift name
        if (SV%idx_solar_shift(1) == i) then
-          write(tmp_str, '(A)') "solar_shift"
+          write(tmp_str, '(A,A)') "solar_shift_"
           results%sv_names(i) = trim(tmp_str)
        end if
 
        ! Solar stretch name
        if (SV%idx_solar_stretch(1) == i) then
-          write(tmp_str, '(A)') "solar_stretch"
+          write(tmp_str, '(A)') "solar_stretch_"
           results%sv_names(i) = trim(tmp_str)
        end if
 
        ! Surface pressure name
        do j=1, SV%num_psurf
           if (SV%idx_psurf(j) == i) then
-             write(tmp_str, '(A)') "psurf"
+             write(tmp_str, '(A)') "surface_pressure"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
@@ -801,7 +802,7 @@ contains
        ! Dispersion parameter names
        do j=1, SV%num_dispersion
           if (SV%idx_dispersion(j) == i) then
-             write(tmp_str, '(A,G0.1)') "dispersion_coef_", j
+             write(tmp_str, '(A,G0.1)') "dispersion_order_", j-1
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
@@ -809,7 +810,7 @@ contains
        ! ILS parameter names
        do j=1, SV%num_ils_stretch
           if (SV%idx_ils_stretch(j) == i) then
-             write(tmp_str, '(A,G0.1)') "ILS_stretch_coef_", j
+             write(tmp_str, '(A,G0.1)') "ils_stretch_order_", j-1
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
@@ -822,7 +823,8 @@ contains
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
                 if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
 
-                write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
+                lower_str = MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%lower()
+                write(tmp_str, '(A)') trim(lower_str%chars() // "_scale_")
                 write(tmp_str, '(A, F4.2)') trim(tmp_str), &
                      SV%gas_retrieve_scale_start(j)
                 write(tmp_str, '(A,A,F4.2)') trim(tmp_str), "_" , &

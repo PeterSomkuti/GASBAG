@@ -28,17 +28,19 @@ module oco2_mod
   type, extends(generic_instrument), public :: oco2_instrument
    contains
      procedure, nopass :: scan_l1b_file
-     procedure, nopass :: read_l1b_dispersion
-     procedure, nopass :: read_l1b_snr_coef
+
      procedure, nopass :: calculate_dispersion
-     procedure, nopass :: read_one_spectrum
-     procedure, nopass :: read_spectra_and_average_by_fp
      procedure, nopass :: calculate_noise
      procedure, nopass :: check_radiance_valid
+     procedure, nopass :: convert_time_string_to_date
+
      procedure, nopass :: read_sounding_ids
      procedure, nopass :: read_time_strings
-     procedure, nopass :: convert_time_string_to_date
+     procedure, nopass :: read_l1b_dispersion
+     procedure, nopass :: read_l1b_snr_coef
      procedure, nopass :: read_ils_data
+     procedure, nopass :: read_one_spectrum
+     procedure, nopass :: read_spectra_and_average_by_fp
      procedure, nopass :: read_sounding_geometry
      procedure, nopass :: read_sounding_location
      procedure, nopass :: read_bad_sample_list
@@ -113,11 +115,13 @@ contains
     MCS%general%N_frame = n_frames
     MCS%general%N_fp = n_fp
 
-    ! OCO-2, we have three bands
-    MCS%general%N_bands = 3
+    call get_HDF5_dset_dims(file_id, "/InstrumentHeader/measureable_signal_max_observed", dim_spec)
+    ! OCO-2, we have three bands, but we grab the value from this data instead
+    MCS%general%N_bands = dim_spec(1)
 
     ! And we can grab the number of pixels per band individually
     allocate(MCS%general%N_spec(MCS%general%N_bands))
+    MCS%general%N_spec(:) = 1
 
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", dim_spec)
     MCS%general%N_spec(1) = dim_spec(1)

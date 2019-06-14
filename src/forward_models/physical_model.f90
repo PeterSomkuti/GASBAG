@@ -168,7 +168,7 @@ contains
     ! Do MET or ECMWF groups exist in the MET file?
     logical :: MET_exists, ECMWF_exists
     ! Does a spike/bad_sample data field exist?
-    logical :: spike_exists, bad_sample_exists, result_exists
+    logical :: spike_exists, bad_sample_exists, result_exists, met_sounding_exists
     ! Fixed dimensions for the arrays to be saved into the output HDF file
     integer(hsize_t) :: out_dims2d(2), out_dims3d(3)
     ! Dimensions for the read-in of MET/L1b data
@@ -246,13 +246,19 @@ contains
 
           ! We can check if the MET and L1B match up by comparing the sounding_id
           ! field in both files - which should be identical!
-          call my_instrument%read_sounding_ids(met_file_id, sounding_ids_met)
+          call h5lexists_f(met_file_id, "/SoundingGeometry/sounding_id", &
+               met_sounding_exists, hdferr)
+          if (met_sounding_exists) then
+             call my_instrument%read_sounding_ids(met_file_id, sounding_ids_met)
 
-          if (all(sounding_ids == sounding_ids_met)) then
-             call logger%debug(fname, "L1B and MET have same Sounding IDs - good.")
+             if (all(sounding_ids == sounding_ids_met)) then
+                call logger%debug(fname, "L1B and MET have same Sounding IDs - good.")
+             else
+                call logger%error(fname, "L1B and MET have differing Sounding IDs!")
+                stop 1
+             end if
           else
-             call logger%error(fname, "L1B and MET have differing Sounding IDs!")
-             stop 1
+             call logger%debug(fname, "MET does not have Sounding IDs - cannot verify if files match.")
           end if
        end if
 
@@ -481,6 +487,8 @@ contains
        ! Surface pressure
        ! Solar shift and stretch
        ! Gas scalar factor defined on level ranges
+       ! ILS stretch/squeeze factor
+       ! Temperature offset
 
        ! Parsing the statevector string, that was passed in the window
        ! section and initialize the state vector SV accordingly. This subroutine
@@ -627,8 +635,9 @@ contains
              do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(global_SV%gas_idx_lookup(i),:))
 
                 if (global_SV%gas_idx_lookup(i) == j) then
-                   write(tmp_str, "(A, A, A)") trim(group_name) // "/", &
-                        results%SV_names(global_SV%idx_gas(i,1))%chars(), "_ndry"
+                   write(tmp_str, "(A,A,A,A)") trim(group_name) // "/", &
+                        results%SV_names(global_SV%idx_gas(i,1))%chars(), &
+                        "_ndry_", MCS%general%code_name
                    call logger%info(fname, "Writing out: " // trim(tmp_str))
                    call write_DP_hdf_dataset(output_file_id, &
                         trim(tmp_str), &
@@ -660,16 +669,16 @@ contains
             trim(tmp_str), results%num_iterations(:,:), out_dims2d, -9999)
 
        ! Save converged status
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged_" &
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged_flag_" &
             // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/converged", MCS%general%code_name
+       write(tmp_str, '(A,A,A)') trim(group_name), "/converged_flag_", MCS%general%code_name
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), results%converged(:,:), out_dims2d, -9999)
 
        ! Retrieved CHI2
        call logger%info(fname, "Writing out: " // trim(group_name) // "/reduced_chi_squared_" &
             // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_ ", MCS%general%code_name
+       write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
 
@@ -843,6 +852,7 @@ contains
     ! Number of spectral points for low-res and hires grid,
     ! number of state vector elements.
     integer :: N_spec, N_spec_hi, N_sv
+    integer :: center_pixel, center_pixel_hi
 
     ! Solar stuff
     ! Solar distance, solar relative velocity, earth relative velocity, and
@@ -1113,8 +1123,9 @@ contains
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
-    N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
+    !N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
+
     ! Set the initial LM-Gamma parameter
     lm_gamma = MCS%window(i_win)%lm_gamma
 
@@ -1356,7 +1367,7 @@ contains
              albedo = 0.0d0
              do i=1, SV%num_albedo
                 albedo = albedo + SV%svsv(SV%idx_albedo(i)) &
-                     * ((hires_grid(:) - hires_grid(1)) ** (dble(i-1)))
+                     * ((hires_grid(:) - hires_grid(center_pixel_hi)) ** (dble(i-1)))
              end do
           endif
 
@@ -1502,13 +1513,15 @@ contains
                       if (SV%gas_idx_lookup(i) /= j) cycle
 
                       if (s_stop(i) - s_start(i) == 1) then
-                         write(tmp_str, '(A,A)') "Scale factor index error for ", results%SV_names(SV%idx_gas(i,1))%chars()
+                         write(tmp_str, '(A,A)') "Scale factor index error for ", &
+                              results%SV_names(SV%idx_gas(i,1))%chars()
                          call logger%error(fname, trim(tmp_str))
-                         write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), SV%gas_retrieve_scale_stop(i)
+                         !write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), &
+                         !     SV%gas_retrieve_scale_stop(i)
 
-                         do l=1, num_levels
-                            write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
-                         end do
+                         !do l=1, num_levels
+                         !   write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
+                         !end do
 
                          return
                       end if
@@ -1634,6 +1647,9 @@ contains
        ! Number of spectral points in the output resolution
        N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
 
+       center_pixel = N_spec / 2
+       center_pixel_hi = N_spec_hi / 2
+
        ! Allocate various arrays that depend on N_spec
        allocate(K(N_spec, N_sv))
        allocate(gain_matrix(N_sv, N_spec))
@@ -1685,10 +1701,11 @@ contains
        ! wavelength: dsolar_dlambda
        if ((SV%num_solar_shift == 1) .or. (SV%num_solar_stretch == 1)) then
 
+          allocate(solar_tmp(N_hires))
           call calculate_solar_jacobian(this_solar(:,1), this_solar(:,2), &
                solar_irrad, hires_grid, solar_tmp, dsolar_dlambda)
 
-          this_solar(:,2) = solar_tmp(:) * solar_irrad(:)
+          this_solar(:,2) = solar_tmp(:)
           deallocate(solar_tmp)
 
        end if
@@ -1773,7 +1790,7 @@ contains
           case (RT_BEER_LAMBERT)
              do i=1, SV%num_albedo
                 call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo, albedo, &
-                     hires_grid, i, K_hi(:, SV%idx_albedo(i)))
+                     hires_grid, center_pixel_hi, i, K_hi(:, SV%idx_albedo(i)))
              end do
           case default
              call logger%error(fname, "Albedo Jacobian not implemented " &
@@ -1860,7 +1877,7 @@ contains
           do i=1, N_spec
              do j=1, SV%num_ils_stretch
                 this_ILS_stretch(i) = this_ILS_stretch(i) &
-                     + (dble(i) ** (j-1) * SV%svsv(SV%idx_ils_stretch(j)))
+                     + (dble(i - center_pixel) ** (j-1) * SV%svsv(SV%idx_ils_stretch(j)))
              end do
           end do
        end if
@@ -1972,7 +1989,7 @@ contains
                   ILS_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_ILS_stretch, this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
                   l1b_wl_idx_min, l1b_wl_idx_max, &
-                  hires_grid, radiance_calc_work, &
+                  hires_grid, center_pixel, radiance_calc_work, &
                   radiance_calc_work_hi, K(:, SV%idx_ils_stretch(i)))
           end do
        end if
@@ -2311,6 +2328,14 @@ contains
           close(funit)
           call logger%debug(fname, "Written file: spectra.dat (wavelength, measured, modelled, noise)")
 
+          open(file="hires_spectra.dat", newunit=funit)
+          do i=1, N_hires
+             write(funit, *) radiance_calc_work_hi(i)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: hires_spectra.dat (modelled)")
+
+
           if (num_active_levels > 0) then
              call logger%debug(fname, "Model atmosphere: (pressure, gas vmrs, ndry)")
              call logger%debug(fname, "Gas names: ")
@@ -2324,9 +2349,19 @@ contains
              end do
           end if
 
+          call logger%debug(fname, "---------------------------------")
 
           write(tmp_str, '(A,G0.1)') "Iteration: ", iteration
           call logger%debug(fname, trim(tmp_str))
+
+
+          if ((iteration == 1) .and. allocated(scale_first_guess)) then
+             do i=1, size(scale_first_guess)
+                write(tmp_str, '(A,G0.1,A,F15.5)') "Scale factor first guess #", &
+                     i, ": ", scale_first_guess(i)
+                call logger%debug(fname, trim(tmp_str))
+             end do
+          end if
 
           write(tmp_str,*) "SV index, SV name, SV prior, SV last iteration, " &
                // "SV current, SV delta, prior cov., posterior cov., diagonal of AK"
@@ -2391,7 +2426,6 @@ contains
        end if
 
     end do
-    !read(*,*)
 
   end function physical_FM
 

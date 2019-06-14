@@ -252,14 +252,14 @@ contains
        ! We are retrieving DISPERSION!
        if (split_string(i)%lower() == "dispersion") then
           ! Dispersion order needs to be > 0
-          if (MCS%window(i_win)%dispersion_order <= 0) then
+          if (MCS%window(i_win)%dispersion_order < 0) then
              call logger%fatal(fname, "We are retrieving dispersion, but the dispersion order " &
-                  // "needs to be > 0. Check if you've supplied a sensible value (or at all).")
+                  // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
              stop 1
           else
              ! Dispersion order 1 means shift, 2 is stretch etc., this is not quite
              ! consistent with the albedo order notation, but whatever.
-             num_dispersion_parameters = MCS%window(i_win)%dispersion_order
+             num_dispersion_parameters = MCS%window(i_win)%dispersion_order + 1
 
              ! We MUST have at least the same number of dispersion perturbation
              ! elements.
@@ -283,12 +283,12 @@ contains
        ! We are retrieving ILS stretch!
        if (split_string(i)%lower() == "ils_stretch") then
           ! Stretch order needs to be > 0
-          if (MCS%window(i_win)%ils_stretch_order <= 0) then
+          if (MCS%window(i_win)%ils_stretch_order < 0) then
              call logger%fatal(fname, "We are retrieving ILS stretch, but the ILS stretch order " &
-                  // "needs to be > 0. Check if you've supplied a sensible value (or at all).")
+                  // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
              stop 1
           else
-             num_ils_stretch_parameters = MCS%window(i_win)%ils_stretch_order
+             num_ils_stretch_parameters = MCS%window(i_win)%ils_stretch_order + 1
 
              ! We MUST have at least the same number of dispersion perturbation
              ! elements.
@@ -767,27 +767,27 @@ contains
        ! ZLO name
        do j=1, SV%num_zlo
           if (SV%idx_zlo(j) == i) then
-             write(tmp_str, '(A)') "zlo"
+             write(tmp_str, '(A)') "zero_level_offset"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
 
        do j=1, SV%num_temp
           if (SV%idx_temp(j) == i) then
-             write(tmp_str, '(A)') "temperature_"
+             write(tmp_str, '(A)') "temperature_offset"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do
 
        ! Solar shift name
        if (SV%idx_solar_shift(1) == i) then
-          write(tmp_str, '(A,A)') "solar_shift_"
+          write(tmp_str, '(A,A)') "solar_shift"
           results%sv_names(i) = trim(tmp_str)
        end if
 
        ! Solar stretch name
        if (SV%idx_solar_stretch(1) == i) then
-          write(tmp_str, '(A)') "solar_stretch_"
+          write(tmp_str, '(A)') "solar_stretch"
           results%sv_names(i) = trim(tmp_str)
        end if
 

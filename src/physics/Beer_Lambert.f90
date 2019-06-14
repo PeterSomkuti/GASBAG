@@ -96,16 +96,17 @@ contains
     !> @param albedo_coeff Which albedo order?
     !> @param albedo_jacobian dI/dAlbedoCoeff
     subroutine calculate_BL_albedo_jacobian(TOA_radiance, albedo_array, hires_grid, &
-         albedo_coeff, albedo_jacobian)
+         center_pixel, albedo_coeff, albedo_jacobian)
       implicit none
       double precision, intent(in) :: TOA_radiance(:)
       double precision, intent(in) :: albedo_array(:)
       double precision, intent(in) :: hires_grid(:)
+      integer, intent(in) :: center_pixel
       integer, intent(in) :: albedo_coeff
       double precision, intent(inout) :: albedo_jacobian(:)
 
       albedo_jacobian(:) = TOA_radiance(:) / albedo_array(:) * &
-           ((hires_grid(:) - hires_grid(1)) ** dble(albedo_coeff-1))
+           ((hires_grid(:) - hires_grid(center_pixel)) ** dble(albedo_coeff-1))
 
     end subroutine calculate_BL_albedo_jacobian
 

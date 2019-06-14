@@ -75,14 +75,19 @@ program GeoCARBSIF
      stop 1
   end if
 
-  ! Open up the output HDF5 file for writing and save the HDF5 file handler in
-  ! MCS to be used all over the program. The default behaviour (from now on)
-  ! is to abort if the file already exists. Overwriting can be dangerous!!
-  call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
-       MCS%output%output_file_id, hdferr)
+  ! If the user chooses to overwrite the output, use the H5F_ACC_TRUNC_F key
+  ! which does exactly that. If not, use H5F_ACC_EXCL_F, which will return
+  ! with an error that we catch afterwards (and terminate the program).
+  if (MCS%output%overwrite_output) then
+     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_TRUNC_F, &
+          MCS%output%output_file_id, hdferr)
+  else
+     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
+          MCS%output%output_file_id, hdferr)
 
-  call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
-       // trim(MCS%output%output_filename%chars()))
+     call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
+          // trim(MCS%output%output_filename%chars()))
+  end if
 
   select type(my_instrument)
   type is (oco2_instrument)

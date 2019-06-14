@@ -39,7 +39,7 @@ module control_mod
   integer, parameter :: MAX_GASES = 10
 
   type, private :: CS_general
-     character(len=6) :: code_name = "gasbag"
+     character(len=3) :: code_name = "gbg"
      !> Number of soundings to be processed
      integer :: N_soundings
      !> Number of frames and footprints
@@ -178,6 +178,8 @@ module control_mod
      integer(hid_t) :: output_file_id
      !> Do we want to save radiances?
      logical :: save_radiances
+     !> Do we want to override the output file?
+     logical :: overwrite_output
   end type CS_output
 
   type :: CS_gas
@@ -495,6 +497,15 @@ contains
        MCS%output%save_radiances = .false.
     else
        MCS%output%save_radiances = string_to_bool(fini_string)
+    end if
+
+    call fini_extract(fini, 'output', 'overwrite_output', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%output%overwrite_output = .false.
+    else
+       MCS%output%overwrite_output = string_to_bool(fini_string)
     end if
 
     ! ----------------------------------------------------------------------

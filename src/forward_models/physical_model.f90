@@ -132,6 +132,7 @@ module physical_model_mod
   !> The solar (pseudo-transmittance) spectrum on the regular wavelength grid (wavelength, transmission)
   double precision, allocatable :: solar_spectrum_regular(:,:)
   !> The number of solar spectrum points (as read from the file)
+  double precision, allocatable :: solar_continuum_from_hdf(:,:)
   integer :: N_solar
 
   !> Final modelled radiances (pixel, footprint, frame)
@@ -429,17 +430,26 @@ contains
        ! to keep the solar spectrum data as small as possible.
 
        if (MCS%algorithm%solar_type == "toon") then
-          call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+          call read_toon_solar_spectrum(MCS%algorithm%solar_file%chars(), &
                solar_spectrum, &
                MCS%window(i_win)%wl_min - hires_pad, &
                MCS%window(i_win)%wl_max + hires_pad)
 
-          N_solar = size(solar_spectrum, 1)
+       else if (MCS%algorithm%solar_type == "oco_hdf") then
+          call read_oco_hdf_solar_spectrum(MCS%algorithm%solar_file%chars(), &
+               band, &
+               solar_spectrum, &
+               solar_continuum_from_hdf, &
+               MCS%window(i_win)%wl_min - hires_pad, &
+               MCS%window(i_win)%wl_max + hires_pad)
        else
           call logger%fatal(fname, "Sorry, solar model type " &
                // MCS%algorithm%solar_type%chars() &
                // " is not known.")
        end if
+
+       ! Need this
+       N_solar = size(solar_spectrum, 1)
 
        ! And we also need the solar spectrum on our user-defined
        ! high-resolution wavelength grid.
@@ -750,6 +760,7 @@ contains
 
        ! Deallocate arrays that are allocated on per-window basis
        deallocate(solar_spectrum_regular, solar_spectrum, hires_grid)
+       if (allocated(solar_continuum_from_hdf)) deallocate(solar_continuum_from_hdf)
 
        ! Clear and deallocate the SV structure to be ready for the next window.
        ! We really shouldn't need to check if this is deallocated already or not,
@@ -1149,9 +1160,7 @@ contains
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
-    ! Allocate Solar continuum (irradiance) array. We do this here already,
-    ! since it's handy to have it for estimating the albedo.
-    allocate(solar_irrad(N_hires))
+
 
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
     allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
@@ -1171,10 +1180,26 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
-       ! take that into account for the incoming solar irradiance
-       call calculate_solar_planck_function(6500.0d0, solar_dist, &
-            solar_spectrum_regular(:,1), solar_irrad)
+       allocate(solar_irrad(N_hires))
+       if (MCS%algorithm%solar_type == "toon") then
+          ! Allocate Solar continuum (irradiance) array. We do this here already,
+          ! since it's handy to have it for estimating the albedo
+
+          ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
+          ! take that into account for the incoming solar irradiance
+          call calculate_solar_planck_function(6500.0d0, solar_dist, &
+               solar_spectrum_regular(:,1), solar_irrad)
+       else if (MCS%algorithm%solar_type == "oco-hdf") then
+
+          call pwl_value_1d( &
+               N_solar, &
+               solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
+               N_hires, &
+               solar_spectrum_regular(:,1), solar_irrad(:))
+
+       end if
+       ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
+       ! comes with its own irradiance
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
             (1.0d0 * maxval(solar_irrad) * mu0)

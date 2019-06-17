@@ -846,7 +846,7 @@ contains
     integer :: num_used
     double precision, allocatable :: adata(:,:), bdata(:,:)
     double precision, allocatable :: work(:)
-    integer :: sgels_info
+    integer :: dgels_info
     character(len=*), parameter :: fname = "slope_correction"
 
     integer :: i, cnt
@@ -898,9 +898,9 @@ contains
          num_used, &     ! LDB
          work, &         ! WORK
          2*num_used, &   ! LWORK
-         sgels_info)
+         dgels_info)
 
-    if (sgels_info /= 0) then
+    if (dgels_info /= 0) then
        call logger%fatal(fname, "Error from DGELS.")
        stop 1
     end if

@@ -841,7 +841,6 @@ contains
     double precision :: mu0, mu ! cos(sza) and cos(vza)
     ! Epoch, which is just the date split into an integer array
     integer, dimension(7) :: epoch
-    double precision :: solar_distance, solar_velocity
 
     ! Instrument stuff
     ! Instrument doppler shift based on relative motion between ground footprint
@@ -1074,6 +1073,8 @@ contains
 
     ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
+
+    ! Epoch is needed by the MS3 solar doppler code
     epoch(1) = date%getYear()
     epoch(2) = date%getMonth()
     epoch(3) = date%getDay()
@@ -1126,9 +1127,9 @@ contains
 
        ! For space-solar observation mode, the doppler is obviously different
        ! so we need to change the calculation slightly.
-       call solar_distance_and_velocity_v2(epoch, solar_distance, solar_velocity)
+       call solar_distance_and_velocity_v2(epoch, solar_dist, solar_rv)
 
-       instrument_doppler = solar_velocity / SPEED_OF_LIGHT
+       instrument_doppler = solar_rv / SPEED_OF_LIGHT
        solar_doppler = 0.0d0
     end if
 
@@ -1189,7 +1190,8 @@ contains
           ! take that into account for the incoming solar irradiance
           call calculate_solar_planck_function(6500.0d0, solar_dist, &
                solar_spectrum_regular(:,1), solar_irrad)
-       else if (MCS%algorithm%solar_type == "oco-hdf") then
+
+       else if (MCS%algorithm%solar_type == "oco_hdf") then
 
           call pwl_value_1d( &
                N_solar, &
@@ -1197,6 +1199,10 @@ contains
                N_hires, &
                solar_spectrum_regular(:,1), solar_irrad(:))
 
+          solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
+
+       else
+          call logger%error(fname, "Solar type: " // MCS%algorithm%solar_type%chars() // "is unknown.")
        end if
        ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
        ! comes with its own irradiance
@@ -1715,11 +1721,27 @@ contains
        this_solar(:,1) = this_solar_shift + &
             this_solar_stretch * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
 
-       call calculate_solar_planck_function(6500.0d0, solar_dist, &
-            this_solar(:,1), solar_irrad)
+       if (MCS%algorithm%solar_type == "toon") then
+          call calculate_solar_planck_function(6500.0d0, solar_dist, &
+               this_solar(:,1), solar_irrad)
+          ! And multiply to get the full solar irradiance in physical units
+          this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
+       else if (MCS%algorithm%solar_type == "oco_hdf") then
 
-       ! And multiply to get the full solar irradiance in physical units
-       this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
+          ! Have to manually re-allocate solar_irrad, which is done in the
+          ! calculate_solar_planck_function subroutine.
+          if (allocated(solar_irrad)) deallocate(solar_irrad)
+          allocate(solar_irrad(size(this_solar, 1)))
+
+          call pwl_value_1d_v2( &
+               N_solar, &
+               solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
+               size(this_solar, 1), &
+               this_solar(:,1), solar_irrad(:))
+
+          solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
+          this_solar(:,2) = solar_spectrum_regular(:,2) * solar_irrad(:)
+       end if
 
        ! If we retrieve either solar shift or stretch (or both), then we
        ! need to know the partial derivative of the solar spectrum w.r.t.
@@ -2297,8 +2319,13 @@ contains
 
        end if
 
+
+       !---------------------------------------------------------------------
+       ! STEP-THROUGH MODE
+       !---------------------------------------------------------------------
+
        ! If the user requests a step-through, then we print a bunch of debug information about
-       ! the retrieval for each iteration and wait for a return
+       ! the retrieval for each iteration and wait for a return by the user
        if (MCS%algorithm%step_through) then
 
           call logger%debug(fname, "---------------------------------")

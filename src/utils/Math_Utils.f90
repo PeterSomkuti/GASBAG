@@ -30,6 +30,7 @@ module math_utils_mod
   double precision, parameter :: PLANCK_CONST = 6.62607015d-34
   double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
   double precision, parameter :: SOLAR_RADIUS = 695.660d6 ! [m]
+  double precision, parameter :: AU_UNIT = 149597870d3 ! [m]
 
 contains
 

@@ -114,7 +114,12 @@ contains
   end subroutine read_toon_solar_spectrum
 
 
-
+  !> @brief Subroutine to load an oco-type solar spectrum from an HDF file
+  !> @param filename Path to the hdf file
+  !> @param solar_spectrum Output array containing the transmittance spectrum
+  !> @param solar_irrad Output array containing the solar continuum
+  !> @param wl_min Lower wavelength at which the spectrum will be truncated
+  !> @param wl_max Higher wavelength at which the spectrum will be truncated
   subroutine read_oco_hdf_solar_spectrum(filename, band, solar_spectrum, solar_irrad, &
        wl_min, wl_max)
 
@@ -142,6 +147,9 @@ contains
     double precision, allocatable :: work(:)
     integer :: dgels_info
 
+    ! Some constants that we need for the calculations
+    double precision :: solar_solid_angle, solar_angular_radius
+
     integer :: i, j
 
     ! Open the HDF file
@@ -152,7 +160,7 @@ contains
     write(dset_name, '(A,I1,A)') "/Solar/Absorption/Absorption_", band, "/wavenumber"
     call read_DP_hdf_dataset(solar_file_id, trim(dset_name), tmp_array, solar_shape)
 
-    ! Convert to microns
+    ! Convert to microns and flip array
     tmp_array(:) = 1.0d4 / tmp_array(size(tmp_array):1:-1)
 
     if (wl_min < tmp_array(1)) then
@@ -186,6 +194,8 @@ contains
     write(dset_name, '(A,I1,A)') "/Solar/Absorption/Absorption_", band, "/spectrum"
     call read_DP_hdf_dataset(solar_file_id, trim(dset_name), tmp_array, solar_shape)
 
+    ! Flip spectrum and slice accordingly to requested limits
+    tmp_array(:) = tmp_array(size(tmp_array):1:-1)
     solar_spectrum(:,2) = tmp_array(wl_idx_min:wl_idx_max)
     deallocate(tmp_array)
 
@@ -205,7 +215,7 @@ contains
     num_used = size(tmp_array)
 
     ! Had a quick look - for OCO-type HDF spectra, looks like you want
-    ! a fifth-order polynomial at least.
+    ! a fifth-order polynomial at least.ls
     Npoly = 5
     allocate(adata(num_used, Npoly))
     allocate(bdata(num_used, 1))

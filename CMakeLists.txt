@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 cmake_policy(SET CMP0074 NEW)
 
-project(GeoCARBSIF)
-set(PROJECT_DESCRIPTION "GeoCARB SIF Retrieval Algorithm")
+project(GASBAG)
+set(PROJECT_DESCRIPTION "Generic Algorithm for Single Band Acquisition of Gases - GASBAG")
 enable_language(Fortran)
 
 # This contains extra CMAKE modules to find NetCDF libraries
@@ -68,7 +68,6 @@ set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg -fprofile-arcs -ftest-coverage")
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
 find_package(HDF5 REQUIRED COMPONENTS Fortran)
-#find_package(NETCDF REQUIRED COMPONENTS Fortran)
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 
@@ -96,20 +95,18 @@ set_source_files_properties(
 )
 
 # Define the executable
-add_executable(GeoCARBSIF ${sources} ${third-party} ${generated})
+add_executable(GASBAG ${sources} ${third-party} ${generated})
 
-#message(STATUS "HDF5-HL Libraries at -- " ${HDF5_Fortran_HL_LIBRARIES})
 message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
 # HDF5 needs to be included at compile time already
-target_include_directories(GeoCARBSIF PUBLIC ${HDF5_Fortran_INCLUDE_DIRS} ${HDF5_Fortran_HL_INCLUDE_DIRS}
+target_include_directories(GASBAG PUBLIC ${HDF5_Fortran_INCLUDE_DIRS}
 #${GPERFTOOLS_INCLUDE_DIR}
 )
-target_link_libraries(GeoCARBSIF
-${LAPACK_LIBRARIES} ${BLAS_LIBRARIES}
-#-L/usr/lib -llapack -lblas
+target_link_libraries(GASBAG
+${LAPACK_LIBRARIES}
+${BLAS_LIBRARIES}
 ${HDF5_Fortran_LIBRARIES}
-#${HDF5_Fortran_HL_LIBRARIES}
 )
 
 # This is needed for Gperfmonitor (or the profiler portion of it) to work

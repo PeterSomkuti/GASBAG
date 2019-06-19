@@ -1,5 +1,5 @@
-!> @brief Main GeoCARB SIF Retrieval Program
-!> @file GeoCARBSIF_main.f90
+!> @brief Main GASBAG Retrieval Program
+!> @file GASBAG_main.f90
 !> @author Peter Somkuti
 !>
 !! This is where it all starts. This main program calls functions to read in
@@ -9,7 +9,7 @@
 !! After the retrievals are done, the remaining open HDF files are closed, and the
 !! program terminates with a zero exit code.
 
-program GeoCARBSIF
+program GASBAG
 
   !! User modules
   use startup_mod, only: initialize_config
@@ -118,4 +118,4 @@ program GeoCARBSIF
   ! Say goodbye
   call logger%info("Main", "That's all, folks!")
 
-end program GeoCARBSIF
+end program GASBAG

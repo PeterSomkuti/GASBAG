@@ -341,7 +341,7 @@ contains
 
     logical :: found_option
     character(len=*), parameter :: fname = "fini_extract"
-    integer :: fini_error, section_index
+    integer :: fini_error
 
     value = -9999
     include "Fini_extract.inc"
@@ -362,7 +362,7 @@ contains
 
     logical :: found_option
     character(len=*), parameter :: fname = "fini_extract"
-    integer :: fini_error, section_index
+    integer :: fini_error
 
     value = -9999.99d0
     include "Fini_extract.inc"
@@ -386,7 +386,7 @@ contains
     logical :: found_option
     character(len=*), parameter :: fname = "fini_extract"
     character(len=999) :: tmp_str
-    integer :: fini_error, section_index
+    integer :: fini_error
     type(string) :: fini_string
     type(string), allocatable :: split_strings(:)
     integer :: i
@@ -446,8 +446,7 @@ contains
 
     logical :: found_option
     character(len=*), parameter :: fname = "fini_extract"
-    character(len=999) :: tmp_str
-    integer :: fini_error, section_index
+    integer :: fini_error
     type(string) :: fini_string
     type(string), allocatable :: split_strings(:)
     integer :: i

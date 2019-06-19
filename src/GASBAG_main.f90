@@ -1,5 +1,5 @@
-!> @brief Main GeoCARB SIF Retrieval Program
-!> @file GeoCARBSIF_main.f90
+!> @brief Main GASBAG Retrieval Program
+!> @file GASBAG_main.f90
 !> @author Peter Somkuti
 !>
 !! This is where it all starts. This main program calls functions to read in
@@ -9,7 +9,7 @@
 !! After the retrievals are done, the remaining open HDF files are closed, and the
 !! program terminates with a zero exit code.
 
-program GeoCARBSIF
+program GASBAG
 
   !! User modules
   use startup_mod, only: initialize_config
@@ -43,12 +43,12 @@ program GeoCARBSIF
   end if
 
   ! Greet the user and display information about the build itself.
-
-  write(*,'(A)') "------------------------------"
-  write(*,'(A)') "╔═╗┌─┐┌─┐╔═╗╔═╗╦═╗╔╗   ╔═╗╦╔═╗"
-  write(*,'(A)') "║ ╦├┤ │ │║  ╠═╣╠╦╝╠╩╗  ╚═╗║╠╣ "
-  write(*,'(A)') "╚═╝└─┘└─┘╚═╝╩ ╩╩╚═╚═╝  ╚═╝╩╚  "
-  write(*,'(A)') "------------------------------"
+  write(*,'(A)') "========================================="
+  write(*,'(A)') " / ___|  / \  / ___|| __ )  / \  / ___|  "
+  write(*,'(A)') " | |  _  / _ \ \___ \|  _ \ / _ \| |  _  "
+  write(*,'(A)') " | |_| |/ ___ \ ___) | |_) / ___ | |_| | "
+  write(*,'(A)') " \____/_/   \_|____/|____/_/   \_\____|  "
+  write(*,'(A)') "========================================="
 
   write(*,'(A)') "Version [" // git_branch // " " // git_commit_hash // &
        " #" // git_rev_no // "]"
@@ -75,14 +75,19 @@ program GeoCARBSIF
      stop 1
   end if
 
-  ! Open up the output HDF5 file for writing and save the HDF5 file handler in
-  ! MCS to be used all over the program. The default behaviour (from now on)
-  ! is to abort if the file already exists. Overwriting can be dangerous!!
-  call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
-       MCS%output%output_file_id, hdferr)
+  ! If the user chooses to overwrite the output, use the H5F_ACC_TRUNC_F key
+  ! which does exactly that. If not, use H5F_ACC_EXCL_F, which will return
+  ! with an error that we catch afterwards (and terminate the program).
+  if (MCS%output%overwrite_output) then
+     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_TRUNC_F, &
+          MCS%output%output_file_id, hdferr)
+  else
+     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
+          MCS%output%output_file_id, hdferr)
 
-  call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
-       // trim(MCS%output%output_filename%chars()))
+     call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
+          // trim(MCS%output%output_filename%chars()))
+  end if
 
   select type(my_instrument)
   type is (oco2_instrument)
@@ -113,4 +118,4 @@ program GeoCARBSIF
   ! Say goodbye
   call logger%info("Main", "That's all, folks!")
 
-end program GeoCARBSIF
+end program GASBAG

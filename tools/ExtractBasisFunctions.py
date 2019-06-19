@@ -452,7 +452,6 @@ if __name__ == '__main__':
     # above that. Any spectrum with values larger than this one is kicked out.
     max_filter = 1.05
 
-
     ###########################################################################
 
 

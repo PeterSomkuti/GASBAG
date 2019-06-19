@@ -421,6 +421,8 @@ contains
     logical :: radiance_OK
     ! Was matrix inversion successful?
     logical :: success_inv_mat
+    ! Was slope normalization successful?
+    logical :: success_slope
     ! Temp. placeholder for CHI2 calculation
     double precision :: tmp_chi2
     ! Variables to hold the Bayesian information content
@@ -536,7 +538,11 @@ contains
     ! absorption/solar lines so the fit really goes for the continuum level signal.
     !
     ! 40% seems to work and there is no good reason now to change this.
-    call slope_correction(radiance_work, 40.0d0, fit_intercept)
+    call slope_correction(radiance_work, 40.0d0, fit_intercept, success_slope)
+    if (.not. success_slope) then
+       call logger%error(fname, "Slope normalization failed!")
+       return
+    end if
     ! And we have our "y" mesurement vector ready!!
 
     ! Calculate the inverse(!) noise matrix Se_inv
@@ -828,30 +834,39 @@ contains
   end subroutine calculate_xhat
 
 
-  subroutine slope_correction(radiance, perc, intercept)
+  subroutine slope_correction(radiance, perc, intercept, success)
 
     implicit none
     double precision, intent(inout) :: radiance(:)
     double precision, intent(in) :: perc
     double precision, intent(inout) :: intercept
+    logical, intent(inout) :: success
 
     double precision :: perc_value
     integer :: num_used
     double precision, allocatable :: adata(:,:), bdata(:,:)
     double precision, allocatable :: work(:)
-    integer :: sgels_info
+    integer :: dgels_info
     character(len=*), parameter :: fname = "slope_correction"
 
     integer :: i, cnt
     ! Slope normalization works like this: first, we grab the top X percent
     ! all radiance points (to make sure we mostly have continuum). X ~ 60
     ! After that, we fit a linear function through these points to get
-    ! slope and intersect - by which linear function we then divide the
+    ! slope and intersect - by which function we then divide the
     ! radiance.
+
+    success = .false.
 
     ! This is the percentile value from the radiance array
     perc_value = percentile(radiance, perc)
     num_used = count(radiance > perc_value)
+
+    if (num_used <= 2) then
+       ! Could not find more than 2 points to be used for slope correction?
+       return
+    end if
+
 
     ! We need a new container for values ABOVE the percentile one
     allocate(adata(num_used, 2))
@@ -883,9 +898,9 @@ contains
          num_used, &     ! LDB
          work, &         ! WORK
          2*num_used, &   ! LWORK
-         sgels_info)
+         dgels_info)
 
-    if (sgels_info /= 0) then
+    if (dgels_info /= 0) then
        call logger%fatal(fname, "Error from DGELS.")
        stop 1
     end if
@@ -897,6 +912,7 @@ contains
     end do
 
     intercept = bdata(1,1)
+    success = .true.
 
   end subroutine slope_correction
 

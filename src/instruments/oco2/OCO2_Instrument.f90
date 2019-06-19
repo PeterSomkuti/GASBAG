@@ -19,6 +19,7 @@ module oco2_mod
   ! System modules
   use HDF5
   use OMP_LIB
+  use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
@@ -27,20 +28,24 @@ module oco2_mod
   type, extends(generic_instrument), public :: oco2_instrument
    contains
      procedure, nopass :: scan_l1b_file
-     procedure, nopass :: read_l1b_dispersion
-     procedure, nopass :: read_l1b_snr_coef
+
      procedure, nopass :: calculate_dispersion
-     procedure, nopass :: read_one_spectrum
      procedure, nopass :: calculate_noise
      procedure, nopass :: check_radiance_valid
+     procedure, nopass :: convert_time_string_to_date
+
      procedure, nopass :: read_sounding_ids
      procedure, nopass :: read_time_strings
-     procedure, nopass :: convert_time_string_to_date
+     procedure, nopass :: read_l1b_dispersion
+     procedure, nopass :: read_l1b_snr_coef
      procedure, nopass :: read_ils_data
+     procedure, nopass :: read_one_spectrum
+     procedure, nopass :: read_spectra_and_average_by_fp
      procedure, nopass :: read_sounding_geometry
      procedure, nopass :: read_sounding_location
      procedure, nopass :: read_bad_sample_list
      procedure, nopass :: read_spike_filter
+     procedure, nopass :: read_MET_data
   end type oco2_instrument
 
 
@@ -58,38 +63,65 @@ contains
     character(len=999) :: msg
     integer(hid_t) :: file_id
     integer(8), allocatable :: n_fp_frames(:), dim_spec(:)
+    logical :: sounding_id_exists, radiance_o2_exists
     integer :: hdferr
+    integer :: n_fp, n_frames
 
     ! Open the HDF file
     call h5fopen_f(l1b_file%chars(), H5F_ACC_RDONLY_F, file_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening HDF file: " // trim(l1b_file%chars()))
 
     ! Let's start with the sounding IDs and have a look how many frames and footprints
-    ! we actually have in this file.
-    call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
-    if (size(n_fp_frames) /= 2) then
-       call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
+    ! we actually have in this file. This only works for downlooking L1B files. Solar
+    ! limb scans do not have the sounding_id field.
+
+    call h5lexists_f(file_id, "/SoundingGeometry/sounding_id", sounding_id_exists, hdferr)
+    call h5lexists_f(file_id, "/SoundingMeasurements/radiance_o2", radiance_o2_exists, hdferr)
+
+    if (sounding_id_exists) then
+       call get_HDF5_dset_dims(file_id, "/SoundingGeometry/sounding_id", n_fp_frames)
+       if (size(n_fp_frames) /= 2) then
+          call logger%fatal(fname, "This array -n_fp_frames- should be of size 2. But it isn't.")
+          stop 1
+       end if
+
+       n_fp = n_fp_frames(1)
+       n_frames = n_fp_frames(2)
+    else if (radiance_o2_exists) then
+       call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", n_fp_frames)
+       if (size(n_fp_frames) /= 3) then
+          call logger%fatal(fname, "This array -n_fp_frames- should be of size 3. But it isn't.")
+          stop 1
+       end if
+
+       n_fp = n_fp_frames(2)
+       n_frames = n_fp_frames(3)
+    else
+       call logger%fatal(fname, "Error in determining the frame/footprint file structure.")
        stop 1
     end if
 
+
     ! Let the user know how many
-    write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp_frames(1), &
-         ", number of frames: ", n_fp_frames(2)
+    write(msg, "(A, G0.1, A, G0.1)") "Number of footprints: ", n_fp, &
+         ", number of frames: ", n_frames
     call logger%info(fname, trim(msg))
-    write(msg, "(A, G0.1, A)") "For a total of ", n_fp_frames(1)*n_fp_frames(2), " soundings."
+    write(msg, "(A, G0.1, A)") "For a total of ", n_fp * n_frames, " soundings."
     call logger%info(fname, trim(msg))
 
     ! Store the total number of soundings to be processed in the MCS. We need
     ! that later to allocate all those big arrays.
-    MCS%general%N_soundings = n_fp_frames(1)*n_fp_frames(2)
-    MCS%general%N_frame = n_fp_frames(2)
-    MCS%general%N_fp = n_fp_frames(1)
+    MCS%general%N_soundings = n_fp * n_frames
+    MCS%general%N_frame = n_frames
+    MCS%general%N_fp = n_fp
 
-    ! OCO-2, we have three bands
-    MCS%general%N_bands = 3
+    call get_HDF5_dset_dims(file_id, "/InstrumentHeader/measureable_signal_max_observed", dim_spec)
+    ! OCO-2, we have three bands, but we grab the value from this data instead
+    MCS%general%N_bands = dim_spec(1)
 
     ! And we can grab the number of pixels per band individually
     allocate(MCS%general%N_spec(MCS%general%N_bands))
+    MCS%general%N_spec(:) = 1
 
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", dim_spec)
     MCS%general%N_spec(1) = dim_spec(1)
@@ -267,6 +299,48 @@ contains
   end subroutine read_one_spectrum
 
 
+  subroutine read_spectra_and_average_by_fp(l1b_file_id, i_fp, band, N_spec, radiance_l1b)
+
+    integer(hid_t) :: l1b_file_id
+    integer, intent(in) :: i_fp, band, N_spec
+    double precision, allocatable, intent(inout) :: radiance_l1b(:)
+
+    character(len=*), parameter :: fname = "read_spectra_and_average_by_fp(oco2)"
+    double precision, allocatable :: tmp_radiance(:)
+    integer :: i_fr, i, funit
+    logical :: radiance_OK
+    character(len=50) :: tmp_str
+
+    allocate(radiance_l1b(N_spec))
+    radiance_l1b(:) = 0.0d0
+
+    do i_fr=1, MCS%general%N_frame
+       call read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+            MCS%general%N_spec(band), tmp_radiance)
+
+       call check_radiance_valid(l1b_file_id, tmp_radiance, &
+            1, size(tmp_radiance), radiance_OK)
+
+       if (i_fr == 1) then
+          radiance_l1b(:) = tmp_radiance(:)
+          deallocate(tmp_radiance)
+          cycle
+       end if
+
+       if (radiance_OK) then
+          radiance_l1b(:) = (radiance_l1b(:) * dble(i_fr - 1)) / dble(i_fr) &
+               + (tmp_radiance(:) / i_fr)
+       else
+          cycle
+       end if
+
+       deallocate(tmp_radiance)
+
+    end do
+
+  end subroutine read_spectra_and_average_by_fp
+
+
   !> @brief Calculate the noise-equivalent radiances from the SNR coefficients
   !> @param snr_coefs SNR coefficients (coef, pixel, fp, band)
   !> @param radiance L1B Radiance
@@ -323,6 +397,10 @@ contains
        valid = .false.
     end if
 
+    if (any(ieee_is_nan(radiance))) then
+       valid = .false.
+    end if
+
   end subroutine check_radiance_valid
 
   !> @brief Read the whole sounding ID array
@@ -360,51 +438,63 @@ contains
 
     implicit none
     integer(hid_t), intent(in) :: l1b_file_id
-    character(len=25), dimension(:,:), allocatable, intent(out) :: time_strings
+    character(len=25), dimension(:), allocatable, intent(out) :: time_strings
     ! OCO-2 time strings have 24 characters!
     character(len=*), parameter :: fname = "read_time_strings"
     integer :: hdferr
     integer(hid_t) :: dset_id, filetype
     integer(hid_t), dimension(:), allocatable :: dset_dims
 
-    call h5dopen_f(l1b_file_id, "/SoundingGeometry/sounding_time_string", dset_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening: /SoundingGeometry/sounding_time_string")
+    call h5dopen_f(l1b_file_id, "/FrameHeader/frame_time_string", dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error opening: /FrameHeader/frame_time_string")
 
-    call get_HDF5_dset_dims(l1b_file_id, "/SoundingGeometry/sounding_time_string", dset_dims)
+    call get_HDF5_dset_dims(l1b_file_id, "/FrameHeader/frame_time_string", dset_dims)
 
     ! Difficult to figure out which kind of character-type we have in the HDF
     ! file, so let's just grab it.
     call h5dget_type_f(dset_id, filetype, hdferr)
 
-    allocate(time_strings(dset_dims(1), dset_dims(2)))
+    allocate(time_strings(dset_dims(1)))
     call h5dread_f(dset_id, filetype, time_strings, dset_dims, hdferr)
-    call check_hdf_error(hdferr, fname, "Error reading in: /SoundingGeometry/sounding_time_string")
+    call check_hdf_error(hdferr, fname, "Error reading in: /FrameHeader/frame_time_string")
 
   end subroutine read_time_strings
 
 
-  subroutine convert_time_string_to_date(time_string, date)
+  subroutine convert_time_string_to_date(time_string, date, success)
 
     ! Turn a OCO-2 time string into a datetype object
 
     implicit none
     character(len=25), intent(in) :: time_string
     type(datetime), intent(out) :: date
+    logical, intent(inout) :: success
+    integer :: iostat
     integer :: year, month, day, hour, minute, second, millisecond
 
+    success = .false.
     ! Grab the various fields/positions from the string and stick them into
     ! the corresponding date/time variables
-    read(time_string(1:4), *) year
-    read(time_string(6:7), *) month
-    read(time_string(9:10), *) day
-    read(time_string(12:13), *) hour
-    read(time_string(15:16), *) minute
-    read(time_string(18:19), *) second
-    read(time_string(21:23), *) millisecond
+    read(time_string(1:4), *, iostat=iostat) year
+    if (iostat /= 0) return
+    read(time_string(6:7), *, iostat=iostat) month
+    if (iostat /= 0) return
+    read(time_string(9:10), *, iostat=iostat) day
+    if (iostat /= 0) return
+    read(time_string(12:13), *, iostat=iostat) hour
+    if (iostat /= 0) return
+    read(time_string(15:16), *, iostat=iostat) minute
+    if (iostat /= 0) return
+    read(time_string(18:19), *, iostat=iostat) second
+    if (iostat /= 0) return
+    read(time_string(21:23), *, iostat=iostat) millisecond
+    if (iostat /= 0) return
 
     ! Create datetime object
     date = datetime(year, month, day, hour, minute, &
          second, millisecond)
+
+    success = .true.
 
   end subroutine convert_time_string_to_date
 
@@ -426,29 +516,70 @@ contains
 
     character(len=*), parameter :: fname = "read_sounding_geometry(oco2)"
     integer(hsize_t), dimension(:), allocatable :: dset_dims
-    double precision, dimension(:,:,:), allocatable :: tmp_array
+    double precision, dimension(:,:,:), allocatable :: tmp_array3d
+    double precision, dimension(:), allocatable :: tmp_array1d
+    integer :: i
 
     call logger%debug(fname, "Trying to allocate sounding location arrays.")
+    allocate(SZA(MCS%general%N_fp, MCS%general%N_frame))
+    allocate(SAA(MCS%general%N_fp, MCS%general%N_frame))
+    allocate(VZA(MCS%general%N_fp, MCS%general%N_frame))
+    allocate(VAA(MCS%general%N_fp, MCS%general%N_frame))
 
-    ! FootprintGeometry fields are (Band, FP, Frame)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_zenith", tmp_array, dset_dims)
-    allocate(SZA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    SZA(:,:) = tmp_array(band,:,:)
+    if (MCS%algorithm%observation_mode == "downlooking") then
 
-    deallocate(tmp_array)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_azimuth", tmp_array, dset_dims)
-    allocate(SAA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    SAA(:,:) = tmp_array(band,:,:)
+       ! FootprintGeometry fields are (Band, FP, Frame)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_zenith", &
+            tmp_array3d, dset_dims)
+       SZA(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
 
-    deallocate(tmp_array)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_zenith", tmp_array, dset_dims)
-    allocate(VZA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    VZA(:,:) = tmp_array(band,:,:)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_solar_azimuth", &
+            tmp_array3d, dset_dims)
+       SAA(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
 
-    deallocate(tmp_array)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_azimuth", tmp_array, dset_dims)
-    allocate(VAA(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    VAA(:,:) = tmp_array(band,:,:)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_zenith", &
+            tmp_array3d, dset_dims)
+       VZA(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
+
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_azimuth", &
+            tmp_array3d, dset_dims)
+       VAA(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
+
+    else if (MCS%algorithm%observation_mode == "space_solar") then
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/solar_zenith", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          SZA(i, :) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/boresight_zenith", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          VZA(i, :) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/solar_azimuth", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          SAA(i, :) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/boresight_azimuth", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          VAA(i, :) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+    end if
 
   end subroutine read_sounding_geometry
 
@@ -481,27 +612,61 @@ contains
 
     character(len=*), parameter :: fname = "read_sounding_location(oco2)"
     integer(hsize_t), dimension(:), allocatable :: dset_dims
-    double precision, dimension(:,:,:), allocatable :: tmp_array
+    double precision, dimension(:,:,:), allocatable :: tmp_array3d
+    double precision, dimension(:), allocatable :: tmp_array1d
+    integer :: i
 
+    allocate(lon(MCS%general%N_fp, MCS%general%N_frame))
+    allocate(lat(MCS%general%N_fp, MCS%general%N_frame))
+    allocate(altitude(MCS%general%N_fp, MCS%general%N_frame))
 
-    ! FootprintGeometry fields are (Band, FP, Frame)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_longitude", tmp_array, dset_dims)
-    allocate(lon(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    lon(:,:) = tmp_array(band,:,:)
+    if (MCS%algorithm%observation_mode == "downlooking") then
 
-    deallocate(tmp_array)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_latitude", tmp_array, dset_dims)
-    allocate(lat(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    lat(:,:) = tmp_array(band,:,:)
+       ! FootprintGeometry fields are (Band, FP, Frame)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_longitude", &
+            tmp_array3d, dset_dims)
+       lon(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
 
-    deallocate(tmp_array)
-    call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_altitude", tmp_array, dset_dims)
-    allocate(altitude(dset_dims(2), dset_dims(3))) ! We only want FP and Frame
-    altitude(:,:) = tmp_array(band,:,:)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_latitude", &
+            tmp_array3d, dset_dims)
+       lat(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
 
-    allocate(rel_vel(dset_dims(2), dset_dims(3)))
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_altitude", &
+            tmp_array3d, dset_dims)
+       altitude(:,:) = tmp_array3d(band,:,:)
+       deallocate(tmp_array3d)
+
+    else if (MCS%algorithm%observation_mode == "space_solar") then
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/spacecraft_lon", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          lon(i,:) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/spacecraft_lat", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          lat(i,:) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+       call read_DP_hdf_dataset(l1b_file_id, "/SpacePointingFrameGeometry/spacecraft_alt", &
+            tmp_array1d, dset_dims)
+       do i=1, MCS%general%N_fp
+          altitude(i,:) = tmp_array1d(:)
+       end do
+       deallocate(tmp_array1d)
+
+    end if
+
+    ! Keep these guys at zero for the time being?
+    allocate(rel_vel(MCS%general%N_fp, MCS%general%N_frame))
     rel_vel(:,:) = 0.0d0
-    allocate(rel_solar_vel(dset_dims(2), dset_dims(3)))
+    allocate(rel_solar_vel(MCS%general%N_fp, MCS%general%N_frame))
     rel_solar_vel(:,:) = 0.0d0
 
   end subroutine read_sounding_location
@@ -526,13 +691,13 @@ contains
     integer(hsize_t), allocatable :: dset_dims(:)
 
     if (band == 1) then
-       call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_o2", &
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_o2", &
             spike_list, dset_dims)
     elseif (band == 2) then
-       call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_weak_co2", &
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_weak_co2", &
             spike_list, dset_dims)
     elseif (band == 3) then
-       call read_INT_hdf_dataset(l1b_file_id, "SpikeEOF/spike_eof_weighted_residual_strong_co2", &
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_strong_co2", &
             spike_list, dset_dims)
     else
        call logger%fatal("read_spike_filter(oco2)", "Sorry - I only know bands 1 through 3!")
@@ -542,5 +707,71 @@ contains
   end subroutine read_spike_filter
 
 
+  subroutine read_MET_data(met_file_id, l1b_file_id, &
+       met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
+
+    integer(hid_t), intent(in) :: met_file_id
+    integer(hid_t), intent(in) :: l1b_file_id
+    double precision, allocatable, intent(inout) :: met_T_profiles(:,:,:)
+    double precision, allocatable, intent(inout) :: met_P_levels(:,:,:)
+    double precision, allocatable, intent(inout) :: met_SH_profiles(:,:,:)
+    double precision, allocatable, intent(inout) :: met_psurf(:,:)
+
+    logical :: MET_exists, ECMWF_exists
+    character(len=*), parameter :: fname = "read_MET_and_some_L1B_data"
+    character(len=999) :: dset_name
+    integer(hsize_t), allocatable :: dset_dims(:)
+    integer :: hdferr
+
+    ! MET data read-in is not required for space-solar observation modes
+    if (MCS%algorithm%observation_mode == "downlooking") then
+       ! Get the necesary MET data profiles. OCO-like MET data can have either
+       ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
+       ! which one exists (priority given to /Meteorology) and take it from there
+
+       MET_exists = .false.
+       ECMWF_exists = .false.
+
+       call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
+       if (.not. MET_exists) then
+          call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
+       end if
+
+       ! Let the user know which one we picked.
+       if (MET_exists) then
+          call logger%info(fname, "Taking MET data from /Meteorology")
+       else if (ECMWF_exists) then
+          call logger%info(fname, "Taking MET data from /ECMWF")
+       else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
+          ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
+          ! MET file. Can't really go on without MET data.
+          call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
+          stop 1
+       end if
+
+       ! Read the complete MET arrays from the corresponding HDF5 fields
+       if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
+       call logger%trivia(fname, "Finished reading in pressure levels.")
+
+       if (MET_exists) dset_name = "/Meteorology/temperature_profile_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/temperature_profile_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
+       call logger%trivia(fname, "Finished reading in temperature profiles.")
+
+       if (MET_exists) dset_name = "/Meteorology/specific_humidity_profile_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
+       call logger%trivia(fname, "Finished reading in specific humidity profiles.")
+
+       if (MET_exists) dset_name = "/Meteorology/surface_pressure_met"
+       if (ECMWF_exists) dset_name = "/ECMWF/surface_pressure_ecmwf"
+       call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
+       call logger%trivia(fname, "Finished reading in surface pressure.")
+
+    end if
+
+  end subroutine read_MET_data
 
 end module oco2_mod

@@ -36,6 +36,8 @@ contains
   !> checks all entries in the config file against this list, and exits
   !> if there is a section or option that is not known. This should prevent
   !> (some) unwanted errors in the config file.
+  !> Note that the order of the keywords is NOT meaningful, and mostly a
+  !> record of when a function was implemented.
   subroutine initialize_valid_sections()
 
     implicit none
@@ -69,7 +71,9 @@ contains
     ! Which SIF algorithm(s) to use?
     valid_options(2,1) = "sif_algorithm"
     valid_options(2,2) = "n_basisfunctions"
-    valid_options(2,3) = "solar_dopper_shift"
+    valid_options(2,3) = "observation_mode"
+    valid_options(2,4) = "solar_footprint_averaging"
+    valid_options(2,5) = "step_through"
 
     ! Related to the instrument in question
     valid_sections(3) = "instrument"
@@ -85,6 +89,7 @@ contains
     valid_sections(5) = "output"
     valid_options(5,1) = "output_file"
     valid_options(5,2) = "save_radiances"
+    valid_options(5,3) = "overwrite_output"
 
     ! Solar model type and file path
     valid_sections(6) = "solar"
@@ -127,6 +132,10 @@ contains
        valid_options(this_idx,26) = "smart_scale_first_guess_wl_in"
        valid_options(this_idx,27) = "smart_scale_first_guess_wl_out"
        valid_options(this_idx,28) = "smart_scale_first_guess_delta_tau"
+       valid_options(this_idx,29) = "ils_stretch_order"
+       valid_options(this_idx,30) = "ils_stretch_perturbation"
+       valid_options(this_idx,31) = "ils_stretch_covariance"
+       valid_options(this_idx,32) = "rt_model"
     end do
 
     ! Section for gases

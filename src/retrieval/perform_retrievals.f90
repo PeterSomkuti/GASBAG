@@ -29,6 +29,7 @@ subroutine perform_retrievals(my_instrument)
   ! Local variables
   character(len=*), parameter :: fname = "perform_retrieval" ! Function name for logging
   integer(hid_t) :: l1b_file_id ! L1b HDF file handler
+  logical :: SoundingGeometry_exists ! Does the SoundingGeometry group exist?
   integer :: hdferr ! HDF error variable
 
 
@@ -43,9 +44,15 @@ subroutine perform_retrievals(my_instrument)
   type is (oco2_instrument)
      ! We copy the SoundingGeometry group over to the results section, for
      ! easy analysis of the results later on. (This is a fairly small amount of data)
-     call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
-          MCS%output%output_file_id, "/SoundingGeometry", hdferr)
-     call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
+
+     call h5lexists_f(l1b_file_id, "/SoundingGeometry", SoundingGeometry_exists, hdferr)
+     if (SoundingGeometry_exists) then
+        call h5ocopy_f(l1b_file_id, "/SoundingGeometry", &
+             MCS%output%output_file_id, "/SoundingGeometry", hdferr)
+        call check_hdf_error(hdferr, fname, "Error copying /SoundingGeometry into output file")
+     else
+        call logger%debug(fname, "/SoundingGeometry not part of this L1B file. Skipping.")
+     end if
   end select
 
 

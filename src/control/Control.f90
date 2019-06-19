@@ -39,6 +39,7 @@ module control_mod
   integer, parameter :: MAX_GASES = 10
 
   type, private :: CS_general
+     character(len=3) :: code_name = "gbg"
      !> Number of soundings to be processed
      integer :: N_soundings
      !> Number of frames and footprints
@@ -64,6 +65,13 @@ module control_mod
      type(string) :: solar_file
      !> Which type of solar model?
      type(string) :: solar_type
+     !> What is the observation mode? (downlooking, space-solar)
+     type(string) :: observation_mode
+     !> For solar observations, do we want to average all solar
+     !> spectra within a L1B file (according to footprint)?
+     logical :: solar_footprint_averaging
+     !> Do we want to step through for debugging?
+     logical :: step_through
   end type CS_algorithm
 
   type, private :: CS_window
@@ -92,6 +100,12 @@ module control_mod
      double precision, allocatable :: dispersion_pert(:)
      !> Dispersion prior covariance value
      double precision, allocatable :: dispersion_cov(:)
+     !> Number of ILS coefficients to be retrieved
+     integer :: ils_stretch_order
+     !> ILS perturbation value for Jacobians
+     double precision, allocatable :: ils_stretch_pert(:)
+     !> ILS prior covariance value
+     double precision, allocatable :: ils_stretch_cov(:)
      !> Names of gases which are present in the window
      type(string), allocatable :: gases(:)
      !> This gas_index variable holds the information about which gas-section (CS_gas)
@@ -140,6 +154,8 @@ module control_mod
      integer :: footprint_skip
      !> Type of inverse method to use
      type(string) :: inverse_method
+     !> Type of Radiative Transfer model to use
+     type(string) :: RT_model
   end type CS_window
 
   type, private :: CS_input
@@ -162,6 +178,8 @@ module control_mod
      integer(hid_t) :: output_file_id
      !> Do we want to save radiances?
      logical :: save_radiances
+     !> Do we want to override the output file?
+     logical :: overwrite_output
   end type CS_output
 
   type :: CS_gas
@@ -358,6 +376,38 @@ contains
        MCS%algorithm%N_basisfunctions = int(fini_val)
     end if
 
+    call fini_extract(fini, tmp_str, 'observation_mode', .false., fini_char)
+    MCS%algorithm%observation_mode = trim(fini_char)
+    ! Replace empty string (i.e. not supplied) by "downlooking" mode
+    if (MCS%algorithm%observation_mode == "") then
+       MCS%algorithm%observation_mode = "downlooking"
+       call logger%trivia(fname, "No observation mode supplied - setting to: downlooking")
+    else
+       call logger%trivia(fname, "Observation mode - setting to: " &
+            // MCS%algorithm%observation_mode%chars())
+    end if
+
+    call fini_extract(fini, tmp_str, 'solar_footprint_averaging', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%algorithm%solar_footprint_averaging = .false.
+    else
+       MCS%algorithm%solar_footprint_averaging = string_to_bool(fini_string)
+    end if
+
+    call fini_extract(fini, tmp_str, 'step_through', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%algorithm%step_through = .false.
+    else
+       MCS%algorithm%step_through = string_to_bool(fini_string)
+       if (MCS%algorithm%step_through) then
+          call logger%debug(fname, "Using step-through mode for debugging!")
+       end if
+    end if
+
     ! Algorithm section over------------------------------------------------
 
     ! Inputs section -------------------------------------------------------
@@ -380,8 +430,9 @@ contains
     end if
 
     ! Do the same for the MET file
-    ! If doing physical retrieval, we MUST have the MET file
-    if (MCS%algorithm%using_physical .eqv. .true.) then
+    ! If doing physical retrieval and downlooking mode, we MUST have the MET file
+    if ((MCS%algorithm%using_physical .eqv. .true.) &
+         .and. (MCS%algorithm%observation_mode == "downlooking")) then
        tmp_str = "input"
        if (.not. fini%has_option(section_name=tmp_str, &
             option_name="met_file")) then
@@ -446,6 +497,15 @@ contains
        MCS%output%save_radiances = .false.
     else
        MCS%output%save_radiances = string_to_bool(fini_string)
+    end if
+
+    call fini_extract(fini, 'output', 'overwrite_output', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%output%overwrite_output = .false.
+    else
+       MCS%output%overwrite_output = string_to_bool(fini_string)
     end if
 
     ! ----------------------------------------------------------------------
@@ -516,11 +576,15 @@ contains
              call fini_extract(fini, tmp_str, 'statevector', .true., fini_char)
              MCS%window(window_nr)%SV_string = fini_char
 
+             call fini_extract(fini, tmp_str, 'rt_model', .true., fini_char)
+             MCS%window(window_nr)%RT_model = trim(fini_char)
+
           end if
 
           ! The rest is potentially optional. Whether a certain option is
           ! required for a given retrieval setting, will be checked later
           ! on in the code, usually when it's needed the first time
+
 
 
           ! Arrays that are used for our super-duper smart first guess for the
@@ -617,6 +681,27 @@ contains
 
           call fini_extract(fini, tmp_str, 'albedo_order', .false., fini_int)
           MCS%window(window_nr)%albedo_order = fini_int
+
+          call fini_extract(fini, tmp_str, 'ils_stretch_order', .false., fini_int)
+          MCS%window(window_nr)%ils_stretch_order = fini_int
+
+          call fini_extract(fini, tmp_str, 'ils_stretch_perturbation', .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%ils_stretch_pert(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%ils_stretch_pert(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
+
+          call fini_extract(fini, tmp_str, 'ils_stretch_covariance', .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(MCS%window(window_nr)%ils_stretch_cov(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                MCS%window(window_nr)%ils_stretch_cov(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
 
           call fini_extract(fini, tmp_str, 'dispersion_order', .false., fini_int)
           MCS%window(window_nr)%dispersion_order = fini_int

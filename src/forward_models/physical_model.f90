@@ -22,11 +22,12 @@ module physical_model_mod
   use solar_model_mod
   use math_utils_mod
   use statevector_mod
-  use radiance_mod
+  use Beer_Lambert_mod
   use absco_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
   use smart_first_guess_mod
+  use jacobians_mod
 
   ! Third-party modules
   use logger_mod, only: logger => master_logger
@@ -36,7 +37,7 @@ module physical_model_mod
   ! System modules
   use ISO_FORTRAN_ENV
   USE OMP_LIB
-  use, intrinsic:: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
@@ -59,40 +60,6 @@ module physical_model_mod
      double precision, allocatable :: sh(:)
   end type atmosphere
 
-  !> This structure contains the result data that will be stored in the output HDF file.
-  type result_container
-     !> State vector names (SV number)
-     type(string), allocatable :: sv_names(:)
-     !> Retrieved state vector (SV number, footprint, frame)
-     double precision, allocatable :: sv_retrieved(:,:,:)
-     !> State vector prior (SV number, footprint, frame)
-     double precision, allocatable :: sv_prior(:,:,:)
-     !> State vector posterior uncertainty (SV number, footprint, frame)
-     double precision, allocatable :: sv_uncertainty(:,:,:)
-     !> Column-average dry air mixing ratio for retrieved gases (gas number, footprint, frame)
-     double precision, allocatable :: xgas(:,:,:)
-     !> Final Chi2 (footprint, frame)
-     double precision, allocatable :: chi2(:,:)
-     !> Final residual RMS (footprint, frame)
-     double precision, allocatable :: residual_rms(:,:)
-     !> Final dsigma-squared
-     double precision, allocatable :: dsigma_sq(:,:)
-     !> Final number of iterations
-     integer, allocatable :: num_iterations(:,:)
-     !> Converged or not? (1=converged, 0=not converged, -1=not properly run)
-     integer, allocatable :: converged(:,:)
-     !> SNR estimate (mean of per-pixel SNR)
-     double precision, allocatable :: SNR(:,:)
-     !> SNR standard deviation (std of per-pixel SNR)
-     double precision, allocatable :: SNR_std(:,:)
-     !> Continuum level radiance estimate
-     double precision, allocatable :: continuum(:,:)
-     !> Number of moles of dry air per m2 for various sections
-     !> of the model atmosphere - corresponding to retrieved
-     !> gas scale factors.
-     double precision, allocatable :: ndry(:,:,:)
-  end type result_container
-
 
   !> Spacing of the high-resolution wavelength grid in um
   double precision :: hires_spacing
@@ -106,8 +73,10 @@ module physical_model_mod
   double precision, allocatable :: dispersion(:,:,:)
   !> Sounding IDs (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
   integer(8), allocatable :: sounding_ids(:,:)
+  !> Sounding IDs from MET file (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
+  integer(8), allocatable :: sounding_ids_met(:,:)
   !> Sounding time strings
-  character(len=25), allocatable :: sounding_time_strings(:,:)
+  character(len=25), allocatable :: frame_time_strings(:)
   !> Solar zenith angles
   double precision, allocatable :: SZA(:,:)
   !> Solar azimuth angles
@@ -142,11 +111,11 @@ module physical_model_mod
   integer, allocatable :: spike_list(:,:,:)
 
   !> MET data temperature profiles (level, footprint, frame)
-  double precision, allocatable, dimension(:,:,:) :: met_T_profiles
+  double precision, allocatable :: met_T_profiles(:,:,:)
   !> MET data pressure levels (level, footprint, frame)
-  double precision, allocatable, dimension(:,:,:) :: met_P_levels
+  double precision, allocatable :: met_P_levels(:,:,:)
   !> MET data specific humidity profiles (level, footprint, frame)
-  double precision, allocatable, dimension(:,:,:) :: met_SH_profiles
+  double precision, allocatable :: met_SH_profiles(:,:,:)
   !> MET data surface pressure (footprint, frame)
   double precision, allocatable :: met_psurf(:,:)
 
@@ -163,6 +132,7 @@ module physical_model_mod
   !> The solar (pseudo-transmittance) spectrum on the regular wavelength grid (wavelength, transmission)
   double precision, allocatable :: solar_spectrum_regular(:,:)
   !> The number of solar spectrum points (as read from the file)
+  double precision, allocatable :: solar_continuum_from_hdf(:,:)
   integer :: N_solar
 
   !> Final modelled radiances (pixel, footprint, frame)
@@ -199,7 +169,7 @@ contains
     ! Do MET or ECMWF groups exist in the MET file?
     logical :: MET_exists, ECMWF_exists
     ! Does a spike/bad_sample data field exist?
-    logical :: spike_exists, bad_sample_exists
+    logical :: spike_exists, bad_sample_exists, result_exists, met_sounding_exists
     ! Fixed dimensions for the arrays to be saved into the output HDF file
     integer(hsize_t) :: out_dims2d(2), out_dims3d(3)
     ! Dimensions for the read-in of MET/L1b data
@@ -208,6 +178,8 @@ contains
     integer :: hdferr
     ! Holders for temporary strings and dataset names to grab L1b/MET data
     character(len=999) :: dset_name, tmp_str, group_name
+    ! String needed for converting to lower-case
+    type(string) :: lower_str
     ! Name of this function for debugging
     character(len=*), parameter :: fname = "physical_retrieval"
     ! What are the dimensions of the ABSCO file used?
@@ -230,17 +202,20 @@ contains
     integer :: funit
     ! CPU time stamps and mean duration for performance analysis
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
-    integer :: frame_start, frame_skip
+    integer :: frame_start, frame_skip, frame_stop
     integer :: fp_start, fp_skip
 
     ! Open up the MET file
-    call h5fopen_f(MCS%input%met_filename%chars(), &
-         H5F_ACC_RDONLY_F, MCS%input%met_file_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Error opening MET file: " &
-         // trim(MCS%input%met_filename%chars()))
+    if (MCS%algorithm%observation_mode == "downlooking") then
+       call h5fopen_f(MCS%input%met_filename%chars(), &
+            H5F_ACC_RDONLY_F, MCS%input%met_file_id, hdferr)
+       call check_hdf_error(hdferr, fname, "Error opening MET file: " &
+            // trim(MCS%input%met_filename%chars()))
+       ! Store HDF file handler for more convenient access
+       met_file_id = MCS%input%met_file_id
+    end if
 
     ! Store HDF file handler for more convenient access
-    met_file_id = MCS%input%met_file_id
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
     this_thread = 0
@@ -251,74 +226,53 @@ contains
     ! Grab number of bands
     num_band = MCS%general%N_bands
 
+
+    !---------------------------------------------------------------------
+    ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
+    !---------------------------------------------------------------------
+
+
     ! Read in MET and L1B data, this is instrument-dependent, so we need to
     ! make our instrument select here as well.
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! Get the necesary MET data profiles. OCO-like MET data can have either
-       ! /Meteorology or /ECMWF (at least at the time of writing this). So we check
-       ! which one exists (priority given to /Meteorology) and take it from there
+       call my_instrument%read_MET_data(met_file_id, l1b_file_id, &
+            met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
 
-       MET_exists = .false.
-       ECMWF_exists = .false.
+       if (MCS%algorithm%observation_mode == "downlooking") then
+          ! These here also only make sense in a downlooking position.
+          ! Read in the sounding id's
+          call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
 
-       call h5lexists_f(met_file_id, "/Meteorology", MET_exists, hdferr)
-       if (.not. MET_exists) then
-          call h5lexists_f(met_file_id, "/ECMWF", ECMWF_exists, hdferr)
+          ! We can check if the MET and L1B match up by comparing the sounding_id
+          ! field in both files - which should be identical!
+          call h5lexists_f(met_file_id, "/SoundingGeometry/sounding_id", &
+               met_sounding_exists, hdferr)
+          if (met_sounding_exists) then
+             call my_instrument%read_sounding_ids(met_file_id, sounding_ids_met)
+
+             if (all(sounding_ids == sounding_ids_met)) then
+                call logger%debug(fname, "L1B and MET have same Sounding IDs - good.")
+             else
+                call logger%error(fname, "L1B and MET have differing Sounding IDs!")
+                stop 1
+             end if
+          else
+             call logger%debug(fname, "MET does not have Sounding IDs - cannot verify if files match.")
+          end if
        end if
-
-       ! Let the user know which one we picked.
-       if (MET_exists) then
-          call logger%info(fname, "Taking MET data from /Meteorology")
-       else if (ECMWF_exists) then
-          call logger%info(fname, "Taking MET data from /ECMWF")
-       else if ((.not. MET_exists) .and. (.not. ECMWF_exists)) then
-          ! Uh-oh, neither /Meteorology nor /ECMWF are found in the
-          ! MET file. Can't really go on without MET data.
-          call logger%fatal(fname, "Neither /Meteorology nor /ECMWF exist in MET file.")
-          stop 1
-       end if
-
-       ! Read the complete MET arrays from the corresponding HDF5 fields
-       if (MET_exists) dset_name = "/Meteorology/vector_pressure_levels_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/vector_pressure_levels_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_P_levels, dset_dims)
-       call logger%trivia(fname, "Finished reading in pressure levels.")
-
-       if (MET_exists) dset_name = "/Meteorology/temperature_profile_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/temperature_profile_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_T_profiles, dset_dims)
-       call logger%trivia(fname, "Finished reading in temperature profiles.")
-
-       if (MET_exists) dset_name = "/Meteorology/specific_humidity_profile_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/specific_humidity_profile_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_SH_profiles, dset_dims)
-       call logger%trivia(fname, "Finished reading in specific humidity profiles.")
-
-       if (MET_exists) dset_name = "/Meteorology/surface_pressure_met"
-       if (ECMWF_exists) dset_name = "/ECMWF/surface_pressure_ecmwf"
-       call read_DP_hdf_dataset(met_file_id, dset_name, met_psurf, dset_dims)
-       call logger%trivia(fname, "Finished reading in surface pressure.")
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
-       ! Read in the sounding id's
-       call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
        ! Read the time strings
-       call my_instrument%read_time_strings(l1b_file_id, sounding_time_strings)
+       call my_instrument%read_time_strings(l1b_file_id, frame_time_strings)
        ! Read in the instrument ILS data
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
-
-       ! Read in Spike filter data, if it exists in this file
-       !call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
-       !if (spike_exists) then
-       !   call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
-       !end if
-
        ! Read in bad sample list (if it exists)
-       call h5lexists_f(met_file_id, "/InstrumentHeader/bad_sample_list", bad_sample_exists, hdferr)
+       call h5lexists_f(l1b_file_id, "/InstrumentHeader/bad_sample_list", &
+            bad_sample_exists, hdferr)
        if (bad_sample_exists) then
           call my_instrument%read_bad_sample_list(l1b_file_id, bad_sample_list)
        end if
@@ -350,8 +304,19 @@ contains
 
 
     ! Create the HDF group in which all the results go in the end
-    call h5gcreate_f(output_file_id, "physical_retrieval_results", result_gid, hdferr)
-    call check_hdf_error(hdferr, fname, "Error. Could not create group: physical_retrieval_results")
+    call h5lexists_f(l1b_file_id, "/RetrievalResults", result_exists, hdferr)
+    if (.not. result_exists) then
+       call h5gcreate_f(output_file_id, "RetrievalResults", result_gid, hdferr)
+    end if
+    call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults")
+    call h5gcreate_f(output_file_id, "/RetrievalResults/physical", result_gid, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults/physical")
+
+
+
+    !---------------------------------------------------------------------
+    ! MAIN RETRIEVAL WINDOW LOOP
+    !---------------------------------------------------------------------
 
     ! Loop over all potential user-defined retrieval windows.
     do i_win=1, MAX_WINDOWS
@@ -405,15 +370,20 @@ contains
        ! but why not make use of per-band data (like for OCO-2).
        select type(my_instrument)
        type is (oco2_instrument)
+
           ! Read in the measurement geometries - per band
           call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
                altitude, relative_velocity, relative_solar_velocity)
+          ! Read in Spike filter data, if it exists in this file
+          call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
+          if (spike_exists) then
+             if (allocated(spike_list)) deallocate(spike_list)
+             call my_instrument%read_spike_filter(l1b_file_id, spike_list, band)
+          end if
 
        end select
-
-
 
        ! Find the smallest and largest delta-lambda values for all ILSs
        ! in this given band to calculate hires_pad.
@@ -460,17 +430,26 @@ contains
        ! to keep the solar spectrum data as small as possible.
 
        if (MCS%algorithm%solar_type == "toon") then
-          call read_toon_spectrum(MCS%algorithm%solar_file%chars(), &
+          call read_toon_solar_spectrum(MCS%algorithm%solar_file%chars(), &
                solar_spectrum, &
                MCS%window(i_win)%wl_min - hires_pad, &
                MCS%window(i_win)%wl_max + hires_pad)
 
-          N_solar = size(solar_spectrum, 1)
+       else if (MCS%algorithm%solar_type == "oco_hdf") then
+          call read_oco_hdf_solar_spectrum(MCS%algorithm%solar_file%chars(), &
+               band, &
+               solar_spectrum, &
+               solar_continuum_from_hdf, &
+               MCS%window(i_win)%wl_min - hires_pad, &
+               MCS%window(i_win)%wl_max + hires_pad)
        else
           call logger%fatal(fname, "Sorry, solar model type " &
                // MCS%algorithm%solar_type%chars() &
                // " is not known.")
        end if
+
+       ! Need this
+       N_solar = size(solar_spectrum, 1)
 
        ! And we also need the solar spectrum on our user-defined
        ! high-resolution wavelength grid.
@@ -518,6 +497,8 @@ contains
        ! Surface pressure
        ! Solar shift and stretch
        ! Gas scalar factor defined on level ranges
+       ! ILS stretch/squeeze factor
+       ! Temperature offset
 
        ! Parsing the statevector string, that was passed in the window
        ! section and initialize the state vector SV accordingly. This subroutine
@@ -539,14 +520,25 @@ contains
 
 
        call logger%info(fname, "Starting main retrieval loop!")
-       frame_start = 1
-       frame_skip = MCS%window(i_win)%frame_skip
+
+       ! If we use averaging for solar spectra, we really only have to retrieve
+       ! one frame.
+       if ((MCS%algorithm%solar_footprint_averaging) .and. &
+            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
+          frame_start = 1
+          frame_skip = 1
+          frame_stop = 1
+       else
+          frame_start = 1
+          frame_skip = MCS%window(i_win)%frame_skip
+          frame_stop = num_frames
+       end if
 
        ! retr_count keeps track of the number of retrievals processed
        ! so far, and the mean_duration keeps track of the average
        ! processing time.
        retr_count = 0
-       total_number_todo = (num_fp * num_frames / frame_skip) / &
+       total_number_todo = (num_fp * frame_stop / frame_skip) / &
             (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
 
@@ -556,9 +548,9 @@ contains
        ! enough for my humble purposes.
        ! As you can see, it does not require much, whereas MPI would be more effort.
 
-!$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
-!$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
-       do i_fr=frame_start, num_frames, frame_skip
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
+       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
+       do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
 #ifdef _OPENMP
@@ -595,10 +587,10 @@ contains
 
           end do
        end do
-!$OMP END PARALLEL DO
+       !$OMP END PARALLEL DO
 
        ! Create an HDF group for all windows separately
-       group_name = "/physical_retrieval_results/" // trim(MCS%window(i_win)%name%chars())
+       group_name = "RetrievalResults/physical/" // trim(MCS%window(i_win)%name%chars())
        call h5gcreate_f(output_file_id, trim(group_name), result_gid, hdferr)
        call check_hdf_error(hdferr, fname, "Error. Could not create group: " &
             // trim(group_name))
@@ -607,16 +599,18 @@ contains
        out_dims2d(1) = num_fp
        out_dims2d(2) = num_frames
 
-       ! Writing out the prior surface pressure
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/prior_psurf")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/prior_psurf"
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
+       ! Writing out the prior surface pressure, but obviously only if allocated
+       if (allocated(met_psurf)) then
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/surface_pressure_apriori")
+          write(tmp_str, '(A,A)') trim(group_name), "/surface_pressure_apriori"
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
+       end if
 
        ! Save the prior state vectors
        do i=1, size(global_SV%svsv)
-          write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" &
-               // results%sv_names(i) // "_prior"
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name) , "/", &
+               results%sv_names(i)%chars() , "_apriori_", MCS%general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -625,7 +619,8 @@ contains
 
        ! Save the retrieved state vectors
        do i=1, size(global_SV%svsv)
-          write(tmp_str, '(A,A,A,A)') trim(group_name) // "/" // results%sv_names(i)
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", results%sv_names(i)%chars(), &
+               "_", MCS%general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -634,8 +629,8 @@ contains
 
        ! Save the retrieved state vector uncertainties
        do i=1, size(global_SV%svsv)
-          write(tmp_str, '(A,A,A,A,A)') trim(group_name) // "/" &
-               // results%sv_names(i) // "_uncertainty"
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+               results%sv_names(i)%chars() , "_uncertainty_", MCS%general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
@@ -650,8 +645,9 @@ contains
              do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(global_SV%gas_idx_lookup(i),:))
 
                 if (global_SV%gas_idx_lookup(i) == j) then
-                   write(tmp_str, "(A, A, A)") trim(group_name) // "/", &
-                        results%SV_names(global_SV%idx_gas(i,1))%chars(), "_ndry"
+                   write(tmp_str, "(A,A,A,A)") trim(group_name) // "/", &
+                        results%SV_names(global_SV%idx_gas(i,1))%chars(), &
+                        "_ndry_", MCS%general%code_name
                    call logger%info(fname, "Writing out: " // trim(tmp_str))
                    call write_DP_hdf_dataset(output_file_id, &
                         trim(tmp_str), &
@@ -665,7 +661,9 @@ contains
        do i=1,MCS%window(i_win)%num_gases
           if (MCS%window(i_win)%gas_retrieved(i)) then
              ! Save XGAS for each gas
-             write(tmp_str, '(A,A,A,A)') trim(group_name) // "/X" // MCS%window(i_win)%gases(i)
+             lower_str = MCS%window(i_win)%gases(i)%lower()
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                  lower_str%chars(), "_", MCS%general%code_name
              call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
@@ -674,73 +672,80 @@ contains
        end do
 
        ! Save number of iterations
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/num_iterations"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/num_iterations_", MCS%general%code_name
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), results%num_iterations(:,:), out_dims2d, -9999)
 
        ! Save converged status
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/converged"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/converged_flag_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/converged_flag_", MCS%general%code_name
        call write_INT_hdf_dataset(output_file_id, &
             trim(tmp_str), results%converged(:,:), out_dims2d, -9999)
 
        ! Retrieved CHI2
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/retrieved_chi2")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/retrieved_chi2"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/reduced_chi_squared_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
 
        ! Dsigma_sq
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq")
-       write(tmp_str, '(A,A,A)') trim(group_name) // "/final_dsigma_sq"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/final_dsigma_sq_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/SNR")
-       write(tmp_str, '(A,A)') trim(group_name) // "/SNR"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/snr", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR, out_dims2d)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/SNR_std")
-       write(tmp_str, '(A,A)') trim(group_name) // "/SNR_std"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_std_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/snr_std_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR_std, out_dims2d)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum")
-       write(tmp_str, '(A,A)') trim(group_name) // "/continuum"
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum_level_radiance_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/continuum_level_radiance_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%continuum, out_dims2d)
 
        ! Save the radiances (this should be made optional!)
        if (MCS%output%save_radiances) then
           out_dims3d = shape(final_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance")
-          write(tmp_str, '(A,A)') trim(group_name) // "/modelled_radiance"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               final_radiance, out_dims3d)
+               trim(tmp_str), final_radiance, out_dims3d)
 
           out_dims3d = shape(measured_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance")
-          write(tmp_str, '(A,A)') trim(group_name) // "/measured_radiance"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/measured_radiance_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               measured_radiance, out_dims3d)
+               trim(tmp_str), measured_radiance, out_dims3d)
 
           out_dims3d = shape(noise_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance")
-          write(tmp_str, '(A,A)') trim(group_name) // "/noise_radiance"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/noise_radiance_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               noise_radiance, out_dims3d)
+               trim(tmp_str), noise_radiance, out_dims3d)
 
           out_dims3d = shape(wavelength_radiance)
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength")
-          write(tmp_str, '(A,A)') trim(group_name) // "/wavelength"
+          call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength_" &
+               // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/wavelength_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
-               trim(tmp_str), &
-               wavelength_radiance, out_dims3d)
+               trim(tmp_str), wavelength_radiance, out_dims3d)
 
           ! Also deallocate containers holding the radiances
           deallocate(final_radiance)
@@ -755,6 +760,7 @@ contains
 
        ! Deallocate arrays that are allocated on per-window basis
        deallocate(solar_spectrum_regular, solar_spectrum, hires_grid)
+       if (allocated(solar_continuum_from_hdf)) deallocate(solar_continuum_from_hdf)
 
        ! Clear and deallocate the SV structure to be ready for the next window.
        ! We really shouldn't need to check if this is deallocated already or not,
@@ -811,9 +817,13 @@ contains
          radiance_tmp_work(:), &
          radiance_meas_work(:), &
          radiance_calc_work(:), &
-         radiance_tmp_work_hi(:), &
+         radiance_tmp_hi_nosif_nozlo(:), &
          radiance_calc_work_hi(:), &
          noise_work(:)
+
+    ! Radiative transfer models
+    integer :: RT_model
+    integer, parameter :: RT_BEER_LAMBERT = 0
 
     ! The current atmosphere. This will be a copy from the initial_atm
     ! constructed in the physical_retrieval subroutine, but T and SH
@@ -852,6 +862,7 @@ contains
     ! Number of spectral points for low-res and hires grid,
     ! number of state vector elements.
     integer :: N_spec, N_spec_hi, N_sv
+    integer :: center_pixel, center_pixel_hi
 
     ! Solar stuff
     ! Solar distance, solar relative velocity, earth relative velocity, and
@@ -932,6 +943,8 @@ contains
     double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
     ! Posterior covariance matrix and its inverse (N_sv, N_sv)
     double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
+    ! Correlation matrix of Shat
+    double precision, allocatable :: Shat_corr(:,:)
 
 
     ! Temporary matrices and vectors for computation
@@ -942,6 +955,16 @@ contains
     logical :: success_inv_mat
     ! Was the convolution operation successful?
     logical :: ILS_success
+    ! Was the time string conversion successful?
+    logical :: success_time_convert
+    ! Are the radiances proper and valid?
+    logical :: radiance_OK
+
+    ! ILS stuff
+    double precision, allocatable :: this_ILS_stretch(:), &
+         this_ILS_stretch_pert(:)
+    double precision, allocatable :: this_ILS_delta_lambda(:,:), &
+         this_ILS_delta_lambda_pert(:,:)
 
     ! The SV from last iteration, as well as last successful (non-divergent) iteration
     ! shape (N_sv)
@@ -953,7 +976,8 @@ contains
     ! Chi2-related variables. Chi2 of last and this current iteration,
     ! chi2 calculated from a linear prediction, and the chi2 ratio needed
     ! to adjust lm_gamma and determine a divergent step.
-    double precision :: old_chi2, this_chi2, linear_prediction_chi2, chi2_ratio
+    double precision :: old_chi2, this_chi2, &
+         linear_prediction_chi2, chi2_ratio, chi2_rel_change
 
     ! Iteration-related
     ! Current iteration number (starts at 1), number of divergent steps allowed.
@@ -981,6 +1005,14 @@ contains
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
+    ! Set the used radiative transfer model
+    if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
+       RT_model = RT_BEER_LAMBERT
+    else
+       call logger%error(fname, "RT Method: " // MCS%window(i_win)%RT_model%chars() // " unknown.")
+       stop 1
+    end if
+
     ! What is the total number of gases in this window,
     ! regardless of whether they are retrieved or not.
     if (allocated(MCS%window(i_win)%gases)) then
@@ -995,13 +1027,29 @@ contains
 
     select type(my_instrument)
     type is (oco2_instrument)
-       ! Read the L1B spectrum for this one measurement!
-       call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
-            MCS%general%N_spec(band), radiance_l1b)
-       ! Convert the date-time-string object in the L1B to a date-time-object "date"
-       call my_instrument%convert_time_string_to_date(sounding_time_strings(i_fp, i_fr), date)
+       ! READ THE MEASUREMENT
+       if ((MCS%algorithm%solar_footprint_averaging) .and. &
+            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
 
+          call my_instrument%read_spectra_and_average_by_fp(l1b_file_id, i_fp, band, &
+               MCS%general%N_spec(band), radiance_l1b)
+
+       else
+          ! Read the L1B spectrum for this one measurement in normal mode!
+          call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+               MCS%general%N_spec(band), radiance_l1b)
+
+       end if
+       ! Convert the date-time-string object in the L1B to a date-time-object "date"
+       call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
+            date, success_time_convert)
     end select
+
+
+    if (.not. success_time_convert) then
+       call logger%error(fname, "Time string conversion error!")
+       return
+    end if
 
 
     ! Estimate a smart first guess for the gas scale factor, if the user supplied
@@ -1022,8 +1070,11 @@ contains
        scale_first_guess(1) = 1.0d0
     end if
 
+
     ! Calculate the day of the year into a full fractional value
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
+
+    ! Epoch is needed by the MS3 solar doppler code
     epoch(1) = date%getYear()
     epoch(2) = date%getMonth()
     epoch(3) = date%getDay()
@@ -1042,10 +1093,11 @@ contains
          " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
     call logger%debug(fname, trim(tmp_str))
 
-    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2)") &
+    write(tmp_str, "(A, F6.2, A, F6.2, A, E8.3)") &
          "Longitude: ", lon(i_fp, i_fr), &
          " Latitude: ", lat(i_fp, i_fr), &
          " Altitude: ", altitude(i_fp, i_fr)
+    call logger%debug(fname, trim(tmp_str))
 
     ! Dispersion array that contains the wavelenghts per pixel
     allocate(this_dispersion(size(radiance_l1b)))
@@ -1060,16 +1112,32 @@ contains
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
 
-    ! THIS IS "BORROWED" FROM THE MS3 CODE
-    call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
-         epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
-    solar_doppler = solar_rv / SPEED_OF_LIGHT
-    instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+    ! The "instrument doppler shift" is caused by the relative velocity
+    ! between the point on the surface and the spacecraft. Obviously, this
+    ! contribution is zero for space-solar geometries.
+    if (MCS%algorithm%observation_mode == "downlooking") then
+       instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
+
+       ! THIS IS "BORROWED" FROM THE MS3 CODE
+       call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
+            epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
+       solar_doppler = solar_rv / SPEED_OF_LIGHT
+
+    else if (MCS%algorithm%observation_mode == "space_solar") then
+
+       ! For space-solar observation mode, the doppler is obviously different
+       ! so we need to change the calculation slightly.
+       call solar_distance_and_velocity_v2(epoch, solar_dist, solar_rv)
+
+       instrument_doppler = solar_rv / SPEED_OF_LIGHT
+       solar_doppler = 0.0d0
+    end if
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
-    N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
+    !N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
+
     ! Set the initial LM-Gamma parameter
     lm_gamma = MCS%window(i_win)%lm_gamma
 
@@ -1087,17 +1155,16 @@ contains
     allocate(Sa_inv(N_sv, N_sv))
     allocate(Shat_inv(N_sv, N_sv))
     allocate(Shat(N_sv, N_sv))
+    allocate(Shat_corr(N_sv, N_sv))
     allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
     allocate(tmp_v1(N_sv), tmp_v2(N_sv))
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
-    ! Allocate Solar continuum (irradiance) array. We do this here already,
-    ! since it's handy to have it for estimating the albedo.
-    allocate(solar_irrad(N_hires))
+
 
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
-    allocate(radiance_tmp_work_hi(size(this_solar, 1)))
+    allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
 
 
@@ -1114,10 +1181,31 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
-       ! take that into account for the incoming solar irradiance
-       call calculate_solar_planck_function(6500.0d0, solar_dist, &
-            solar_spectrum_regular(:,1), solar_irrad)
+       allocate(solar_irrad(N_hires))
+       if (MCS%algorithm%solar_type == "toon") then
+          ! Allocate Solar continuum (irradiance) array. We do this here already,
+          ! since it's handy to have it for estimating the albedo
+
+          ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
+          ! take that into account for the incoming solar irradiance
+          call calculate_solar_planck_function(6500.0d0, solar_dist, &
+               solar_spectrum_regular(:,1), solar_irrad)
+
+       else if (MCS%algorithm%solar_type == "oco_hdf") then
+
+          call pwl_value_1d( &
+               N_solar, &
+               solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
+               N_hires, &
+               solar_spectrum_regular(:,1), solar_irrad(:))
+
+          solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
+
+       else
+          call logger%error(fname, "Solar type: " // MCS%algorithm%solar_type%chars() // "is unknown.")
+       end if
+       ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
+       ! comes with its own irradiance
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
             (1.0d0 * maxval(solar_irrad) * mu0)
@@ -1167,6 +1255,16 @@ contains
        end do
     end if
 
+    ! ILS stretch
+    if (SV%num_ils_stretch > 0) then
+       ! Set the first coefficient to 1.0d0, i.e. no stretch
+       SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
+       do i=2, SV%num_ils_stretch
+          ! And set all other coefficients to zero at first
+          SV%svap(SV%idx_ils_stretch(i)) = 0.0d0
+       end do
+    end if
+
     ! Surface pressure is taken from the MET data
     if (SV%num_psurf == 1) then
        SV%svap(SV%idx_psurf(1)) = met_psurf(i_fp, i_fr)
@@ -1208,6 +1306,7 @@ contains
           divergent_step = .false.
           ! Initialise Chi2 with an insanely large value
           this_chi2 = 9.9d9
+          old_chi2 = 9.9d10
           linear_prediction_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
           albedo(:) = albedo_apriori
@@ -1270,17 +1369,13 @@ contains
                    ! atmosphere text file.
                    this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
 
-                   ! DELETE ME!
-                   ! This modifies the first-guess profile magnitude of H2O, otherwise
-                   ! we are just using the "true" value in the case of simulations.
-                   !call random_number(random_dp)
-                   !random_dp = 0.25 + random_dp * (4.0d0 - 0.25d0)
-
-                   !this_atm%gas_vmr(:,i) = this_atm%gas_vmr(:,i) * random_dp
-
                 end if
              end do
 
+          else
+             ! If we don't do gases, just set this variable to zero, mainly to avoid
+             ! potential problems .. nasty segfaults etc.
+             num_active_levels = 0
           end if
 
        else
@@ -1303,7 +1398,7 @@ contains
              albedo = 0.0d0
              do i=1, SV%num_albedo
                 albedo = albedo + SV%svsv(SV%idx_albedo(i)) &
-                     * ((hires_grid(:) - hires_grid(1)) ** (dble(i-1)))
+                     * ((hires_grid(:) - hires_grid(center_pixel_hi)) ** (dble(i-1)))
              end do
           endif
 
@@ -1357,7 +1452,7 @@ contains
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
 
-       if (num_gases > 0) then
+       if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
           allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
@@ -1449,13 +1544,15 @@ contains
                       if (SV%gas_idx_lookup(i) /= j) cycle
 
                       if (s_stop(i) - s_start(i) == 1) then
-                         write(tmp_str, '(A,A)') "Scale factor index error for ", results%SV_names(SV%idx_gas(i,1))%chars()
+                         write(tmp_str, '(A,A)') "Scale factor index error for ", &
+                              results%SV_names(SV%idx_gas(i,1))%chars()
                          call logger%error(fname, trim(tmp_str))
-                         write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), SV%gas_retrieve_scale_stop(i)
+                         !write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), &
+                         !     SV%gas_retrieve_scale_stop(i)
 
-                         do l=1, num_levels
-                            write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
-                         end do
+                         !do l=1, num_levels
+                         !   write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
+                         !end do
 
                          return
                       end if
@@ -1581,6 +1678,9 @@ contains
        ! Number of spectral points in the output resolution
        N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
 
+       center_pixel = N_spec / 2
+       center_pixel_hi = N_spec_hi / 2
+
        ! Allocate various arrays that depend on N_spec
        allocate(K(N_spec, N_sv))
        allocate(gain_matrix(N_sv, N_spec))
@@ -1589,9 +1689,29 @@ contains
        allocate(radiance_tmp_work(N_spec))
        allocate(noise_work(N_spec))
 
+       !---------------------------------------------------------------------
+       ! RT CALCULATIONS
+       !---------------------------------------------------------------------
+
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
-       call calculate_Beer_Lambert(hires_grid, mu0, mu, &
+
+       ! One last check if the radiances (measured) are valid
+
+       select type(my_instrument)
+       type is (oco2_instrument)
+          call my_instrument%check_radiance_valid(l1b_file_id, radiance_l1b, &
+               l1b_wl_idx_min, l1b_wl_idx_max, radiance_OK)
+       end select
+
+       if (radiance_OK .eqv. .false.) then
+          write(tmp_str, '(A,G0.1,A,G0.1,A)') "Sounding (", i_fr, ",", i_fp, &
+               ") has invalid radiances. Skipping."
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       call calculate_BL_radiance(hires_grid, mu0, mu, &
             albedo, total_tau, &
             radiance_calc_work_hi)
 
@@ -1601,42 +1721,39 @@ contains
        this_solar(:,1) = this_solar_shift + &
             this_solar_stretch * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
 
-       call calculate_solar_planck_function(6500.0d0, solar_dist, &
-            this_solar(:,1), solar_irrad)
+       if (MCS%algorithm%solar_type == "toon") then
+          call calculate_solar_planck_function(6500.0d0, solar_dist, &
+               this_solar(:,1), solar_irrad)
+          ! And multiply to get the full solar irradiance in physical units
+          this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
+       else if (MCS%algorithm%solar_type == "oco_hdf") then
 
-       ! And multiply to get the full solar irradiance in physical units
-       this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
+          ! Have to manually re-allocate solar_irrad, which is done in the
+          ! calculate_solar_planck_function subroutine.
+          if (allocated(solar_irrad)) deallocate(solar_irrad)
+          allocate(solar_irrad(size(this_solar, 1)))
+
+          call pwl_value_1d_v2( &
+               N_solar, &
+               solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
+               size(this_solar, 1), &
+               this_solar(:,1), solar_irrad(:))
+
+          solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
+          this_solar(:,2) = solar_spectrum_regular(:,2) * solar_irrad(:)
+       end if
 
        ! If we retrieve either solar shift or stretch (or both), then we
        ! need to know the partial derivative of the solar spectrum w.r.t.
        ! wavelength: dsolar_dlambda
        if ((SV%num_solar_shift == 1) .or. (SV%num_solar_stretch == 1)) then
 
-          ! Sample doppler-shifted and scaled solar spectrum at hires grid
           allocate(solar_tmp(N_hires))
-          call pwl_value_1d( &
-               N_hires, &
-               this_solar(:,1), &
-               solar_spectrum_regular(:, 2), &
-               N_hires, &
-               hires_grid, solar_tmp(:))
+          call calculate_solar_jacobian(this_solar(:,1), this_solar(:,2), &
+               solar_irrad, hires_grid, solar_tmp, dsolar_dlambda)
 
-          this_solar(:,2) = solar_tmp(:) * solar_irrad(:)
+          this_solar(:,2) = solar_tmp(:)
           deallocate(solar_tmp)
-
-          ! If needed, calculate dSolar / dlambda using central differences
-          ! apart from the first and last point obviously. This is required for
-          ! the solar parameter Jacobians.
-
-          dsolar_dlambda(1) = (this_solar(2,2) - this_solar(1,2)) / &
-               (this_solar(2,1) - this_solar(1,1))
-          dsolar_dlambda(N_hires) = (this_solar(N_hires-1,2) - this_solar(N_hires,2)) / &
-               (this_solar(N_hires-1,1) - this_solar(N_hires,1))
-
-          do i=2, N_hires-1
-             dsolar_dlambda(i) = (this_solar(i+1,2) - this_solar(i-1,2)) / &
-                  (this_solar(i+1,1) - this_solar(i-1,1))
-          end do
 
        end if
 
@@ -1645,51 +1762,88 @@ contains
        ! For various Jacobian calculations we also need the radiance MINUS the additive
        ! contributions, so we store them in a separate array.
        radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
-       radiance_tmp_work_hi(:) = radiance_calc_work_hi(:)
+       radiance_tmp_hi_nosif_nozlo(:) = radiance_calc_work_hi(:)
        radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
 
+       !---------------------------------------------------------------------
+       ! JACOBIAN CALCULATIONS - FOR HIGH-RES SPECTRA BEFORE CONVOLUTION
+       !---------------------------------------------------------------------
 
-       ! JACOBIAN CALCULATIONS
-
-       ! Surface pressure Jacobian
-       if (SV%num_psurf == 1) then
-          ! This equation requires the TOA radiance before SIF is added, so if we have
-          ! SIF in it, take it out beforehand.
-          K_hi(:, SV%idx_psurf(1)) = radiance_tmp_work_hi(:) &
-               * (1.0d0 / mu0 + 1.0d0 / mu) &
-               * (sum(sum(gas_tau_dpsurf, dim=2), dim=2))
-       end if
+       ! Solar jacobians - these are independent of the RT model, since the solar
+       ! transmittance is just multiplied onto the TOA spectrum after RT calls
 
        ! Solar shift jacobian
        if (SV%num_solar_shift == 1) then
-          K_hi(:, SV%idx_solar_shift(1)) = -radiance_tmp_work_hi(:) &
+          K_hi(:, SV%idx_solar_shift(1)) = -radiance_tmp_hi_nosif_nozlo(:) &
                / this_solar(:,2) * dsolar_dlambda(:)
        end if
 
        ! Solar stretch jacobian
        if (SV%num_solar_stretch == 1) then
-          K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_work_hi(:) &
-               / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
+          K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_hi_nosif_nozlo(:) &
+               / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) &
+               / (1.0d0 - solar_doppler)
+       end if
+
+       ! Surface pressure Jacobian
+       if (SV%num_psurf == 1) then
+          ! This equation requires the TOA radiance before SIF is added, so if we have
+          ! SIF in it, take it out beforehand.
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+             call calculate_BL_psurf_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                  gas_tau_dpsurf, mu0, mu, K_hi(:, SV%idx_psurf(1)))
+          case default
+             call logger%error(fname, "Surface pressure Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
        end if
 
        ! Temperature offset Jacobian
        if (SV%num_temp == 1) then
-          K_hi(:, SV%idx_temp(1)) =  -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
-               * (sum(sum(gas_tau_dtemp, dim=2), dim=2) - total_tau)
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+             call calculate_BL_temp_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                  gas_tau, gas_tau_dtemp, mu0, mu,  K_hi(:, SV%idx_temp(1)))
+          case default
+             call logger%error(fname, "Temperature offset Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
        end if
 
        ! Gas jacobians
        if (SV%num_gas > 0) then
-
           do i=1, SV%num_gas
              ! Jacobian for a scalar-type gas retrieval
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
-                K_hi(:, SV%idx_gas(i,1)) = -radiance_tmp_work_hi(:) * ((1.0d0 / mu0) + (1.0d0 / mu)) &
-                     * sum(gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), dim=2) &
-                     / SV%svsv(SV%idx_gas(i,1))
+                select case (RT_model)
+                case (RT_BEER_LAMBERT)
+                   call calculate_BL_gas_subcolumn_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                        mu0, mu, gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), &
+                        SV%svsv(SV%idx_gas(i,1)), K_hi(:, SV%idx_gas(i,1)))
+                case default
+                   call logger%error(fname, "Gas sub-column Jacobian not implemented " &
+                        // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                end select
              end if
-
           end do
+       end if
+
+       ! Albedo Jacobians
+       if (SV%num_albedo > 0) then
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+             do i=1, SV%num_albedo
+                call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo, albedo, &
+                     hires_grid, center_pixel_hi, i, K_hi(:, SV%idx_albedo(i)))
+             end do
+          case default
+             call logger%error(fname, "Albedo Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
        end if
 
 
@@ -1701,6 +1855,7 @@ contains
        ! Grab a copy of the L1b radiances
        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
 
+       ! These are the 'trivial' Jacobians that don't really need their own functions
        ! We add the SIF jacobian AFTER the K matrix is allocated
        if (SV%num_sif > 0) then
           ! Plug in the Jacobians (SIF is easy)
@@ -1709,13 +1864,6 @@ contains
        ! Same for ZLO
        if (SV%num_zlo > 0) then
           K(:, SV%idx_zlo(1)) = 1.0d0
-       end if
-
-       if (SV%num_albedo > 0) then
-          do i=1, SV%num_albedo
-             K_hi(:, SV%idx_albedo(i)) = (radiance_calc_work_hi(:) - this_sif_radiance - this_zlo_radiance) / albedo * &
-                  ((hires_grid(:) - hires_grid(1)) ** (i-1))
-          end do
        end if
 
        ! Now calculate the noise-equivalent radiances
@@ -1751,12 +1899,48 @@ contains
 
        end select
 
+       ! If we are doing solar measurements and average spectra,
+       ! we also need to re-scale the noise to get adjusted CHI2
+       if ((MCS%algorithm%solar_footprint_averaging) .and. &
+            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
+
+          noise_work(:) = noise_work(:) / sqrt(dble(MCS%general%N_frame))
+
+       end if
+
        allocate(Se_inv(N_spec, N_spec))
        ! Inverse noise covariance, we keep it diagonal, as usual
        Se_inv(:,:) = 0.0d0
        do i=1, N_spec
           Se_inv(i,i) = 1.0d0 / (noise_work(i) ** 2)
        end do
+
+
+       ! Allocate ILS stretch factor (pixel dependent)
+       allocate(this_ILS_stretch(N_spec))
+       this_ILS_stretch(:) = 0.0d0
+       ! Build the ILS stretch polynomial
+       if (SV%num_ils_stretch > 0) then
+          do i=1, N_spec
+             do j=1, SV%num_ils_stretch
+                this_ILS_stretch(i) = this_ILS_stretch(i) &
+                     + (dble(i - center_pixel) ** (j-1) * SV%svsv(SV%idx_ils_stretch(j)))
+             end do
+          end do
+       end if
+
+       ! Allocate the CURRENTLY USED ILS wavelength array
+       allocate(this_ILS_delta_lambda(size(ils_delta_lambda, 1), N_spec))
+       this_ILS_delta_lambda(:,:) = ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band)
+
+       ! If we retrieve an ILS stretch, then apply the stretch factor to the ILS
+       ! delta lambda data here.
+
+       if (SV%num_ils_stretch > 0) then
+          do i=1, N_spec
+             this_ILS_delta_lambda(:,i) = this_ILS_delta_lambda(:,i) * this_ILS_stretch(i)
+          end do
+       end if
 
        ! Convolution with the instrument line shape function(s)
        ! Note: we are only passing the ILS arrays that correspond to the
@@ -1767,7 +1951,7 @@ contains
 
           ! Convolution of the TOA radiances
           call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-               ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+               this_ILS_delta_lambda(:,:), &
                ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
                ILS_success)
@@ -1803,13 +1987,6 @@ contains
              if (i == SV%idx_sif(1)) skip_jacobian = .true.
              if (i == SV%idx_zlo(1)) skip_jacobian = .true.
 
-             ! Albedo jacobians can be calculated later as well
-!!$             do j=1, SV%num_albedo
-!!$                if (i == SV%idx_albedo(j)) then
-!!$                   skip_jacobian = .true.
-!!$                end if
-!!$             end do
-
              ! If we have any reason to skip this Jacobian index for convolution,
              ! do it now.
              if (skip_jacobian) cycle
@@ -1817,7 +1994,7 @@ contains
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
              call oco_type_convolution(hires_grid, K_hi(:,i), &
-                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  this_ILS_delta_lambda(:,:), &
                   ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
                   ILS_success)
@@ -1831,78 +2008,44 @@ contains
           end do
        end select
 
-       ! Calculate albedo Jacobians
-       ! We could just convolve the high-res albedo jacobian, however the convolution
-       ! is probably a good chunk slower than this little section here.
-!!$       if (SV%num_albedo > 0) then
-!!$
-!!$          allocate(albedo_low(N_spec))
-!!$
-!!$          ! In order to calculate the low-resolution albedo Jacobian, we also
-!!$          ! need the low-resolution albedo, which we calculate here.
-!!$          albedo_low(:) = 0.0d0
-!!$          do i=1, SV%num_albedo
-!!$             albedo_low(:) = albedo_low(:) + SV%svsv(SV%idx_albedo(i)) * &
-!!$                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
-!!$                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
-!!$          end do
-!!$
-!!$          ! And calculate the derivative ..
-!!$          do i=1, SV%num_albedo
-!!$             K(:, SV%idx_albedo(i)) = (radiance_calc_work(:) - this_sif_radiance - this_zlo_radiance) / albedo_low(:) * &
-!!$                  ((this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max) - &
-!!$                  this_dispersion(l1b_wl_idx_min)) ** (dble(i-1)))
-!!$          end do
-!!$
-!!$          deallocate(albedo_low)
-!!$       end if
 
-       ! Disperion Jacobians are produced via finite differencing
+       !---------------------------------------------------------------------
+       ! JACOBIAN CALCULATIONS - FOR SPECTRA AFTER CONVOLUTION
+       !---------------------------------------------------------------------
+
+       ! Calculate disperion Jacobians
        if (SV%num_dispersion > 0) then
           do i=1, SV%num_dispersion
-
-             ! Perturb dispersion coefficient by user-supplied value
-             this_dispersion_coefs_pert(:) = this_dispersion_coefs(:)
-             this_dispersion_coefs_pert(i) = this_dispersion_coefs_pert(i) &
-                  + MCS%window(i_win)%dispersion_pert(i)
-
-             ! And finally do the convolution and create the Jacobian by
-             ! differencing / dividing.
-             select type(my_instrument)
-             type is (oco2_instrument)
-
-                ! Calculate new dispersion grid using perturbed coefficients
-                call my_instrument%calculate_dispersion(this_dispersion_coefs_pert, &
-                     this_dispersion_tmp(:), band, i_fp)
-
-                ! Apply instrument Doppler shift
-                this_dispersion_tmp = this_dispersion_tmp / (1.0d0 - instrument_doppler)
-
-                ! Convolve the perturbed TOA radiance
-                call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
-                     ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                     this_dispersion_tmp(l1b_wl_idx_min:l1b_wl_idx_max), radiance_tmp_work, &
-                     ILS_success)
-
-                if (.not. ILS_success) then
-                   call logger%error(fname, "ILS convolution error.")
-                   return
-                end if
-
-                ! Compute and store the Jacobian into the right place in the matrix
-                K(:, SV%idx_dispersion(i)) = (radiance_tmp_work - radiance_calc_work) &
-                     / MCS%window(i_win)%dispersion_pert(i)
-             end select
-
+             call calculate_dispersion_jacobian(my_instrument, i, &
+                  this_dispersion_coefs, band, i_win, i_fp, N_spec, &
+                  this_ILS_delta_lambda, ILS_relative_response, &
+                  l1b_wl_idx_min, l1b_wl_idx_max, &
+                  instrument_doppler, hires_grid, radiance_calc_work, &
+                  radiance_calc_work_hi, K(:, SV%idx_dispersion(i)))
           end do
        end if
 
-       ! See Rodgers (2000) equation 5.36: calculating x_i+1 from x_i
+
+       ! ILS Jacobians are produced via finite differencing
+       if (SV%num_ILS_stretch > 0) then
+          ! Loop over all required ILS stretch orders
+          do i=1, SV%num_ils_stretch
+             call calculate_ILS_stretch_jacobian(my_instrument, i, SV, &
+                  band, i_win, i_fp, N_spec, &
+                  ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  ILS_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  this_ILS_stretch, this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                  l1b_wl_idx_min, l1b_wl_idx_max, &
+                  hires_grid, center_pixel, radiance_calc_work, &
+                  radiance_calc_work_hi, K(:, SV%idx_ils_stretch(i)))
+          end do
+       end if
 
 
-       ! Inverse method solver
-       write(tmp_str, *) MCS%window(i_win)%inverse_method%chars()
+       !---------------------------------------------------------------------
+       ! INVERSE SOLVER
+       !---------------------------------------------------------------------
+
        if (MCS%window(i_win)%inverse_method%lower() == "imap") then
           ! Use iterative maximum a-posteriori solution (linear retrieval)
           ! (IMAP) as done by Christian Frankenberg
@@ -1917,9 +2060,12 @@ contains
              return
           end if
 
-          !          tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
-          !               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
+          !
+          ! tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
+          !          radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
 
+          ! This here updates the AP essentially, so the next step launches from the
+          ! last iteration's result.
           tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
                radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - old_sv))
 
@@ -1929,29 +2075,31 @@ contains
        else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
 
           ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
-          ! tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
+          tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
 
           ! K^T Se^-1 K
-          !KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
+          KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
 
-          !tmp_m1 = Sa_inv + KtSeK
-          !call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
-          !if (.not. success_inv_mat) then
-          !   call logger%error(fname, "Failed to invert K^T Se K")
-          !   return
-          !end if
+          tmp_m1 = Sa_inv + KtSeK
+          call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
+          if (.not. success_inv_mat) then
+             call logger%error(fname, "Failed to invert K^T Se K")
+             return
+          end if
 
-          !tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
-          !tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
-          !SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
+          tmp_v1 = matmul(matmul(transpose(K), Se_inv), radiance_meas_work - radiance_calc_work)
+          tmp_v2 = matmul(Sa_inv, SV%svsv - SV%svap)
+          SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
        else
-          call logger%error(fname, "Inverse method: " // trim(tmp_str) // ", not known!")
+          call logger%error(fname, "Inverse method: " &
+               // MCS%window(i_win)%inverse_method%lower() // ", not known!")
           stop 1
        end if
 
 
        ! In the case of retrieving gases - we have to adjust the retrieved state vector
-       ! if the retrieval wants to push it below 0.
+       ! if the retrieval wants to push it below 0. Also, we do not allow the gas scale
+       ! factors to drop below 50% of the last iteration's value.
        do i=1, SV%num_gas
           do j=1, size(sv%idx_gas(i,:))
              if (SV%idx_gas(i,j) /= -1) then
@@ -1965,9 +2113,12 @@ contains
           end do
        end do
 
-       if (SV%num_albedo > 0) then
-          if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
-             SV%svsv(SV%idx_albedo(1)) = 1.0d-4
+       ! We limit the retrieved albedo, but only in downlooking mode
+       if (MCS%algorithm%observation_mode == "downlooking") then
+          if (SV%num_albedo > 0) then
+             if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
+                SV%svsv(SV%idx_albedo(1)) = 1.0d-4
+             end if
           end if
        end if
 
@@ -1989,17 +2140,12 @@ contains
        this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
             noise_work, N_spec - N_sv)
 
-       !write(*,*) "Chi2: ", this_chi2
-       !write(*,*) "Linear prediction: ", linear_prediction_chi2
-       !write(*,*) "Ratio R: ", (old_chi2 - this_chi2) / (old_chi2 - linear_prediction_chi2)
-
-
+       chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
        ! Now we check for convergence!
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
             (iteration > MCS%window(i_win)%max_iterations) .or. &
-            ((abs(this_chi2 - old_chi2) / old_chi2) < 0.01) .or. &
-                                !(abs(sqrt(old_chi2) - sqrt(this_chi2)) < 0.01) .or. &
+            (chi2_rel_change < 0.01) .or. &
             (num_divergent_steps > 1) &
             ) then
 
@@ -2015,15 +2161,16 @@ contains
              results%converged(i_fp, i_fr) = 0
           end if
 
-          ! Allocate array for pressure weights
-          allocate(pwgts(num_active_levels))
-
           ! Calculate the XGAS for every retreived gas only, same as above with the
           ! gas OD calculation, we loop through all gases, apply the gas scaling
           ! factor from the state vector, and calculate the pressure weighting function
           ! as well as the XGAS.
 
           if (SV%num_gas > 0) then
+
+             ! Allocate array for pressure weights
+             allocate(pwgts(num_active_levels))
+
              do j=1, num_gases
 
                 ! Here we need to do the same thing as before when calculating
@@ -2060,6 +2207,8 @@ contains
                      )
 
              end do
+
+             deallocate(pwgts)
           end if
 
           ! Save the final dSigma-squared value (in case anyone needs it)
@@ -2069,16 +2218,12 @@ contains
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Calculate the averaging kernel
-          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K)
+          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
              SV%sver(i) = sqrt(Shat(i,i))
           end do
-
-!!$          do i=1, N_sv
-!!$             write(*,*) i, AK(i,i), SV%svsv(i), SV%sver(i), 100.0d0 * (SV%sver(i) / sqrt(Sa(i,i))), results%sv_names(i)%chars()
-!!$          end do
 
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
@@ -2124,11 +2269,6 @@ contains
 
           !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
           !! we revert to the last state vector, and increase lm_gamma
-
-          if (.not. divergent_step) then
-             ! Make sure we keep the 'old' Chi2 only from a valid iteration
-             old_chi2 = this_chi2
-          end if
 
           if (iteration == 1) then
              chi2_ratio = 0.5d0
@@ -2179,44 +2319,147 @@ contains
 
        end if
 
-!!$       open(file="jacobian.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) (K(i, j), j=1, N_sv)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$
-!!$       open(file="l1b_spec.dat", newunit=funit)
-!!$       do i=1, N_spec
-!!$          write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), radiance_calc_work(i), &
-!!$               noise_work(i)!, solar_low(i)
-!!$       end do
-!!$       close(funit)
-!!$
-!!$
-!!$       write(*,*) num_active_levels
-!!$       do i=1, num_active_levels
-!!$          write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), ndry(i)
-!!$       end do
-!!$
-!!$       write(*,*) "old, current and delta state vector, and errors"
-!!$
-!!$       write(*,*) "Iteration: ", iteration
-!!$       do i=1, N_sv
-!!$          write(*, '(I3.1,A40,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-!!$               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
-!!$               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i))
-!!$       end do
-!!$       write(*,*) "Chi2:    ", SUM(((radiance_meas_work - radiance_calc_work) ** 2) / (noise_work ** 2)) / (N_spec - N_sv)
-!!$       write(*,*) "Dsigma2: ", dsigma_sq, '/', dble(N_sv) * dsigma_scale
-!!$       write(*,*) "LM-Gamma: ", lm_gamma
-!!$       write(*,*) "Ratio R: ", chi2_ratio
 
+       !---------------------------------------------------------------------
+       ! STEP-THROUGH MODE
+       !---------------------------------------------------------------------
+
+       ! If the user requests a step-through, then we print a bunch of debug information about
+       ! the retrieval for each iteration and wait for a return by the user
+       if (MCS%algorithm%step_through) then
+
+          call logger%debug(fname, "---------------------------------")
+
+          ! Gain matrix and AK are normally just calculated after convergence, so
+          ! we need to compute them here per-iteration
+
+          ! Calculate the Gain matrix
+          gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
+
+          ! Calculate the averaging kernel
+          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
+
+          do i=1, N_sv
+             do j=1, N_sv
+                Shat_corr(i,j) = Shat(i,j) / sqrt(Shat(i,i) * Shat(j,j))
+             end do
+          end do
+          open(file="shat_corr.dat", newunit=funit)
+          do i=1, N_sv
+             write(funit,*) (Shat_corr(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: Shat_corr.dat (statevector x statevector)")
+
+          open(file="jacobian.dat", newunit=funit)
+          do i=1, N_spec
+             write(funit,*) (K(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: jacobian.dat (spectral x statevector)")
+
+          open(file="ak_matrix.dat", newunit=funit)
+          do i=1, N_sv
+             write(funit,*) (AK(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: ak_matrix.dat (statevector x statevector)")
+
+          open(file="gain_matrix.dat", newunit=funit)
+          do i=1, N_spec
+             write(funit,*) (gain_matrix(j, i), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: gain_matrix.dat (spectral x statevector)")
+
+          open(file="spectra.dat", newunit=funit)
+          do i=1, N_spec
+             write(funit,*) this_dispersion(i+l1b_wl_idx_min-1), radiance_meas_work(i), &
+                  radiance_calc_work(i), noise_work(i)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: spectra.dat (wavelength, measured, modelled, noise)")
+
+          open(file="hires_spectra.dat", newunit=funit)
+          do i=1, N_hires
+             write(funit, *) radiance_calc_work_hi(i)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: hires_spectra.dat (modelled)")
+
+
+          if (num_active_levels > 0) then
+             call logger%debug(fname, "Model atmosphere: (pressure, gas vmrs, ndry)")
+             call logger%debug(fname, "Gas names: ")
+             do i=1, num_gases
+                write(tmp_str, '(A,G0.1,A,A)') "Gas #", i, ": ", MCS%window(i_win)%gases(i)%chars()
+                call logger%debug(fname, trim(tmp_str))
+             end do
+             do i=1, num_active_levels
+                write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), &
+                     ndry(i)
+             end do
+          end if
+
+          call logger%debug(fname, "---------------------------------")
+
+          write(tmp_str, '(A,G0.1)') "Iteration: ", iteration
+          call logger%debug(fname, trim(tmp_str))
+
+
+          if ((iteration == 1) .and. allocated(scale_first_guess)) then
+             do i=1, size(scale_first_guess)
+                write(tmp_str, '(A,G0.1,A,F15.5)') "Scale factor first guess #", &
+                     i, ": ", scale_first_guess(i)
+                call logger%debug(fname, trim(tmp_str))
+             end do
+          end if
+
+          write(tmp_str,*) "SV index, SV name, SV prior, SV last iteration, " &
+               // "SV current, SV delta, prior cov., posterior cov., diagonal of AK"
+          call logger%debug(fname, trim(tmp_str))
+
+          do i=1, N_sv
+             write(tmp_str, '(I3.1,A25,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+                  i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
+                  SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i)), AK(i,i)
+             call logger%debug(fname, trim(tmp_str))
+          end do
+
+          call logger%debug(fname, "---------------------------------")
+
+          write(tmp_str, '(A,F10.3)') "Chi2 (linear prediction): ", linear_prediction_chi2
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,F10.3)') "Chi2 (this iteration):    ", this_chi2
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,F10.3)') "Chi2 (last iteration):    ", old_chi2
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A,F10.3)') "Chi2 (relative change):   ", abs(this_chi2 - old_chi2) / old_chi2
+          call logger%debug(fname, trim(tmp_str))
+
+          write(tmp_str, '(A,ES15.6,A,ES15.6)') "Dsigma-squared / convergence threshold: ", &
+               dsigma_sq, ' / ', dble(N_sv) * dsigma_scale
+
+          call logger%debug(fname, trim(tmp_str))
+          if (MCS%window(i_win)%allow_divergences) then
+             write(tmp_str, '(A,F10.3)') "LM-gamma: ", lm_gamma
+             call logger%debug(fname, trim(tmp_str))
+
+             write(tmp_str, '(A,F10.3)') "Chi2 ratio (R): ", chi2_ratio
+             call logger%debug(fname, trim(tmp_str))
+          end if
+
+          call logger%debug(fname, "---------------------------------")
+          call logger%debug(fname, "Press ENTER to continue")
+          read(*,*)
+
+       end if
 
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.
        deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-            noise_work, Se_inv, K, gain_matrix, solar_irrad)
+            noise_work, Se_inv, K, gain_matrix, solar_irrad, &
+            this_ILS_stretch, this_ILS_delta_lambda)
 
        if (allocated(gas_tau)) deallocate(gas_tau)
        if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
@@ -2229,9 +2472,12 @@ contains
        if (allocated(ndry)) deallocate(ndry)
        if (allocated(ndry_tmp)) deallocate(ndry_tmp)
 
-       !read(*,*)
+       if (.not. divergent_step) then
+          ! Make sure we keep the 'old' Chi2 only from a valid iteration
+          old_chi2 = this_chi2
+       end if
+
     end do
-    !read(*,*)
 
   end function physical_FM
 
@@ -2299,7 +2545,17 @@ contains
     if (SV%num_dispersion > 0) then
        do i=1, SV%num_dispersion
           Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = &
-               (10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
+               MCS%window(i_win)%dispersion_cov(i)**2
+               !(10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
+       end do
+    end if
+
+    ! Make the ILS stretch prior covariance about ten times the perturbation value
+    if (SV%num_ils_stretch > 0) then
+       do i=1, SV%num_ils_stretch
+          Sa(SV%idx_ils_stretch(i), SV%idx_ils_stretch(i)) = &
+               MCS%window(i_win)%ils_stretch_cov(i)**2
+               !(10.0d0 * MCS%window(i_win)%ils_stretch_pert(i))**2
        end do
     end if
 
@@ -2467,114 +2723,7 @@ contains
 
 
 
-  !> @brief Creates human-readable names for state vector elements
-  !>
-  !> The idea is faily simple: we loop through all the state vector elements,
-  !> and then check for each one if there is a corresponding SV\%idx_* associated with
-  !> that element position. Based on that, we create a name for the state vector
-  !> element, which usually has the parameter number (e.g. albedo order) baked in.
-  !> @param results Result container
-  !> @param SV State vector object
-  !> @param i_win Retrieval window index for MCS
-  subroutine assign_SV_names_to_result(results, SV, i_win)
-    implicit none
-    type(result_container), intent(inout) :: results
-    type(statevector), intent(in) :: SV
-    integer, intent(in) :: i_win
 
-    character(len=999) :: tmp_str
-    integer :: i,j,k
-
-    i = 1
-    do while (i <= size(SV%svsv))
-
-       ! Albedo names
-       do j=1, SV%num_albedo
-          if (SV%idx_albedo(j) == i) then
-             write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! SIF name (really only one at this point)
-       do j=1, SV%num_sif
-          if (SV%idx_sif(j) == i) then
-             write(tmp_str, '(A)') "SIF_absolute"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! ZLO name
-       do j=1, SV%num_zlo
-          if (SV%idx_zlo(j) == i) then
-             write(tmp_str, '(A)') "ZLO"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       do j=1, SV%num_temp
-          if (SV%idx_temp(j) == i) then
-             write(tmp_str, '(A)') "temperature"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! Solar shift name
-       if (SV%idx_solar_shift(1) == i) then
-          write(tmp_str, '(A)') "solar_shift"
-          results%sv_names(i) = trim(tmp_str)
-       end if
-
-       ! Solar stretch name
-       if (SV%idx_solar_stretch(1) == i) then
-          write(tmp_str, '(A)') "solar_stretch"
-          results%sv_names(i) = trim(tmp_str)
-       end if
-
-       ! Surface pressure name
-       do j=1, SV%num_psurf
-          if (SV%idx_psurf(j) == i) then
-             write(tmp_str, '(A)') "psurf"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! Dispersion parameter names
-       do j=1, SV%num_dispersion
-          if (SV%idx_dispersion(j) == i) then
-             write(tmp_str, '(A,G0.1)') "dispersion_coef_", j
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! Retrieved gas names (scalar retrieval only so far)
-       k = 1
-       do j=1, SV%num_gas
-
-          ! Check if this SV element is a scalar retrieval
-          if (SV%idx_gas(j,1) == i) then
-
-             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
-                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
-
-                write(tmp_str, '(A,A)') trim(MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%chars() // "_scale_")
-                write(tmp_str, '(A, F4.2)') trim(tmp_str), &
-                     SV%gas_retrieve_scale_start(j)
-                write(tmp_str, '(A,A,F4.2)') trim(tmp_str), "_" , &
-                     SV%gas_retrieve_scale_stop(j)
-                results%sv_names(i) = trim(tmp_str)
-
-                k = k + 1
-             end if
-
-          end if
-
-       end do
-
-       i = i+1
-    end do
-
-  end subroutine assign_SV_names_to_result
 
   !> @brief Reads in the atmosphere file, which contains column-based profiles.
   !>

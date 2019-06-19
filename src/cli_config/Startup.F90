@@ -230,6 +230,7 @@ module startup_mod
                                 tmp_section%chars() // &
                                 '] is not in the list of known sections.'
                 config_file_OK = .false.
+                stop 1
             else
                 ! But if successful, we now need to check if all section options
                 ! are valid.
@@ -266,6 +267,7 @@ module startup_mod
                                         // option_pairs(1) &
                                         // '" is not recognized.'
                         config_file_OK = .false.
+                        stop 1
                     end if
                 end do
 

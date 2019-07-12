@@ -59,7 +59,7 @@ contains
 
     type(string) :: l1b_file
 
-    character(len=*), parameter :: fname = "scan_l1b_file"
+    character(len=*), parameter :: fname = "oco2_scan_l1b_file"
     character(len=999) :: msg
     integer(hid_t) :: file_id
     integer(8), allocatable :: n_fp_frames(:), dim_spec(:)
@@ -275,7 +275,9 @@ contains
     ! be read from the file.
 
     ! If we have OpenMP, lock this section of the code, to make sure
-    ! only one thread at a time is reading in a spectrum..
+    ! only one thread at a time is reading in a spectrum.
+    ! NOTE: HDF5 (without the parallel) is not designed for concurrent access,
+    ! so we MUST restrict reading from a file to one thread/process at a time.
 
 !$OMP CRITICAL
     call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
@@ -294,6 +296,9 @@ contains
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, &
          hdferr, memspace_id, dspace_id)
     call check_hdf_error(hdferr, fname, "Error reading spectrum data from " // trim(dset_name))
+
+    call h5dclose_f(dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error closing dataset id for " // trim(dset_name))
 !$OMP END CRITICAL
 
   end subroutine read_one_spectrum

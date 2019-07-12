@@ -205,6 +205,8 @@ contains
     integer :: frame_start, frame_skip, frame_stop
     integer :: fp_start, fp_skip
 
+    double precision, allocatable :: land_fraction(:,:)
+
     ! Open up the MET file
     if (MCS%algorithm%observation_mode == "downlooking") then
        call h5fopen_f(MCS%input%met_filename%chars(), &
@@ -262,6 +264,13 @@ contains
              call logger%debug(fname, "MET does not have Sounding IDs - cannot verify if files match.")
           end if
        end if
+
+
+       if (allocated(land_fraction)) deallocate(land_fraction)
+       dset_name = "/SoundingGeometry/sounding_land_fraction"
+       call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
+       call logger%trivia(fname, "Finished reading in land fraction.")
+
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
@@ -560,10 +569,16 @@ contains
              this_thread = 0
              call cpu_time(cpu_time_start)
 #endif
-             ! --------------------------------------------- !
-             ! Do the retrieval for this particular sounding !
+
+             write(*,*) land_fraction(i_fp, i_fr)
+             if (land_fraction(i_fp, i_fr) < 100) then
+                cycle
+             end if
+
+             ! ---------------------------------------------------------------------
+             ! Do the retrieval for this particular sounding -----------------------
              this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
-             ! --------------------------------------------- !
+             ! ---------------------------------------------------------------------
 
 #ifdef _OPENMP
              cpu_time_stop = omp_get_wtime()
@@ -601,8 +616,9 @@ contains
 
        ! Writing out the prior surface pressure, but obviously only if allocated
        if (allocated(met_psurf)) then
-          call logger%info(fname, "Writing out: " // trim(group_name) // "/surface_pressure_apriori")
-          write(tmp_str, '(A,A)') trim(group_name), "/surface_pressure_apriori"
+          call logger%info(fname, "Writing out: " // trim(group_name) // &
+               "/surface_pressure_apriori_" // MCS%general%code_name)
+          write(tmp_str, '(A,A,A)') trim(group_name), "/surface_pressure_apriori_", MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
        end if
@@ -701,7 +717,7 @@ contains
 
        call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_" &
             // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/snr", MCS%general%code_name
+       write(tmp_str, '(A,A,A)') trim(group_name), "/snr_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR, out_dims2d)
 
@@ -1093,7 +1109,7 @@ contains
          " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
     call logger%debug(fname, trim(tmp_str))
 
-    write(tmp_str, "(A, F6.2, A, F6.2, A, E8.3)") &
+    write(tmp_str, "(A, F8.2, A, F8.2, A, ES15.3)") &
          "Longitude: ", lon(i_fp, i_fr), &
          " Latitude: ", lat(i_fp, i_fr), &
          " Altitude: ", altitude(i_fp, i_fr)
@@ -1129,8 +1145,8 @@ contains
        ! so we need to change the calculation slightly.
        call solar_distance_and_velocity_v2(epoch, solar_dist, solar_rv)
 
-       instrument_doppler = solar_rv / SPEED_OF_LIGHT
-       solar_doppler = 0.0d0
+       instrument_doppler = 0.0d0
+       solar_doppler = solar_rv / SPEED_OF_LIGHT
     end if
 
     ! Set up retrieval quantities:
@@ -1510,11 +1526,11 @@ contains
                             ! where they would belong to. We also make sure it can't
                             ! go below or above the first/last level.
 
-                            s_start(i) = searchsorted_dp((this_atm%p), &
-                                 SV%gas_retrieve_scale_start(i) * (this_psurf), .true.)
+                            s_start(i) = searchsorted_dp(log(this_atm%p), &
+                                 SV%gas_retrieve_scale_start(i) * log(this_psurf), .true.)
                             s_start(i) = max(1, s_start(i))
-                            s_stop(i) = searchsorted_dp((this_atm%p), &
-                                 SV%gas_retrieve_scale_stop(i) * (this_psurf), .true.) + 1
+                            s_stop(i) = searchsorted_dp(log(this_atm%p), &
+                                 SV%gas_retrieve_scale_stop(i) * log(this_psurf), .true.) + 1
                             s_stop(i) = min(num_active_levels, s_stop(i))
 
                          end if
@@ -2329,6 +2345,8 @@ contains
        if (MCS%algorithm%step_through) then
 
           call logger%debug(fname, "---------------------------------")
+          write(tmp_str, '(A,G0.1,A,G0.1)') "Frame: ", i_fr, ", Footprint: ", i_fp
+          call logger%debug(fname, trim(tmp_str))
 
           ! Gain matrix and AK are normally just calculated after convergence, so
           ! we need to compute them here per-iteration
@@ -2389,16 +2407,16 @@ contains
 
 
           if (num_active_levels > 0) then
-             call logger%debug(fname, "Model atmosphere: (pressure, gas vmrs, ndry)")
-             call logger%debug(fname, "Gas names: ")
-             do i=1, num_gases
-                write(tmp_str, '(A,G0.1,A,A)') "Gas #", i, ": ", MCS%window(i_win)%gases(i)%chars()
-                call logger%debug(fname, trim(tmp_str))
-             end do
-             do i=1, num_active_levels
-                write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), &
-                     ndry(i)
-             end do
+             !call logger%debug(fname, "Model atmosphere: (pressure, gas vmrs, ndry)")
+             !call logger%debug(fname, "Gas names: ")
+             !do i=1, num_gases
+             !   write(tmp_str, '(A,G0.1,A,A)') "Gas #", i, ": ", MCS%window(i_win)%gases(i)%chars()
+             !   call logger%debug(fname, trim(tmp_str))
+             !end do
+             !do i=1, num_active_levels
+             !   write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), &
+             !        ndry(i)
+             !end do
           end if
 
           call logger%debug(fname, "---------------------------------")

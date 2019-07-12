@@ -570,10 +570,10 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-             write(*,*) land_fraction(i_fp, i_fr)
-             if (land_fraction(i_fp, i_fr) < 100) then
-                cycle
-             end if
+             !write(*,*) land_fraction(i_fp, i_fr)
+             !if (land_fraction(i_fp, i_fr) < 100) then
+             !   cycle
+             !end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------

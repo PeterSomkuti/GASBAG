@@ -392,202 +392,226 @@ contains
 
 
 
- pure function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+  function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
-   implicit none
-   logical, intent(in) :: pre_gridded
-   type(CS_gas), intent(in) :: gas
-   double precision, intent(in) :: wl(:), p, T, H2O
-   integer, intent(in) :: wl_left_idx(:)
+    implicit none
+    logical, intent(in) :: pre_gridded
+    type(CS_gas), intent(in) :: gas
+    double precision, intent(in) :: wl(:), p, T, H2O
+    integer, intent(in) :: wl_left_idx(:)
 
-   double precision :: CS_value(size(wl))
+    double precision :: CS_value(size(wl))
 
-   ! These here are the indices between which the CS array will
-   ! be linearly interpolated: e.g. idx_(left, right)_(pressure)
-   integer :: idx_l_p, idx_r_p ! Pressure
-   integer :: idx_lr_T, idx_ll_T, idx_rl_T, idx_rr_T ! Temperature has two dimensions
-   integer :: idx_l_H2O, idx_r_H2O
-   integer :: idx_l_wl, idx_r_wl
-   double precision :: C3(0:1, 0:1, 0:1) ! 0 is 'left', 1 is 'right'
-   double precision :: C2(0:1, 0:1), C1(0:1)
-   double precision :: wl_d, p_d, T_d_l, T_d_r, H2O_d
-   integer :: i
+    character(len=*), parameter :: fname = "get_CS_value_at" ! Function name
+    ! These here are the indices between which the CS array will
+    ! be linearly interpolated: e.g. idx_(left, right)_(pressure)
+    integer :: idx_l_p, idx_r_p ! Pressure
+    integer :: idx_lr_T, idx_ll_T, idx_rl_T, idx_rr_T ! Temperature has two dimensions
+    integer :: idx_l_H2O, idx_r_H2O
+    integer :: idx_l_wl, idx_r_wl
+    double precision :: C3(0:1, 0:1, 0:1) ! 0 is 'left', 1 is 'right'
+    double precision :: C2(0:1, 0:1), C1(0:1)
+    double precision :: wl_d, p_d, T_d_l, T_d_r, H2O_d
+    integer :: i
 
 
-   ! This next section here "just" finds the left and right indices of p,T,H2O,wl values within the
-   ! grids of the cross section tables. Unfortunately, sourcing this bit out into a PURE FUNCTION still
-   ! comes with such a large overhead that I had to inline them explicitly. Maybe there's a way around
-   ! it, but for now the performance increase is totally worth it!
+    ! This next section here "just" finds the left and right indices of p,T,H2O,wl values within the
+    ! grids of the cross section tables. Unfortunately, sourcing this bit out into a PURE FUNCTION still
+    ! comes with such a large overhead that I had to inline them explicitly. Maybe there's a way around
+    ! it, but for now the performance increase is totally worth it!
 
-   ! Get the pressure indices
-   if (p <= gas%p(1)) then
-      idx_l_p = 1
-   else if (p >= gas%p(size(gas%p))) then
-      idx_l_p = size(gas%p) - 1
-   else
-      do i=1, size(gas%p)-1
-         if ((p >= gas%p(i)) .and. (p < gas%p(i+1))) then
-            idx_l_p = i
-            exit
-         end if
-      end do
-   end if
+    ! Get the pressure indices
+    if (p <= gas%p(1)) then
+       idx_l_p = 1
+    else if (p >= gas%p(size(gas%p) - 1)) then
+       idx_l_p = size(gas%p) - 1
+    else
+       do i=1, size(gas%p)-1
+          if ((p >= gas%p(i)) .and. (p < gas%p(i+1))) then
+             idx_l_p = i
+             exit
+          end if
+       end do
+    end if
 !!$   idx_l_p = searchsorted_dp(gas%p(:), p)
-   idx_r_p = idx_l_p + 1
+    idx_r_p = idx_l_p + 1
 
-   ! Get the temperature indices, which depend on P - so we have two
-   ! indices for the temperature dimension. One set of T indices (idx_l(l,r)_T)
-   ! corresponds to the left index of pressure (idx_l_p), the other set
-   ! (idx_r(l,r)_T) corresponds to the right index of pressure (idx_r_p).
+    if ((idx_l_p < 1) .or. (idx_l_p > size(gas%p) - 1)) then
+       call logger%error(fname, "idx_l_p out of range.")
+       return
+    end if
 
-   if (T <= gas%T(1, idx_l_p)) then
-      idx_ll_T = 1
-   else if (T >= gas%T(size(gas%T, 1), idx_l_p)) then
-      idx_ll_T = size(gas%T, 1) - 1
-   else
-      do i=1, size(gas%T, 1)-1
-         if ((T > gas%T(i, idx_l_p)) .and. (T <= gas%T(i+1, idx_l_p))) then
-            idx_ll_T = i
-            exit
-         end if
-      end do
-   end if
+
+
+    ! Get the temperature indices, which depend on P - so we have two
+    ! indices for the temperature dimension. One set of T indices (idx_l(l,r)_T)
+    ! corresponds to the left index of pressure (idx_l_p), the other set
+    ! (idx_r(l,r)_T) corresponds to the right index of pressure (idx_r_p).
+
+    if (T <= gas%T(1, idx_l_p)) then
+       idx_ll_T = 1
+    else if (T >= gas%T(size(gas%T, 1) - 1, idx_l_p)) then
+       idx_ll_T = size(gas%T, 1) - 1
+    else
+       do i=1, size(gas%T, 1) - 1
+          if ((T > gas%T(i, idx_l_p)) .and. (T <= gas%T(i+1, idx_l_p))) then
+             idx_ll_T = i
+             exit
+          end if
+       end do
+    end if
 !!$   idx_ll_T = searchsorted_dp(gas%T(:, idx_l_p), T)
-   idx_lr_T = idx_ll_T + 1
+    idx_lr_T = idx_ll_T + 1
 
-   if (T <= gas%T(1, idx_r_p)) then
-      idx_rl_T = 1
-   else if (T >= gas%T(size(gas%T, 1), idx_r_p)) then
-      idx_rl_T = size(gas%T, 1) - 1
-   else
-      do i=1, size(gas%T, 1)-1
-         if ((T >= gas%T(i, idx_r_p)) .and. (T < gas%T(i+1, idx_r_p))) then
-            idx_rl_T = i
-            exit
-         end if
-      end do
-   end if
+    if ((idx_ll_T < 1) .or. (idx_ll_T > size(gas%T, 1) - 1)) then
+       call logger%error(fname, "idx_ll_T out of range.")
+       return
+    end if
+
+    if (T <= gas%T(1, idx_r_p)) then
+       idx_rl_T = 1
+    else if (T >= gas%T(size(gas%T, 1) - 1, idx_r_p)) then
+       idx_rl_T = size(gas%T, 1) - 1
+    else
+       do i=1, size(gas%T, 1) - 1
+          if ((T >= gas%T(i, idx_r_p)) .and. (T < gas%T(i+1, idx_r_p))) then
+             idx_rl_T = i
+             exit
+          end if
+       end do
+    end if
 !!$   idx_rl_T = searchsorted_dp(gas%T(:, idx_r_p), T)
-   idx_rr_T = idx_rl_T + 1
+    idx_rr_T = idx_rl_T + 1
 
-   ! Get the water vapor indices
-   if (gas%has_H2O) then
-      if (H2O <= gas%H2O(1)) then
-         idx_l_H2O = 1
-      else if (H2O >= gas%H2O(size(gas%H2O, 1))) then
-         idx_l_H2O = size(gas%H2O, 1) - 1
-      else
-         do i=1, size(gas%H2O) - 1
-            if ((H2O > gas%H2O(i)) .and. (H2O <= gas%H2O(i+1))) then
-               idx_l_H2O = i
-               exit
-            end if
-         end do
-      end if
+    if ((idx_rl_T < 1) .or. (idx_rl_T > size(gas%T, 1) - 1)) then
+       call logger%error(fname, "idx_rl_T out of range.")
+       return
+    end if
+
+    ! Get the water vapor indices
+    if (gas%has_H2O) then
+       if (H2O <= gas%H2O(1)) then
+          idx_l_H2O = 1
+       else if (H2O >= gas%H2O(size(gas%H2O, 1) - 1)) then
+          idx_l_H2O = size(gas%H2O, 1) - 1
+       else
+          do i=1, size(gas%H2O) - 1
+             if ((H2O > gas%H2O(i)) .and. (H2O <= gas%H2O(i+1))) then
+                idx_l_H2O = i
+                exit
+             end if
+          end do
+       end if
 !!$      idx_l_H2O = searchsorted_dp(gas%H2O, H2O)
-      idx_r_H2O = idx_l_H2O + 1
-   else
-      ! If the cross sections have no water vapour dependence,
-      ! we just set both left and right indices to 1. I guess there
-      ! is some overhead from this - compared to writing a separate
-      ! function that skips the WV completely.
-      idx_l_H2O = 1
-      idx_r_H2O = 1
-   end if
+       idx_r_H2O = idx_l_H2O + 1
+    else
+       ! If the cross sections have no water vapour dependence,
+       ! we just set both left and right indices to 1. I guess there
+       ! is some overhead from this - compared to writing a separate
+       ! function that skips the WV completely.
+       idx_l_H2O = 1
+       idx_r_H2O = 1
+    end if
 
-   ! And perform the linear interpolation in now 3 or 4 dimensions!
-   ! Remember, we store the CS grid in the following way:
-   ! wavelength, h2o, temperature, pressure
-   ! .. so we order the vertices of our polytope in the same way.
-   p_d = (p - gas%p(idx_l_p)) / (gas%p(idx_r_p) - gas%p(idx_l_p))
-   if (gas%has_H2O) then
-      H2O_d = (H2O - gas%H2O(idx_l_H2O)) / (gas%H2O(idx_r_H2O) - gas%H2O(idx_l_H2O))
-   else
-      H2O_d = 0.0d0
-   end if
+    if ((idx_l_H2O < 1) .or. (idx_l_H2O > size(gas%H2O) - 1)) then
+       call logger%error(fname, "idx_l_H2O out of range.")
+       return
+    end if
 
-   ! Normalised temperature when pressure is at lower, and higher index
-   T_d_l = (T - gas%T(idx_ll_T, idx_l_p)) / &
-        (gas%T(idx_lr_T, idx_l_p) - gas%T(idx_ll_T, idx_l_p))
-   T_d_r = (T - gas%T(idx_rl_T, idx_r_p)) / &
-        (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
 
-   do i=1, size(wl)
+    ! And perform the linear interpolation in now 3 or 4 dimensions!
+    ! Remember, we store the CS grid in the following way:
+    ! wavelength, h2o, temperature, pressure
+    ! .. so we order the vertices of our polytope in the same way.
+    p_d = (p - gas%p(idx_l_p)) / (gas%p(idx_r_p) - gas%p(idx_l_p))
+    if (gas%has_H2O) then
+       H2O_d = (H2O - gas%H2O(idx_l_H2O)) / (gas%H2O(idx_r_H2O) - gas%H2O(idx_l_H2O))
+    else
+       H2O_d = 0.0d0
+    end if
 
-      if (.not. pre_gridded) then
-         wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
-              (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
+    ! Normalised temperature when pressure is at lower, and higher index
+    T_d_l = (T - gas%T(idx_ll_T, idx_l_p)) / &
+         (gas%T(idx_lr_T, idx_l_p) - gas%T(idx_ll_T, idx_l_p))
+    T_d_r = (T - gas%T(idx_rl_T, idx_r_p)) / &
+         (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
 
-         if (wl_left_idx(i) == -1) then
-            CS_value(i) = 0.0d0
-            cycle
-         end if
+    do i=1, size(wl)
 
-         idx_l_wl = wl_left_idx(i)
-         idx_r_wl = idx_l_wl + 1
+       if (.not. pre_gridded) then
+          wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
+               (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
 
-         ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
-         C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_ll_T, idx_l_p) * wl_d
+          if (wl_left_idx(i) == -1) then
+             CS_value(i) = 0.0d0
+             cycle
+          end if
 
-         C3(1,0,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_ll_T, idx_l_p) * wl_d
+          idx_l_wl = wl_left_idx(i)
+          idx_r_wl = idx_l_wl + 1
 
-         C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
+          ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
+          C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_l_H2O, idx_ll_T, idx_l_p) * wl_d
 
-         C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
+          C3(1,0,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_r_H2O, idx_ll_T, idx_l_p) * wl_d
 
-         C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
+          C3(0,1,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_l_H2O, idx_lr_T, idx_l_p) * wl_d
 
-         C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
+          C3(0,0,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rl_T, idx_r_p) * wl_d
 
-         C3(1,0,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rl_T, idx_r_p) * wl_d
+          C3(1,1,0) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_lr_T, idx_l_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_r_H2O, idx_lr_T, idx_l_p) * wl_d
 
-         C3(1,1,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
-              + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
+          C3(0,1,1) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_l_H2O, idx_rr_T, idx_r_p) * wl_d
 
-      else
+          C3(1,0,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rl_T, idx_r_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rl_T, idx_r_p) * wl_d
 
-         ! For pre-gridded cross sections, we do not need to interpolate along
-         ! the wavelength dimension, and the requested wavelength wl(i) corresponds
-         ! to the cross section wavelength at that index i.
+          C3(1,1,1) = gas%cross_section(idx_l_wl, idx_r_H2O, idx_rr_T, idx_r_p) * (1.0d0 - wl_d) &
+               + gas%cross_section(idx_r_wl, idx_r_H2O, idx_rr_T, idx_r_p) * wl_d
 
-         C3(0,0,0) = gas%cross_section(i, idx_l_H2O, idx_ll_T, idx_l_p)
-         C3(1,0,0) = gas%cross_section(i, idx_r_H2O, idx_ll_T, idx_l_p)
-         C3(0,1,0) = gas%cross_section(i, idx_l_H2O, idx_lr_T, idx_l_p)
-         C3(0,0,1) = gas%cross_section(i, idx_l_H2O, idx_rl_T, idx_r_p)
-         C3(1,1,0) = gas%cross_section(i, idx_r_H2O, idx_lr_T, idx_l_p)
-         C3(0,1,1) = gas%cross_section(i, idx_l_H2O, idx_rr_T, idx_r_p)
-         C3(1,0,1) = gas%cross_section(i, idx_r_H2O, idx_rl_T, idx_r_p)
-         C3(1,1,1) = gas%cross_section(i, idx_r_H2O, idx_rr_T, idx_r_p)
+       else
 
-      end if
+          ! For pre-gridded cross sections, we do not need to interpolate along
+          ! the wavelength dimension, and the requested wavelength wl(i) corresponds
+          ! to the cross section wavelength at that index i.
 
-      ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
-      C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d
-      C2(0,1) = C3(0,0,1) * (1.0d0 - H2O_d) + C3(1,0,1) * H2O_d
-      C2(1,0) = C3(0,1,0) * (1.0d0 - H2O_d) + C3(1,1,0) * H2O_d
-      C2(1,1) = C3(0,1,1) * (1.0d0 - H2O_d) + C3(1,1,1) * H2O_d
+          C3(0,0,0) = gas%cross_section(i, idx_l_H2O, idx_ll_T, idx_l_p)
+          C3(1,0,0) = gas%cross_section(i, idx_r_H2O, idx_ll_T, idx_l_p)
+          C3(0,1,0) = gas%cross_section(i, idx_l_H2O, idx_lr_T, idx_l_p)
+          C3(0,0,1) = gas%cross_section(i, idx_l_H2O, idx_rl_T, idx_r_p)
+          C3(1,1,0) = gas%cross_section(i, idx_r_H2O, idx_lr_T, idx_l_p)
+          C3(0,1,1) = gas%cross_section(i, idx_l_H2O, idx_rr_T, idx_r_p)
+          C3(1,0,1) = gas%cross_section(i, idx_r_H2O, idx_rl_T, idx_r_p)
+          C3(1,1,1) = gas%cross_section(i, idx_r_H2O, idx_rr_T, idx_r_p)
 
-      ! Next, go across the T dimension - remember that we have two normalised
-      ! temperatures, one is for the lower, one is for the higher pressure index!
-      ! C1 = C1(pressure)
-      C1(0) = C2(0,0) * (1.0d0 - T_d_l) + C2(1,0) * T_d_l
-      C1(1) = C2(0,1) * (1.0d0 - T_d_r) + C2(1,1) * T_d_r
+       end if
 
-      ! Finally, we interpolate along pressure, which is the final result that
-      ! we pass back. If below zero, set to zero.
-      CS_value(i) = max(C1(0) * (1.0d0 - p_d) + C1(1) * p_d, 0.0d0)
-      !if (CS_value(i) < 0.0d0) CS_value(i) = 0.0d0
+       ! Next, go across the H2O dimension, such that C2 = C2(temperature, pressure).
+       C2(0,0) = C3(0,0,0) * (1.0d0 - H2O_d) + C3(1,0,0) * H2O_d
+       C2(0,1) = C3(0,0,1) * (1.0d0 - H2O_d) + C3(1,0,1) * H2O_d
+       C2(1,0) = C3(0,1,0) * (1.0d0 - H2O_d) + C3(1,1,0) * H2O_d
+       C2(1,1) = C3(0,1,1) * (1.0d0 - H2O_d) + C3(1,1,1) * H2O_d
 
-   end do
+       ! Next, go across the T dimension - remember that we have two normalised
+       ! temperatures, one is for the lower, one is for the higher pressure index!
+       ! C1 = C1(pressure)
+       C1(0) = C2(0,0) * (1.0d0 - T_d_l) + C2(1,0) * T_d_l
+       C1(1) = C2(0,1) * (1.0d0 - T_d_r) + C2(1,1) * T_d_r
 
- end function get_CS_value_at
+       ! Finally, we interpolate along pressure, which is the final result that
+       ! we pass back. If below zero, set to zero.
+       CS_value(i) = max(C1(0) * (1.0d0 - p_d) + C1(1) * p_d, 0.0d0)
+       !if (CS_value(i) < 0.0d0) CS_value(i) = 0.0d0
+
+    end do
+
+  end function get_CS_value_at
 
 
 end module gas_tau_mod

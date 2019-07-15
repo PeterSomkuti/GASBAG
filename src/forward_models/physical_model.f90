@@ -557,7 +557,7 @@ contains
        ! enough for my humble purposes.
        ! As you can see, it does not require much, whereas MPI would be more effort.
 
-       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(static) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
@@ -591,7 +591,7 @@ contains
              mean_duration = mean_duration * (retr_count)/(retr_count+1) + &
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
-             if (mod(retr_count, 1) == 0) then
+             if (mod(retr_count, 100) == 0) then
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &

@@ -263,14 +263,12 @@ contains
           else
              call logger%debug(fname, "MET does not have Sounding IDs - cannot verify if files match.")
           end if
+
+          if (allocated(land_fraction)) deallocate(land_fraction)
+          dset_name = "/SoundingGeometry/sounding_land_fraction"
+          call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
+          call logger%trivia(fname, "Finished reading in land fraction.")
        end if
-
-
-       if (allocated(land_fraction)) deallocate(land_fraction)
-       dset_name = "/SoundingGeometry/sounding_land_fraction"
-       call read_DP_hdf_dataset(l1b_file_id, dset_name, land_fraction, dset_dims)
-       call logger%trivia(fname, "Finished reading in land fraction.")
-
 
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
@@ -591,7 +589,7 @@ contains
              mean_duration = mean_duration * (retr_count)/(retr_count+1) + &
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
-             if (mod(retr_count, 100) == 0) then
+             if (mod(retr_count, 1) == 0) then
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
@@ -2367,7 +2365,14 @@ contains
              write(funit,*) (Shat_corr(i, j), j=1, N_sv)
           end do
           close(funit)
-          call logger%debug(fname, "Written file: Shat_corr.dat (statevector x statevector)")
+          call logger%debug(fname, "Written file: shat_corr.dat (statevector x statevector)")
+
+          open(file='sv_names.dat', newunit=funit)
+          do i=1, N_sv
+             write(funit, *) results%sv_names(i)%chars()
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: sv_names.dat (statevector)")
 
           open(file="jacobian.dat", newunit=funit)
           do i=1, N_spec

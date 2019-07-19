@@ -42,7 +42,14 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -fopenmp")
+  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none")
+
+  # Make OpenMP conditional
+  if(USE_OPENMP)
+    set(dialect "${dialect} -fopenmp")
+    message(STATUS "Compiling with OpenMP")
+  endif()
+
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
@@ -59,9 +66,9 @@ else()
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} -fcheck=all -fbacktrace")
+set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -ggdb -g3 ${bounds} -fcheck=all -fbacktrace -fno-omit-frame-pointer")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
-set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg -fprofile-arcs -ftest-coverage")
+set(CMAKE_Fortran_FLAGS_PROFILE "-O0 -g3 -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
@@ -80,11 +87,11 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 
 # Third-party libraries are assumed to work fine, so compile with optimisation
 # and no debugging options.
-set_source_files_properties(
-  ${third-party}
-  PROPERTIES
-  COMPILE_FLAGS "${opt}"
-)
+#set_source_files_properties(
+#  ${third-party}
+#  PROPERTIES
+#  COMPILE_FLAGS "${opt}"
+#)
 
 # Our code is definitely in the need of having warnings
 # show up!
@@ -103,6 +110,7 @@ message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 target_include_directories(GASBAG PUBLIC ${HDF5_Fortran_INCLUDE_DIRS}
 #${GPERFTOOLS_INCLUDE_DIR}
 )
+
 target_link_libraries(GASBAG
 ${LAPACK_LIBRARIES}
 ${BLAS_LIBRARIES}

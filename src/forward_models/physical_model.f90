@@ -706,6 +706,13 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
 
+       ! Residual RMS
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/residual_rms_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/residual_rms_", MCS%general%code_name
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), results%residual_rms(:,:), out_dims2d, -9999.99d0)
+
        ! Dsigma_sq
        call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq_" &
             // MCS%general%code_name)
@@ -1905,7 +1912,9 @@ contains
                 ! is bounded by our window choice, thus needs to be offset
                 ! TODO: This threshold value should be user-supplied, as well
                 ! as the noise inflation factor.
-                if (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) then
+                ! -127 is a fill value of some sort, so ignore that one
+                if ((spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) .and. &
+                     (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) /= -127)) then
                    noise_work(i) = noise_work(i) * 10000.0d0
                 end if
              end do
@@ -2244,6 +2253,9 @@ contains
 
           ! Save retrieved CHI2 (before the last update)
           results%chi2(i_fp, i_fr) = this_chi2
+
+          ! Save the residual RMS
+          results%residual_rms(i_fp, i_fr) = sqrt(mean((radiance_meas_work - radiance_calc_work)**2))
 
           ! Get an SNR (mean and std) estimate
           results%SNR(i_fp, i_fr) = mean(radiance_meas_work / noise_work)

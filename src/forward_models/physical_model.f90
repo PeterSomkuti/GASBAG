@@ -34,6 +34,9 @@ module physical_model_mod
   use mod_datetime
   use doppler_solar_module
 
+  ! XRTM
+  use xrtm_int_f90
+
   ! System modules
   use ISO_FORTRAN_ENV
   USE OMP_LIB
@@ -166,8 +169,6 @@ contains
     integer(hid_t) :: l1b_file_id, met_file_id, output_file_id
     ! Variable to hold group ID
     integer(hid_t) :: result_gid
-    ! Do MET or ECMWF groups exist in the MET file?
-    logical :: MET_exists, ECMWF_exists
     ! Does a spike/bad_sample data field exist?
     logical :: spike_exists, bad_sample_exists, result_exists, met_sounding_exists
     ! Fixed dimensions for the arrays to be saved into the output HDF file
@@ -203,7 +204,6 @@ contains
     ! CPU time stamps and mean duration for performance analysis
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
     integer :: frame_start, frame_skip, frame_stop
-    integer :: fp_start, fp_skip
 
     double precision, allocatable :: land_fraction(:,:)
 
@@ -602,6 +602,13 @@ contains
        end do
        !$OMP END PARALLEL DO
 
+
+
+       !---------------------------------------------------------------------
+       ! HDF OUTPUT
+       ! Here, we write out the various arrays into HDF datasets
+       !---------------------------------------------------------------------
+
        ! Create an HDF group for all windows separately
        group_name = "RetrievalResults/physical/" // trim(MCS%window(i_win)%name%chars())
        call h5gcreate_f(output_file_id, trim(group_name), result_gid, hdferr)
@@ -738,7 +745,7 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%continuum, out_dims2d)
 
-       ! Save the radiances (this should be made optional!)
+       ! Save the radiances, only on user request (non-default)
        if (MCS%output%save_radiances) then
           out_dims3d = shape(final_radiance)
           call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
@@ -907,14 +914,13 @@ contains
     double precision, allocatable :: gas_tau_dtemp(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
     double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
     double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
-    double precision :: gas_pert_step_size
 
     ! Perturbed VMR profile and per-iteration-and-per-gas VMR profile for OD calculation (level)
     double precision, allocatable :: vmr_pert(:), this_vmr_profile(:,:)
     ! Rayleigh extinction optical depth (spectral, layer)
     double precision, allocatable :: ray_tau(:,:)
     ! Total column optical depth (spectral)
-    double precision, allocatable :: total_tau(:), convolved_tau(:)
+    double precision, allocatable :: total_tau(:)
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
     ! Is this gas H2O?
@@ -926,7 +932,7 @@ contains
     ! Prior albedo value estimated from the radiances
     double precision :: albedo_apriori
     ! Per-wavelength albedo for hires and low-res spectra
-    double precision, allocatable :: albedo(:), albedo_low(:)
+    double precision, allocatable :: albedo(:)
 
     !! Surface pressure
     ! The surface pressure per-iteration
@@ -982,10 +988,8 @@ contains
     logical :: radiance_OK
 
     ! ILS stuff
-    double precision, allocatable :: this_ILS_stretch(:), &
-         this_ILS_stretch_pert(:)
-    double precision, allocatable :: this_ILS_delta_lambda(:,:), &
-         this_ILS_delta_lambda_pert(:,:)
+    double precision, allocatable :: this_ILS_stretch(:)
+    double precision, allocatable :: this_ILS_delta_lambda(:,:)
 
     ! The SV from last iteration, as well as last successful (non-divergent) iteration
     ! shape (N_sv)
@@ -1008,6 +1012,9 @@ contains
     ! Has last iteration been a divergent one?
     logical :: divergent_step
 
+    ! XRTM Radiative Transfer model handler
+    type(xrtm_type) :: xrtm
+
     ! Miscellaneous stuff
     ! String to hold various names etc.
     character(len=999) :: tmp_str
@@ -1017,7 +1024,6 @@ contains
     integer :: i, j, l
     ! File unit for debugging
     integer :: funit
-    double precision :: random_dp
 
     ! Grab a copy of the state vector for local use
     SV = global_SV
@@ -2372,6 +2378,7 @@ contains
                 Shat_corr(i,j) = Shat(i,j) / sqrt(Shat(i,i) * Shat(j,j))
              end do
           end do
+
           open(file="shat_corr.dat", newunit=funit)
           do i=1, N_sv
              write(funit,*) (Shat_corr(i, j), j=1, N_sv)
@@ -2421,20 +2428,6 @@ contains
           end do
           close(funit)
           call logger%debug(fname, "Written file: hires_spectra.dat (modelled)")
-
-
-          if (num_active_levels > 0) then
-             !call logger%debug(fname, "Model atmosphere: (pressure, gas vmrs, ndry)")
-             !call logger%debug(fname, "Gas names: ")
-             !do i=1, num_gases
-             !   write(tmp_str, '(A,G0.1,A,A)') "Gas #", i, ": ", MCS%window(i_win)%gases(i)%chars()
-             !   call logger%debug(fname, trim(tmp_str))
-             !end do
-             !do i=1, num_active_levels
-             !   write(*,*) this_atm%p(i), (this_atm%gas_vmr(i,j), j=1, size(this_atm%gas_vmr, 2)), &
-             !        ndry(i)
-             !end do
-          end if
 
           call logger%debug(fname, "---------------------------------")
 

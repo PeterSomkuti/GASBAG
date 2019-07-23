@@ -108,6 +108,8 @@ module physical_model_mod
   double precision, allocatable :: dispersion_coefs(:,:,:)
   !> L1B SNR coefficients needed for noise calculation (coefficient, pixel, footprint, band)
   double precision, allocatable :: snr_coefs(:,:,:,:)
+  !> L1B Stokes coefficients
+  double precision, allocatable :: stokes_coef(:,:,:)
   !> List of 'bad'-flagged detector pixels
   integer, allocatable :: bad_sample_list(:,:,:)
   !> If required, an array to hold the spike value (pixel, footprint, band)
@@ -152,6 +154,10 @@ module physical_model_mod
   !> Result container
   type(result_container) :: results
 
+  !> RT model Beer-Lambert
+  integer, parameter :: RT_BEER_LAMBERT = 0
+  !> RT model XRTM
+  integer, parameter :: RT_XRTM = 1
 
 contains
 
@@ -241,6 +247,12 @@ contains
 
        call my_instrument%read_MET_data(met_file_id, l1b_file_id, &
             met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
+
+       ! Pressure levels of p=0 don't agree well with the rest of the code,
+       ! especially when logarithms are calculated. So I'm replacing them
+       ! right here with a small value.
+       ! (This really shouldn't occur anyway)
+       where (met_P_levels == 0) met_P_levels = 1e-10
 
        if (MCS%algorithm%observation_mode == "downlooking") then
           ! These here also only make sense in a downlooking position.
@@ -383,6 +395,8 @@ contains
           ! Read in the measurement location
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
                altitude, relative_velocity, relative_solar_velocity)
+          ! Grab the L1B stokes coefficients
+          !call my_instrument%read_stokes_coef(l1b_file_id, band, stokes_coef)
           ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
           if (spike_exists) then
@@ -463,14 +477,14 @@ contains
        allocate(solar_spectrum_regular(N_hires, 2))
        solar_spectrum_regular(:,1) = hires_grid
 
-       call logger%debug(fname, "Re-gridding solar spectrum")
+       call logger%debug(fname, "Re-gridding solar transmission spectrum")
        call pwl_value_1d( &
             N_solar, &
             solar_spectrum(:,1), solar_spectrum(:,2), &
             N_hires, &
             solar_spectrum_regular(:,1), solar_spectrum_regular(:,2))
 
-       call logger%debug(fname, "Finished re-gridding solar spectrum.")
+       call logger%debug(fname, "Finished re-gridding solar transmission spectrum.")
        ! Note that at this point, the solar spectrum is still normalised
 
 
@@ -727,17 +741,18 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
+       ! Signal-to-noise ratio (mean)
        call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_" &
             // MCS%general%code_name)
        write(tmp_str, '(A,A,A)') trim(group_name), "/snr_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR, out_dims2d)
 
-       call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_std_" &
-            // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/snr_std_", MCS%general%code_name
-       call write_DP_hdf_dataset(output_file_id, &
-            trim(tmp_str), results%SNR_std, out_dims2d)
+       !call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_std_" &
+       !     // MCS%general%code_name)
+       !write(tmp_str, '(A,A,A)') trim(group_name), "/snr_std_", MCS%general%code_name
+       !call write_DP_hdf_dataset(output_file_id, &
+       !     trim(tmp_str), results%SNR_std, out_dims2d)
 
        call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum_level_radiance_" &
             // MCS%general%code_name)
@@ -747,6 +762,7 @@ contains
 
        ! Save the radiances, only on user request (non-default)
        if (MCS%output%save_radiances) then
+
           out_dims3d = shape(final_radiance)
           call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
                // MCS%general%code_name)
@@ -804,6 +820,7 @@ contains
        ! If present, deallocate a bad sample list as well as the spike filter list
        if (allocated(bad_sample_list)) deallocate(bad_sample_list)
        if (allocated(spike_list)) deallocate(spike_list)
+       if (allocated(stokes_coef)) deallocate(stokes_coef)
 
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
@@ -851,7 +868,6 @@ contains
 
     ! Radiative transfer models
     integer :: RT_model
-    integer, parameter :: RT_BEER_LAMBERT = 0
 
     ! The current atmosphere. This will be a copy from the initial_atm
     ! constructed in the physical_retrieval subroutine, but T and SH
@@ -934,7 +950,7 @@ contains
     ! Per-wavelength albedo for hires and low-res spectra
     double precision, allocatable :: albedo(:)
 
-    !! Surface pressure
+    ! Surface pressure
     ! The surface pressure per-iteration
     double precision :: this_psurf
     ! Do we need/want to calculate surface pressure Jacobians?
@@ -1213,8 +1229,7 @@ contains
           ! Allocate Solar continuum (irradiance) array. We do this here already,
           ! since it's handy to have it for estimating the albedo
 
-          ! OCO-2 has Stokes coefficient 0.5 for intensity, so we need to
-          ! take that into account for the incoming solar irradiance
+
           call calculate_solar_planck_function(6500.0d0, solar_dist, &
                solar_spectrum_regular(:,1), solar_irrad)
 
@@ -1236,6 +1251,8 @@ contains
 
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
             (1.0d0 * maxval(solar_irrad) * mu0)
+       ! Take that into account Stokes coef of instrument for the incoming solar irradiance
+       !albedo_apriori = albedo_apriori / stokes_coef(1, i_fp, i_fr)
     end select
 
 
@@ -1345,11 +1362,15 @@ contains
           old_sv(:) = SV%svap
 
           if (num_gases > 0) then
-
              ! An atmosphere is only required if there are gases present in the
              ! microwindow.
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
+
+             if (this_psurf == 0.0d0) then
+                call logger%error(fname, "MET surface pressure is exactly 0.")
+                return
+             end if
 
              num_levels = size(this_atm%p)
 
@@ -1733,14 +1754,17 @@ contains
 
        if (radiance_OK .eqv. .false.) then
           write(tmp_str, '(A,G0.1,A,G0.1,A)') "Sounding (", i_fr, ",", i_fp, &
-               ") has invalid radiances. Skipping."
+               ") has invalid L1B radiances. Skipping."
           call logger%error(fname, trim(tmp_str))
           return
        end if
 
-       call calculate_BL_radiance(hires_grid, mu0, mu, &
-            albedo, total_tau, &
-            radiance_calc_work_hi)
+       select case (RT_model)
+       case (RT_BEER_LAMBERT)
+          call calculate_BL_radiance(hires_grid, mu0, mu, &
+               albedo, total_tau, &
+               radiance_calc_work_hi)
+       end select
 
        ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
        ! According to both pre-computed solar shift as well as potentially retrieved
@@ -1876,8 +1900,8 @@ contains
 
        ! Stokes coefficients
        ! TODO: apply Stokes coefficients here via instrument parameters from L1b?
-       radiance_calc_work_hi(:) = radiance_calc_work_hi(:)
-       K_hi(:,:) = K_hi(:,:)
+       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) !* stokes_coef(1, i_fp, i_fr)
+       K_hi(:,:) = K_hi(:,:)! * stokes_coef(1, i_fp, i_fr)
 
        ! Grab a copy of the L1b radiances
        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)

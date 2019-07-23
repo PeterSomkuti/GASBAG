@@ -45,6 +45,7 @@ module oco2_mod
      procedure, nopass :: read_sounding_location
      procedure, nopass :: read_bad_sample_list
      procedure, nopass :: read_spike_filter
+     procedure, nopass :: read_stokes_coef
      procedure, nopass :: read_MET_data
   end type oco2_instrument
 
@@ -587,6 +588,47 @@ contains
     end if
 
   end subroutine read_sounding_geometry
+
+  subroutine read_stokes_coef(l1b_file_id, band, stokes_coefs)
+
+    implicit none
+
+    integer(hid_t), intent(in) :: l1b_file_id
+    integer, intent(in) :: band
+    double precision, dimension(:,:,:), allocatable, intent(out) :: stokes_coefs
+
+    character(len=*), parameter :: fname = "read_stokes_coefs(oco2)"
+    integer(hsize_t), dimension(:), allocatable :: dset_dims
+    double precision, dimension(:,:,:,:), allocatable :: tmp_array4d
+    double precision, dimension(:,:,:,:,:), allocatable :: tmp_array5d
+    integer :: i
+
+    call logger%debug(fname, "Trying to allocate stokes coef. array.")
+    allocate(stokes_coefs(4, MCS%general%N_fp, MCS%general%N_frame))
+
+    ! Hack - GeoCarb files have an extra dimension here. So let's check for that first
+    call get_HDF5_dset_dims(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+         dset_dims)
+
+    if (size(dset_dims) == 4) then
+
+       deallocate(dset_dims)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+            tmp_array4d, dset_dims)
+       stokes_coefs(:,:,:) = tmp_array4d(:,band,:,:)
+       deallocate(tmp_array4d)
+
+    else if (size(dset_dims) == 5) then
+
+       deallocate(dset_dims)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+            tmp_array5d, dset_dims)
+       stokes_coefs(:,:,:) = tmp_array5d(1,:,band,:,:)
+       deallocate(tmp_array5d)
+
+    end if
+
+  end subroutine read_stokes_coef
 
   subroutine read_ils_data(l1b_file_id, ils_delta_lambda, ils_relative_response)
 

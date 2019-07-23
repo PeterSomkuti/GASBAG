@@ -2,6 +2,7 @@ import pickle
 import numpy as np
 import h5py
 import sys
+from IPython import embed
 
 l2 = h5py.File(sys.argv[1], 'r+')
 calibs = [sys.argv[2], sys.argv[3]]
@@ -33,7 +34,7 @@ for i, band in enumerate(['757', '771']):
 
         if not f'sif_raw_{band}nm' in l2['HighLevelResults/Fluorescence']:
             l2.create_dataset(f"HighLevelResults/Fluorescence/sif_raw_{band}nm",
-                              data=sif_corr)
+                              data=sif)
         else:
             l2[f'HighLevelResults/Fluorescence/sif_raw_{band}nm'][:] = sif
     except:

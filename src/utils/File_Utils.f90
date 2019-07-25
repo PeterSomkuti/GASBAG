@@ -9,6 +9,7 @@ module file_utils_mod
   use stringifor, only: string
 
   use iso_fortran_env
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
@@ -588,6 +589,239 @@ contains
     end if
 
   end function string_to_bool
+
+
+  !> @brief Reads an old-school aerosol moment file
+  !> @param filename Momfile location
+  !> @param wavelengths Number of wavelengths
+  !> @param coefs The phase matrix Legendre coefficients
+  subroutine read_mom_file(filename, wavelengths, coefs, success)
+
+    implicit none
+    character(len=*) :: filename
+    double precision, allocatable, intent(inout) :: wavelengths(:)
+    ! Coefs: coef, matrix element, wavelength
+    double precision, allocatable, intent(inout) :: coefs(:,:,:)
+    logical, intent(inout) :: success
+
+    character(len=*), parameter :: fname = "read_mom_file"
+    ! Does this file exist?
+    logical :: file_exist
+    ! Total number of wavelengths contained in the file
+    integer :: wl_count
+    ! Temporary value
+    integer :: tmp_value
+    ! Largest number of coeffs in file, needed for array allocation
+    integer :: max_coef
+    ! Loop variables
+    integer :: i,j
+    ! Other loop variables
+    integer :: cnt_coef, cnt_wl, this_n_coef
+    ! Dummy var needed to convert string to char
+    character(len=999) :: dummy
+    ! Strings for splitting
+    type(string), allocatable :: split_string(:)
+    ! String object to hold the entire file
+    type(string) :: file_string
+    ! String object to hold the file per-line
+    type(string), allocatable :: line_strings(:)
+
+    success = .false.
+
+    ! Try and open the file - see if it exists:
+    inquire(file=filename, exist=file_exist)
+    if (.not. file_exist) then
+       call logger%fatal(fname, "Mom file does not exist: " // trim(filename))
+       stop 1
+    end if
+
+    ! Read the file if it exists
+    call file_string%read_file(file=filename)
+    call file_string%split(tokens=line_strings, sep=new_line('a'))
+
+    ! Find out how many wavelengths this mom file contains, and how many
+    ! coefficients each wavelength has. We can also already infer what the
+    ! size of the full array needs to be by keeping track of the largest
+    ! number of coefficients.
+    wl_count = 0
+    max_coef = 0
+    do i=1, size(line_strings, dim=1)
+
+       ! Skip comments
+       if (scan(line_strings(i)%chars(), "!#;") > 0) then
+          cycle
+       end if
+
+       if (allocated(split_string)) deallocate(split_string)
+       call line_strings(i)%split(tokens=split_string, sep=' ')
+
+       if (size(split_string) == 2) then
+          dummy = split_string(2)%chars()
+          read(dummy, *) tmp_value
+          if (tmp_value > max_coef) max_coef = tmp_value
+          wl_count = wl_count + 1
+       end if
+    end do
+
+    ! Now we know how many elements our coef array needs to have
+    ! "6" is hardcoded here, but I guess we don't expect physics
+    ! to change all that much..
+    allocate(coefs(max_coef, 6, wl_count))
+    coefs(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    allocate(wavelengths(wl_count))
+
+    ! Do a second sweep through the file, this time
+    ! stick the values into the coef array.
+
+    cnt_coef = 0
+    cnt_wl = 0
+    do i=1, size(line_strings, dim=1)
+
+       ! Skip comments
+       if (scan(line_strings(i)%chars(), "!#;") > 0) then
+          cycle
+       end if
+
+       if (allocated(split_string)) deallocate(split_string)
+       call line_strings(i)%split(tokens=split_string, sep=' ')
+
+       ! This line indicates a beginning of a new section, so we need to figure out
+       ! the positions in the array etc.
+       if (size(split_string) == 2) then
+          cnt_wl = cnt_wl + 1
+
+          ! Read wavelength
+          dummy = split_string(1)%chars()
+          read(dummy, *) wavelengths(cnt_wl)
+          ! Read number of coefs for this section
+          dummy = split_string(2)%chars()
+          read(dummy, *) this_n_coef
+
+          cnt_coef = 1
+       else if (size(split_string) == 6) then
+          ! This is a line with 6 coefficients
+          do j=1, 6
+             dummy = split_string(j)%chars()
+             read(dummy, *) coefs(cnt_coef, j, cnt_wl)
+          end do
+
+          cnt_coef = cnt_coef + 1
+       else
+          call logger%debug(fname, "Unexpected line in moment file: " // filename)
+          return
+       end if
+
+    end do
+
+    success = .true.
+
+  end subroutine read_mom_file
+
+
+  !> @brief Reads an old-school aerosol Mie file
+  !> @param filename Miefile location
+  !> @param wavelengths Wavelengths
+  !> @param qext Extinction efficiency per wavelength
+  !> @param qsca Scattering efficiency per wavelength
+  !> @param ssa Single-scatter albedo per wavelength
+  !> @param sigma_ext Extinction cross section per wavelength [um^2]
+  !> @param reff Effective radius per wavelength [um]
+  subroutine read_mie_file(filename, &
+       wavelengths, qext, qsca, &
+       ssa, sigma_ext, reff, &
+       success)
+
+    implicit none
+    character(len=*), intent(in) :: filename
+    double precision, allocatable, intent(in) :: wavelengths(:)
+    double precision, allocatable, intent(in) :: qext(:)
+    double precision, allocatable, intent(in) :: qsca(:)
+    double precision, allocatable, intent(in) :: ssa(:)
+    double precision, allocatable, intent(in) :: sigma_ext(:)
+    double precision, allocatable, intent(in) :: reff(:)
+
+    logical, intent(inout) :: success
+
+    character(len=*), parameter :: fname = "read_mie_file"
+    ! Does the file exist?
+    logical :: file_exist
+    ! Dummy variable
+    character(len=999) :: dummy
+    ! Strings for splitting
+    type(string), allocatable :: split_string(:)
+    ! String object to hold the entire file
+    type(string) :: file_string
+    ! String object to hold the file per-line
+    type(string), allocatable :: line_strings(:)
+    integer :: cnt_wl
+    integer :: i
+
+    success = .false.
+
+    ! Try and open the file - see if it exists:
+    inquire(file=filename, exist=file_exist)
+    if (.not. file_exist) then
+       call logger%fatal(fname, "Mie file does not exist: " // trim(filename))
+       stop 1
+    end if
+
+    ! Read the file if it exists
+    call file_string%read_file(file=filename)
+    call file_string%split(tokens=line_strings, sep=new_line('a'))
+
+    cnt_wl = 0
+    do i=1, size(line_strings, dim=1)
+
+       ! Skip comments
+       if (scan(line_strings(i)%chars(), "!#;") > 0) then
+          cycle
+       end if
+
+       cnt_wl = cnt_wl + 1
+    end do
+
+    allocate(wavelengths(cnt_wl))
+    allocate(qext(cnt_wl))
+    allocate(qsca(cnt_wl))
+    allocate(ssa(cnt_wl))
+    allocate(sigma_ext(cnt_wl))
+    allocate(reff(cnt_wl))
+
+    cnt_wl = 0
+    do i=1, size(line_strings, dim=1)
+
+       ! Skip comments
+       if (scan(line_strings(i)%chars(), "!#;") > 0) then
+          cycle
+       end if
+
+       call line_strings(i)%split(tokens=split_string, sep=' ')
+
+       cnt_wl = cnt_wl + 1
+       ! Read wavelength
+       dummy = split_string(1)%chars()
+       read(dummy, *) wavelengths(cnt_wl)
+       ! Read Qext
+       dummy = split_string(2)%chars()
+       read(dummy, *) qext(cnt_wl)
+       ! Read Qsca
+       dummy = split_string(3)%chars()
+       read(dummy, *) qsca(cnt_wl)
+       ! Read SSA
+       dummy = split_string(4)%chars()
+       read(dummy, *) ssa(cnt_wl)
+       ! Read Sigma_ext
+       dummy = split_string(5)%chars()
+       read(dummy, *) sigma_ext(cnt_wl)
+       ! Read Reff
+       dummy = split_string(6)%chars()
+       read(dummy, *) reff(cnt_wl)
+
+    end do
+
+    success = .true.
+
+  end subroutine read_mie_file
 
 
 

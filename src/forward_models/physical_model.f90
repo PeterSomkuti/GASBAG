@@ -15,7 +15,7 @@ module physical_model_mod
 
   ! User modules
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
-       read_DP_hdf_dataset, write_INT_hdf_dataset
+       read_DP_hdf_dataset, write_INT_hdf_dataset, read_mom_file, read_mie_file
   use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
   use instruments_mod, only: generic_instrument
   use oco2_mod
@@ -23,6 +23,7 @@ module physical_model_mod
   use math_utils_mod
   use statevector_mod
   use Beer_Lambert_mod
+  use XRTM_mod
   use absco_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
@@ -33,6 +34,7 @@ module physical_model_mod
   use logger_mod, only: logger => master_logger
   use mod_datetime
   use doppler_solar_module
+  use stringifor
 
   ! XRTM
   use xrtm_int_f90
@@ -234,7 +236,6 @@ contains
     ! Grab number of bands
     num_band = MCS%general%N_bands
 
-
     !---------------------------------------------------------------------
     ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
     !---------------------------------------------------------------------
@@ -396,7 +397,7 @@ contains
           call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
                altitude, relative_velocity, relative_solar_velocity)
           ! Grab the L1B stokes coefficients
-          !call my_instrument%read_stokes_coef(l1b_file_id, band, stokes_coef)
+          call my_instrument%read_stokes_coef(l1b_file_id, band, stokes_coef)
           ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
           if (spike_exists) then
@@ -1030,6 +1031,9 @@ contains
 
     ! XRTM Radiative Transfer model handler
     type(xrtm_type) :: xrtm
+    type(string) :: xrtm_options_string(1)
+    type(string) :: xrtm_solvers_string(1)
+    logical :: xrtm_success
 
     ! Miscellaneous stuff
     ! String to hold various names etc.
@@ -1051,6 +1055,8 @@ contains
     ! Set the used radiative transfer model
     if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
+    else if (MCS%window(i_win)%RT_model%lower() == "xrtm") then
+       RT_model = RT_XRTM
     else
        call logger%error(fname, "RT Method: " // MCS%window(i_win)%RT_model%chars() // " unknown.")
        stop 1
@@ -1252,7 +1258,7 @@ contains
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
             (1.0d0 * maxval(solar_irrad) * mu0)
        ! Take that into account Stokes coef of instrument for the incoming solar irradiance
-       !albedo_apriori = albedo_apriori / stokes_coef(1, i_fp, i_fr)
+       albedo_apriori = albedo_apriori / stokes_coef(1, i_fp, i_fr)
     end select
 
 
@@ -1479,7 +1485,6 @@ contains
           end if
        endif
 
-
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
        if (SV%num_sif > 0) then
@@ -1494,6 +1499,26 @@ contains
        else
           this_zlo_radiance = 0.0d0
        end if
+
+
+       ! For XRTM, we need to initialize the model with the current number of
+       ! active levels / layers. This probably eats up a few cycles, but nothing
+       ! we should be worried about. For the rare cases where the number of layers
+       ! changes per iterations, this MUST be within the iteration loop
+
+       if (RT_model == RT_XRTM) then
+          xrtm_solvers_string(1) = "EIG_BVP"
+          xrtm_options_string(1) = ""
+
+          call setup_XRTM(xrtm, xrtm_options_string, &
+               xrtm_solvers_string, &
+               xrtm_success)
+          if (.not. xrtm_success) return
+
+          call create_XRTM(xrtm, 7, 2, 1, 1, num_active_levels - 1, 1, 50, xrtm_success)
+          if (.not. xrtm_success) return
+       end if
+
 
 
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
@@ -1693,6 +1718,9 @@ contains
              end if
           end do
 
+          ! Set tiny gas OD values to some lower threshold. Some RT solvers
+          ! do not like gas OD = 0
+          where(gas_tau < 1d-10) gas_tau = 1d-10
           ! Total optical depth is calculated as sum of all gas ODs
           allocate(total_tau(N_hires))
           total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
@@ -1763,6 +1791,11 @@ contains
        case (RT_BEER_LAMBERT)
           call calculate_BL_radiance(hires_grid, mu0, mu, &
                albedo, total_tau, &
+               radiance_calc_work_hi)
+       case (RT_XRTM)
+          call calculate_XRTM_radiance(xrtm, hires_grid, &
+               SZA(i_fp, i_fr), VZA(i_fp, i_fr), SAA(i_fp, i_fr), VAA(i_fp, i_fr), &
+               albedo, sum(gas_tau, dim=3), 1, 1, num_active_levels - 1, &
                radiance_calc_work_hi)
        end select
 
@@ -1900,8 +1933,8 @@ contains
 
        ! Stokes coefficients
        ! TODO: apply Stokes coefficients here via instrument parameters from L1b?
-       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) !* stokes_coef(1, i_fp, i_fr)
-       K_hi(:,:) = K_hi(:,:)! * stokes_coef(1, i_fp, i_fr)
+       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * stokes_coef(1, i_fp, i_fr)
+       K_hi(:,:) = K_hi(:,:) * stokes_coef(1, i_fp, i_fr)
 
        ! Grab a copy of the L1b radiances
        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
@@ -2149,6 +2182,8 @@ contains
           stop 1
        end if
 
+       ! Statevector clamping - for select elements of the state vector, we
+       ! want them to NOT change until a certain iteration is reached.
 
        ! In the case of retrieving gases - we have to adjust the retrieved state vector
        ! if the retrieval wants to push it below 0. Also, we do not allow the gas scale

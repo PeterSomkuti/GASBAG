@@ -55,7 +55,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O2")
+  set(opt "-O3 -mtune=native")
   set(bounds "-fbounds-check")
 else()
   # only support Gfortran for now
@@ -94,7 +94,7 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 # separately and just link to the resulting library. This however, lets
 # you make changes to compiler flags more easily etc.
 
-set(xrtm
+set(xrtm_sources
   ####
   third-party/xrtm/src/xrtm_adding.c
   third-party/xrtm/src/xrtm_adding_a.c
@@ -157,9 +157,9 @@ set_source_files_properties(
 )
 
 set_source_files_properties(
-  ${xrtm}
+  ${xrtm_sources}
   PROPERTIES
-  COMPILE_FLAGS "-O2 -cpp"
+  COMPILE_FLAGS "-O3 -mtune=native"
   )
 
 # Our code is definitely in the need of having warnings
@@ -172,7 +172,7 @@ set_source_files_properties(
 
 
 # Define the executable
-add_executable(GASBAG ${sources} ${third-party} ${xrtm} ${generated})
+add_executable(GASBAG ${sources} ${third-party} ${xrtm_sources} ${generated})
 
 target_include_directories(GASBAG PRIVATE
   "third-party/xrtm"

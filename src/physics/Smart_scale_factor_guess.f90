@@ -79,7 +79,6 @@ contains
 
     end do
 
-
   end subroutine estimate_first_guess_scale_factor
 
 

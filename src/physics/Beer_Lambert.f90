@@ -1,6 +1,6 @@
-  !> @brief Module to house the Beer-Lambert RT model
-  !> @file Beer_Lambert.f90
-  !> @author Peter Somkuti
+!> @brief Module to house the Beer-Lambert RT model
+!> @file Beer_Lambert.f90
+!> @author Peter Somkuti
 
 
 
@@ -91,8 +91,9 @@ contains
 
     !> @brief Albedo Jacobian for BL-type RT
     !> @param TOA_radiance The TOA radiance array WITHOUT ZLO and SIF
-    !> @param albedo_array Per-wavelength albedo value
+    !> @param albedo_array Per-wavelength albedo valuexbphysc
     !> @param hires_grid Highres wavelength grid
+    !> @param center_pixel Which pixel is the reference?
     !> @param albedo_coeff Which albedo order?
     !> @param albedo_jacobian dI/dAlbedoCoeff
     subroutine calculate_BL_albedo_jacobian(TOA_radiance, albedo_array, hires_grid, &

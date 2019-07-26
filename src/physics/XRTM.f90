@@ -72,16 +72,17 @@ contains
        end if
     end do
 
+
     xrtm_options = XRTM_OPTION_CALC_DERIVS
     !xrtm_solvers = ior(XRTM_SOLVER_SINGLE, XRTM_SOLVER_TWO_OS)
     !xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_EIG_BVP)
-    xrtm_solvers = XRTM_SOLVER_EIG_ADD
+    xrtm_solvers = XRTM_SOLVER_SINGLE
     write(*,*) "Solvers: ", xrtm_solvers
     ! Some general set-up's that are not expected to change, and can
     ! be safely hard-coded.
     call xrtm_set_fourier_tol_f90(xrtm, .0001d0, xrtm_error)
     if (xrtm_error /= 0) then
-       call logger%error(fname, "Error calling xrtm_set_fourier_tol_f90()")
+       call logger%error(fname, "Error calling xrtm_set_fourier_tol_f90")
        return
     endif
 
@@ -126,7 +127,7 @@ contains
          xrtm_error)
 
     if (xrtm_error /= 0) then
-       call logger%error(fname, "Error calling xrtm_create_f90)")
+       call logger%error(fname, "Error calling xrtm_create_f90")
        return
     endif
 
@@ -177,8 +178,8 @@ contains
     out_phis(1,1) = VAA
     out_levels(1) = 0
     allocate(omega_test(size(tau, 2)))
-    omega_test(:) = 1.0d-4
-    omega_test(10) = 0.25d0
+    omega_test(:) = 1.0d0
+    omega_test(10) = 0.85d0
     ltau(:) = 1.0d0
 
     allocate(coef(7, 1, n_layers))
@@ -251,15 +252,13 @@ contains
     ! and is easily the most costly portion of the entire forward model.
     ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
-    write(*,*) albedo(1)
-
     open(file="xrtm.debug", newunit=funit)
     write(*,*) "Starting monochromatic loop"
     call cpu_time(cpu_start)
     do i=1, N_spec
 
        ! Plug in surface property
-       call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
+       call xrtm_set_kernel_ampfac_f90(xrtm, 0, 0.5d0, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_kernel_ampfac_f90")
           return

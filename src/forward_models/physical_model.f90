@@ -15,8 +15,8 @@ module physical_model_mod
 
   ! User modules
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
-       read_DP_hdf_dataset, write_INT_hdf_dataset, read_mom_file, read_mie_file
-  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MCS_find_gases
+       read_DP_hdf_dataset, write_INT_hdf_dataset
+  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, MCS_find_gases
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use solar_model_mod
@@ -28,6 +28,7 @@ module physical_model_mod
   use gas_tau_mod
   use spectroscopy_utils_mod
   use smart_first_guess_mod
+  use aerosols_mod
   use jacobians_mod
 
   ! Third-party modules
@@ -253,7 +254,7 @@ contains
        ! especially when logarithms are calculated. So I'm replacing them
        ! right here with a small value.
        ! (This really shouldn't occur anyway)
-       where (met_P_levels == 0) met_P_levels = 1e-10
+       where (met_P_levels < 1d-10) met_P_levels = 1d-10
 
        if (MCS%algorithm%observation_mode == "downlooking") then
           ! These here also only make sense in a downlooking position.
@@ -321,7 +322,12 @@ contains
 
     end select
 
-
+    ! We can also read in the aerosol data right here, as they are the same for
+    ! all retrieval windows.
+    do i=1, MAX_AEROSOLS
+       if (.not. MCS%aerosol(i)%used) cycle
+       call read_aerosol_file(MCS%aerosol(i))
+    end do
 
     ! Create the HDF group in which all the results go in the end
     call h5lexists_f(l1b_file_id, "/RetrievalResults", result_exists, hdferr)
@@ -349,6 +355,8 @@ contains
        call MCS_find_gases(MCS%window, MCS%gas, i_win)
 
        ! If we have gases, we want to read in the corresponding spectroscopy data
+       ! We have to do this for every microwindow since the cross sections are being
+       ! re-gridded for every microwindow.
        if (MCS%window(i_win)%num_gases > 0) then
           ! Read in the spectroscopy data, depending on the type
           do i=1, size(MCS%window(i_win)%gases)
@@ -515,11 +523,11 @@ contains
        !
        ! Lambertian surface albedo, arbitrary (?) polynomial order
        ! Zero-level offset / SIF (constant)
-       ! Instrument disperison
+       ! Instrument disperison, arbitrary (?) polynomial order
        ! Surface pressure
        ! Solar shift and stretch
        ! Gas scalar factor defined on level ranges
-       ! ILS stretch/squeeze factor
+       ! ILS stretch/squeeze, arbitrary (?) polynomial order
        ! Temperature offset
 
        ! Parsing the statevector string, that was passed in the window
@@ -800,8 +808,12 @@ contains
 
        end if
 
-       ! Clean-up phase! We need to deallocate / destroy a few arrays here, so
+       !---------------------------------------------------------------------
+       ! CLEAN UP PHASE
+       ! We need to deallocate / destroy a few arrays here, so
        ! they can be freshly reallocated for the next retrieval microwindow.
+       !---------------------------------------------------------------------
+
 
        ! Deallocate arrays that are allocated on per-window basis
        deallocate(solar_spectrum_regular, solar_spectrum, hires_grid)
@@ -826,6 +838,20 @@ contains
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
        call destroy_result_container(results)
+
+       ! We also de-allocate ABSCO-related fields for safety. The ABSCO read routine
+       ! will overwrite the data anyway, but you know .. bad practice.
+       do i=1, size(MCS%gas)
+          ! Skip over unused
+          if (.not. MCS%gas(i)%used) cycle
+
+          if (allocated(MCS%gas(i)%cross_section)) deallocate(MCS%gas(i)%cross_section)
+          if (allocated(MCS%gas(i)%wavelength)) deallocate(MCS%gas(i)%wavelength)
+          if (allocated(MCS%gas(i)%T)) deallocate(MCS%gas(i)%T)
+          if (allocated(MCS%gas(i)%p)) deallocate(MCS%gas(i)%p)
+          if (allocated(MCS%gas(i)%H2O)) deallocate(MCS%gas(i)%H2O)
+
+       end do
 
        ! End of loop over windows
     end do
@@ -1373,8 +1399,8 @@ contains
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
 
-             if (this_psurf == 0.0d0) then
-                call logger%error(fname, "MET surface pressure is exactly 0.")
+             if (this_psurf < 1.0d-10) then
+                call logger%error(fname, "MET surface pressure is almost 0.")
                 return
              end if
 
@@ -1718,6 +1744,14 @@ contains
              end if
           end do
 
+          ! ---------------------------------------------------------------
+          ! If there are aerosols in the scene, calculate the optical depth
+          ! profiles here.
+          ! ---------------------------------------------------------------
+
+
+
+
           ! Set tiny gas OD values to some lower threshold. Some RT solvers
           ! do not like gas OD = 0
           where(gas_tau < 1d-10) gas_tau = 1d-10
@@ -1725,6 +1759,11 @@ contains
           allocate(total_tau(N_hires))
           total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
        end if
+
+
+
+
+
 
        ! Grab a copy of the dispersion coefficients from the L1B
        this_dispersion_coefs(:) = dispersion_coefs(:, i_fp, band)

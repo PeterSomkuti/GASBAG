@@ -22,6 +22,7 @@ module file_utils_mod
      module procedure write_3D_DP_hdf_dataset
   end interface write_DP_hdf_dataset
 
+  ! Interface for reading double precision arrays from an HDF file
   interface read_DP_hdf_dataset
      module procedure read_1D_DP_hdf_dataset
      module procedure read_2D_DP_hdf_dataset
@@ -30,10 +31,12 @@ module file_utils_mod
      module procedure read_5D_DP_hdf_dataset
   end interface read_DP_hdf_dataset
 
+  ! Interface for writing integer arrays into an HDF file
   interface write_INT_hdf_dataset
      module procedure write_2D_INT_hdf_dataset
   end interface write_INT_hdf_dataset
 
+  ! Interface for reading integer arrays from an HDF file
   interface read_INT_hdf_dataset
      module procedure read_3D_INT_hdf_dataset
   end interface read_INT_hdf_dataset
@@ -655,6 +658,11 @@ contains
        if (allocated(split_string)) deallocate(split_string)
        call line_strings(i)%split(tokens=split_string, sep=' ')
 
+       ! Some files have lines like:
+       ! "wl mom" as their first line (no comment sign)
+       ! so we need to take that into account too
+       if (split_string(1) == "wl") cycle
+
        if (size(split_string) == 2) then
           dummy = split_string(2)%chars()
           read(dummy, *) tmp_value
@@ -663,12 +671,18 @@ contains
        end if
     end do
 
+    write(dummy, '(A, G0.1)') "Mom file has this many wavelengths: ", wl_count
+    call logger%debug(fname, trim(dummy))
+    write(dummy, '(A, G0.1)') "Maximum number of coefficients: ", max_coef
+    call logger%debug(fname, trim(dummy))
+
     ! Now we know how many elements our coef array needs to have
     ! "6" is hardcoded here, but I guess we don't expect physics
     ! to change all that much..
-    allocate(coefs(max_coef, 6, wl_count))
+    allocate(coefs(max_coef + 1, 6, wl_count))
     coefs(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(wavelengths(wl_count))
+    wavelengths(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
     ! Do a second sweep through the file, this time
     ! stick the values into the coef array.
@@ -684,6 +698,13 @@ contains
 
        if (allocated(split_string)) deallocate(split_string)
        call line_strings(i)%split(tokens=split_string, sep=' ')
+
+       ! Some files have lines like:
+       ! "wl mom" as their first line (no comment sign)
+       ! so we need to take that into account too
+       if (split_string(1) == "wl") then
+          cycle
+       end if
 
        ! This line indicates a beginning of a new section, so we need to figure out
        ! the positions in the array etc.
@@ -733,12 +754,12 @@ contains
 
     implicit none
     character(len=*), intent(in) :: filename
-    double precision, allocatable, intent(in) :: wavelengths(:)
-    double precision, allocatable, intent(in) :: qext(:)
-    double precision, allocatable, intent(in) :: qsca(:)
-    double precision, allocatable, intent(in) :: ssa(:)
-    double precision, allocatable, intent(in) :: sigma_ext(:)
-    double precision, allocatable, intent(in) :: reff(:)
+    double precision, allocatable, intent(inout) :: wavelengths(:)
+    double precision, allocatable, intent(inout) :: qext(:)
+    double precision, allocatable, intent(inout) :: qsca(:)
+    double precision, allocatable, intent(inout) :: ssa(:)
+    double precision, allocatable, intent(inout) :: sigma_ext(:)
+    double precision, allocatable, intent(inout) :: reff(:)
 
     logical, intent(inout) :: success
 
@@ -777,15 +798,34 @@ contains
           cycle
        end if
 
+       if (allocated(split_string)) deallocate(split_string)
+       call line_strings(i)%split(tokens=split_string, sep=' ')
+
+       ! Some files have lines like:
+       ! "wl mom" as their first line (no comment sign)
+       ! so we need to take that into account too
+       if (split_string(1) == "wl") cycle
+
        cnt_wl = cnt_wl + 1
     end do
 
+    write(dummy, '(A, G0.1)') "Mie file has this many wavelengths: ", cnt_wl
+    call logger%debug(fname, trim(dummy))
+
+    ! Allocate containers since we know now how many..
     allocate(wavelengths(cnt_wl))
+    wavelengths(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(qext(cnt_wl))
+    qext(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(qsca(cnt_wl))
+    qsca(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(ssa(cnt_wl))
+    ssa(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(sigma_ext(cnt_wl))
+    sigma_ext(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(reff(cnt_wl))
+    reff(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
 
     cnt_wl = 0
     do i=1, size(line_strings, dim=1)
@@ -795,7 +835,13 @@ contains
           cycle
        end if
 
+       if (allocated(split_string)) deallocate(split_string)
        call line_strings(i)%split(tokens=split_string, sep=' ')
+
+       ! Some files have lines like:
+       ! "wl mom" as their first line (no comment sign)
+       ! so we need to take that into account too
+       if (split_string(1) == "wl") cycle
 
        cnt_wl = cnt_wl + 1
        ! Read wavelength
@@ -810,13 +856,18 @@ contains
        ! Read SSA
        dummy = split_string(4)%chars()
        read(dummy, *) ssa(cnt_wl)
-       ! Read Sigma_ext
-       dummy = split_string(5)%chars()
-       read(dummy, *) sigma_ext(cnt_wl)
-       ! Read Reff
-       dummy = split_string(6)%chars()
-       read(dummy, *) reff(cnt_wl)
 
+       ! Apparently mie files come in at least two
+       ! variants - some have 4 columns, other have 6
+       ! and include sigma_ext and effective radius
+       if (size(split_string) == 6) then
+          ! Read Sigma_ext
+          dummy = split_string(5)%chars()
+          read(dummy, *) sigma_ext(cnt_wl)
+          ! Read Reff
+          dummy = split_string(6)%chars()
+          read(dummy, *) reff(cnt_wl)
+       end if
     end do
 
     success = .true.

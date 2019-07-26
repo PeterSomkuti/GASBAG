@@ -8,7 +8,10 @@
 !> from this module, which unfortunately makes those pieces of code very
 !> dependent on the Control module - and thus less portable. On the other
 !> hand, it makes some of the functions a bit cleaner, since you do not need
-!> to drag every single parameter through a number of subroutines..
+!> to drag every single parameter through a number of subroutines.
+!> Note that this code does not do any heavy lifting, it really just passes
+!> values from the FINER ini data into the various variables of the MCS structure.
+!> E.g. the loading of ABSCO files etc. is all done somewhere else.
 
 module control_mod
 
@@ -37,6 +40,8 @@ module control_mod
   integer, parameter :: MAX_WINDOWS = 10
   !> Number of absorbers
   integer, parameter :: MAX_GASES = 10
+  !> Number of aerosols
+  integer, parameter :: MAX_AEROSOLS = 10
 
   type, private :: CS_general
      character(len=3) :: code_name = "gbg"
@@ -216,6 +221,33 @@ module control_mod
      double precision, allocatable :: H2O(:)
   end type CS_gas
 
+  type :: CS_aerosol
+     !> Is this aerosol used?
+     logical :: used
+     !> Name of the aerosol / identifier
+     type(string) :: name
+     !> Name of the mom file
+     type(string) :: mom_filename
+     !> Name of the mie file
+     type(string) :: mie_filename
+     !> Coefficient array (coef, element, wavelength)
+     double precision, allocatable :: coef(:,:,:)
+     !> Max. no of coefs
+     integer :: max_n_coef
+     !> Wavelenghts
+     double precision, allocatable :: wavelengths(:)
+     !> Scattering efficiency (wavelength)
+     double precision, allocatable :: qsca(:)
+     !> Extinction efficiency (wavelength)
+     double precision, allocatable :: qext(:)
+     !> Single-scatter albedo (wavelength)
+     double precision, allocatable :: ssa(:)
+     !> Extinction cross section (wavelength)
+     double precision, allocatable :: sigma_ext(:)
+     !> Effective radius (wavelength)
+     double precision, allocatable :: reff(:)
+  end type CS_aerosol
+
 
   ! Main control_mod structure type
   type, private :: CS
@@ -225,6 +257,8 @@ module control_mod
      type(CS_window) :: window(MAX_WINDOWS)
      !> Gas absorbers
      type(CS_gas) :: gas(MAX_GASES)
+     !> Aerosols
+     type(CS_aerosol) :: aerosol(MAX_AEROSOLS)
      !> Input files/handlers needed by the program
      type(CS_input) :: input
      !> Output settings
@@ -282,7 +316,7 @@ contains
     integer :: fini_int
 
     ! Loop variables
-    integer :: window_nr, gas_nr
+    integer :: window_nr, gas_nr, aerosol_nr
     integer :: i
     ! Does a file exist?
     logical :: file_exists
@@ -781,6 +815,34 @@ contains
           MCS%gas(gas_nr)%used = .false.
        end if
     end do
+
+    ! Aerosols section ---------------------------------------------------
+    ! This is done exactly the same as the windows section above.
+    do aerosol_nr=1, MAX_AEROSOLS
+
+       ! Is window "window_nr" in the config-file?
+       write(tmp_str, '(A, G0.1)') "aerosol-", aerosol_nr
+       tmp_str = trim(tmp_str)
+
+       if (fini%has_section(section_name=tmp_str)) then
+
+          MCS%aerosol(aerosol_nr)%used = .true.
+
+          call fini_extract(fini, tmp_str, 'name', .true., fini_char)
+          MCS%aerosol(aerosol_nr)%name = trim(fini_char)
+
+          call fini_extract(fini, tmp_str, 'mom_file', .true., fini_char)
+          MCS%aerosol(aerosol_nr)%mom_filename = trim(fini_char)
+
+          call fini_extract(fini, tmp_str, 'mie_file', .true., fini_char)
+          MCS%aerosol(aerosol_nr)%mie_filename = trim(fini_char)
+
+       else
+          MCS%gas(aerosol_nr)%used = .false.
+       end if
+
+    end do
+
 
   end subroutine populate_MCS
 

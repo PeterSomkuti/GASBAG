@@ -10,7 +10,7 @@
 module keywords_mod
 
   ! User modules
-  use control_mod, only: MAX_WINDOWS, MAX_GASES
+  use control_mod, only: MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS
 
   ! Third party modules
   use stringifor, only: string
@@ -51,6 +51,10 @@ contains
     integer :: gas_start
     !> Gas loop counter
     integer :: gas_nr
+    !> At which index of valid_sectionsn do we start the 'aerosol's?
+    integer :: aerosol_start
+    !> Aerosol loop counter
+    integer :: aerosol_nr
     !> General loop counter
     integer :: this_idx
 
@@ -81,18 +85,18 @@ contains
     valid_options(3,1) = "name"
 
     ! Related to input files
-    valid_sections(4) = "input"
+    valid_sections(4)  = "input"
     valid_options(4,1) = "l1b_file" ! L1b file location
     valid_options(4,2) = "met_file" ! MET file location
 
     ! Output file options
-    valid_sections(5) = "output"
+    valid_sections(5)  = "output"
     valid_options(5,1) = "output_file"
     valid_options(5,2) = "save_radiances"
     valid_options(5,3) = "overwrite_output"
 
     ! Solar model type and file path
-    valid_sections(6) = "solar"
+    valid_sections(6)  = "solar"
     valid_options(6,1) = "solar_type"
     valid_options(6,2) = "solar_file"
 
@@ -103,7 +107,7 @@ contains
        write(tmp_str, '(A, G0.1)') "window-", window_nr
        this_idx = window_start + window_nr
 
-       valid_sections(this_idx) = trim(tmp_str)
+       valid_sections(this_idx)   = trim(tmp_str)
        valid_options(this_idx,1)  = "name"
        valid_options(this_idx,2)  = "wl_min"
        valid_options(this_idx,3)  = "wl_max"
@@ -136,6 +140,7 @@ contains
        valid_options(this_idx,30) = "ils_stretch_perturbation"
        valid_options(this_idx,31) = "ils_stretch_covariance"
        valid_options(this_idx,32) = "rt_model"
+       valid_options(this_idx,33) = "aerosols"
     end do
 
     ! Section for gases
@@ -144,11 +149,24 @@ contains
        write(tmp_str, '(A, G0.1)') "gas-", gas_nr
        this_idx = gas_start + gas_nr
 
-       valid_sections(this_idx) = trim(tmp_str)
+       valid_sections(this_idx)  = trim(tmp_str)
        valid_options(this_idx,1) = "name"
        valid_options(this_idx,2) = "spectroscopy_type"
        valid_options(this_idx,3) = "spectroscopy_file"
     end do
+
+    ! Section for aerosols
+    aerosol_start = this_idx
+    do aerosol_nr=1, MAX_AEROSOLS
+       write(tmp_str, '(A, G0.1)') "aerosol-", aerosol_nr
+       this_idx = aerosol_start + aerosol_nr
+
+       valid_sections(this_idx)  = trim(tmp_str)
+       valid_options(this_idx,1) = "name"
+       valid_options(this_idx,2) = "mom_file"
+       valid_options(this_idx,3) = "mie_file"
+    end do
+
 
   end subroutine initialize_valid_sections
 

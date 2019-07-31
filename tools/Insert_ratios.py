@@ -3,6 +3,7 @@ import h5py
 import argparse
 import logging
 import os.path
+import sys
 
 from IPython import embed
 

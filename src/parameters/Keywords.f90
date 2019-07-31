@@ -72,7 +72,7 @@ contains
 
     ! Related to the algorithm general setup
     valid_sections(2) = "algorithm"
-    ! Which SIF algorithm(s) to use?
+    ! Which algorithm(s) to use?
     valid_options(2,1) = "sif_algorithm"
     valid_options(2,2) = "n_basisfunctions"
     valid_options(2,3) = "observation_mode"

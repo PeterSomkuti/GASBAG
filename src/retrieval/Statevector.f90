@@ -363,24 +363,31 @@ contains
              ! as e.g. CO2-scale-1:5, ergo exactly 2 "-" symbols
              check_gas_name = split_gas_string(1)
              check_gas_retr_type = split_gas_string(2)
-
              !   write(tmp_str, '(A,A)') "Sorry, SV element for gas retrieval needs two '-' signs: ", &
              !        split_string(i)%chars()
              !   call logger%fatal(fname, trim(tmp_str))
              !   stop 1
-
           else
              check_gas_name = split_string(i)
              check_gas_retr_type = ""
           end if
 
           ! Is this SV element a gas-type state vector?
+
           if ((check_gas_name == known_SV(j)) .and. (is_gas_SV(j))) then
              ! Yes, it is - now we look which particular gas this is, and set the
              ! retrieved-flag accordingly.
+
+             write(*,*) check_gas_name%chars()
+             write(*,*) check_gas_retr_type%chars()
+             write(*,*) known_SV(j)%chars()
+             write(*,*) is_gas_SV(j)
+             write(*,*) "----------"
+
              do k=1, MCS%window(i_win)%num_gases
                 gas_index = MCS%window(i_win)%gas_index(k)
                 ! If this gas is not used in this window, skip!
+                write(*,*) gas_index, MCS%gas(gas_index)%used
                 if (.not. MCS%gas(gas_index)%used) cycle
                 ! Otherwise, loop through the gases we have in the window
                 ! and set them as 'retrieved'
@@ -554,7 +561,7 @@ contains
     end if
 
     if (sv%num_temp > 0) then
-       write(tmp_str, '(A, G0.1)') "Number of Temperature SV elements: ", sv%num_temp
+       write(tmp_str, '(A, G0.1)') "Number of temperature SV elements: ", sv%num_temp
        call logger%info(fname, trim(tmp_str))
 
        allocate(sv%idx_temp(sv%num_temp))

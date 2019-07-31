@@ -838,7 +838,7 @@ contains
           MCS%aerosol(aerosol_nr)%mie_filename = trim(fini_char)
 
        else
-          MCS%gas(aerosol_nr)%used = .false.
+          MCS%aerosol(aerosol_nr)%used = .false.
        end if
 
     end do

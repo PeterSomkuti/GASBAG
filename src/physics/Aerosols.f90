@@ -12,7 +12,7 @@ module aerosols_mod
   use stringifor
   use logger_mod, only: logger => master_logger
 
-  public :: read_aerosol_file
+  public :: ingest_aerosol_files
 
 contains
 
@@ -22,24 +22,34 @@ contains
   !> @param aerosol Aerosol object
   !> @param mom_filename Location of mom file
   !> @param mie_filename Location of mie file
-  subroutine read_aerosol_file(aerosol)
+  subroutine ingest_aerosol_files(aerosol)
+
+    ! For a CS_aerosol object, which is part of MCS, we have already the
+    ! filenames for the mie/mom files that belong to this particular aerosol,
+    ! so all this subroutine has to do, is to load the files and stick the
+    ! coefficients etc. into the various arrays.
 
     implicit none
     type(CS_aerosol), intent(inout) :: aerosol
     logical :: success
 
+    ! Function name
     character(len=*), parameter :: fname = "create_aerosol"
+    ! Temporary holder for the wavelengths, we need that to check whether the
+    ! mie and mom files 'match'
     double precision, allocatable :: wavelengths_tmp(:)
-    integer :: i
+    integer :: i ! Loop variable
     character(len=999) :: tmp_str
 
+    call logger%debug(fname, "Reading in data for aerosol: " // aerosol%name%chars())
+
     ! Attempt at read-in of mom file
-    call logger%debug(fname, "Reading in mom file: " //  aerosol%mom_filename%chars())
+    call logger%debug(fname, "Reading in mom file: " // aerosol%mom_filename%chars())
     call read_mom_file(aerosol%mom_filename%chars(), &
          aerosol%wavelengths, aerosol%coef, success)
 
     ! Attempt at read-in of mie file
-    call logger%debug(fname, "Reading in mie file: " //  aerosol%mie_filename%chars())
+    call logger%debug(fname, "Reading in mie file: " // aerosol%mie_filename%chars())
     call read_mie_file(aerosol%mie_filename%chars(), &
          wavelengths_tmp, aerosol%qext, &
          aerosol%qsca, aerosol%ssa, &
@@ -66,7 +76,7 @@ contains
        end if
     end do
 
-  end subroutine read_aerosol_file
+  end subroutine ingest_aerosol_files
 
 
 end module aerosols_mod

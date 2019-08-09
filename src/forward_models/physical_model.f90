@@ -30,6 +30,7 @@ module physical_model_mod
   use smart_first_guess_mod
   use aerosols_mod
   use jacobians_mod
+  use Rayleigh_mod
 
   ! Third-party modules
   use logger_mod, only: logger => master_logger
@@ -161,6 +162,7 @@ module physical_model_mod
   integer, parameter :: RT_BEER_LAMBERT = 0
   !> RT model XRTM
   integer, parameter :: RT_XRTM = 1
+
 
 contains
 
@@ -315,8 +317,8 @@ contains
 
        do band=1, num_band
           do i_fp=1, num_fp
-             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, band), &
-                  dispersion(:, i_fp, band), band, i_fp)
+             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp,&
+                  & band), dispersion(:, i_fp, band), band, i_fp)
           end do
        end do
 
@@ -326,7 +328,7 @@ contains
     ! all retrieval windows.
     do i=1, MAX_AEROSOLS
        if (.not. MCS%aerosol(i)%used) cycle
-       call read_aerosol_file(MCS%aerosol(i))
+       call ingest_aerosol_files(MCS%aerosol(i))
     end do
 
     ! Create the HDF group in which all the results go in the end
@@ -957,6 +959,8 @@ contains
     double precision, allocatable :: gas_tau_dtemp(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
     double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
     double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
+    double precision, allocatable :: rayleigh_tau(:,:) ! Rayleigh optical depth (spectral, layer)
+    double precision, allocatable :: rayleigh_depolf(:) ! Rayleigh depolarization factor (spectral)
 
     ! Perturbed VMR profile and per-iteration-and-per-gas VMR profile for OD calculation (level)
     double precision, allocatable :: vmr_pert(:), this_vmr_profile(:,:)
@@ -997,6 +1001,8 @@ contains
     logical :: do_gas_jac
     ! Was the calculation of gas ODs successful?
     logical :: success_gas
+    ! Was the subcolumn boundary calculation successful?
+    logical :: success_scale_levels
     double precision, allocatable :: scale_first_guess(:)
 
     ! Retrieval quantities
@@ -1071,6 +1077,10 @@ contains
     ! File unit for debugging
     integer :: funit
 
+
+    ! DEBUG STUFF
+    double precision :: cpu_start, cpu_stop
+
     ! Grab a copy of the state vector for local use
     SV = global_SV
 
@@ -1103,24 +1113,25 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
        ! READ THE MEASUREMENT
+
        if ((MCS%algorithm%solar_footprint_averaging) .and. &
             (MCS%algorithm%observation_mode%lower() == "space_solar")) then
-
+          ! If the user chooses to, we can average all frames of a certain footprint
+          ! To one single measurement.
           call my_instrument%read_spectra_and_average_by_fp(l1b_file_id, i_fp, band, &
                MCS%general%N_spec(band), radiance_l1b)
-
        else
           ! Read the L1B spectrum for this one measurement in normal mode!
           call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
                MCS%general%N_spec(band), radiance_l1b)
-
        end if
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
             date, success_time_convert)
     end select
 
-
+    ! If extraction of the date-time fails, abort and return. Date and time is
+    ! needed for the solar doppler calculation.
     if (.not. success_time_convert) then
        call logger%error(fname, "Time string conversion error!")
        return
@@ -1155,7 +1166,12 @@ contains
     epoch(3) = date%getDay()
     epoch(4) = date%getHour()
     epoch(5) = date%getMinute()
-    epoch(7) = date%getSecond()
+    epoch(6) = date%getSecond()
+
+
+    ! ----------------------------------------------
+    ! Print out some debug information for the scene
+    ! ----------------------------------------------
 
     write(tmp_str, "(A, A)") "Date: ", date%isoformat()
     call logger%debug(fname, trim(tmp_str))
@@ -1169,9 +1185,9 @@ contains
     call logger%debug(fname, trim(tmp_str))
 
     write(tmp_str, "(A, F8.2, A, F8.2, A, ES15.3)") &
-         "Longitude: ", lon(i_fp, i_fr), &
-         " Latitude: ", lat(i_fp, i_fr), &
-         " Altitude: ", altitude(i_fp, i_fr)
+         "Lon.: ", lon(i_fp, i_fr), &
+         " Lat.: ", lat(i_fp, i_fr), &
+         " Alt.: ", altitude(i_fp, i_fr)
     call logger%debug(fname, trim(tmp_str))
 
     ! Dispersion array that contains the wavelenghts per pixel
@@ -1210,7 +1226,6 @@ contains
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
-    !N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
     N_spec_hi = size(this_solar, 1)
 
     ! Set the initial LM-Gamma parameter
@@ -1236,8 +1251,6 @@ contains
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
-
-
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
     allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
@@ -1245,12 +1258,14 @@ contains
 
     Sa_inv(:,:) = 0.0d0
     Sa(:,:) = 0.0d0
+
     ! Separate function to populate the prior covariance - this contains
     ! a good number of hard-coded values, which in future should be
     ! given through the config file.
     call populate_prior_covariance(SV, percentile(radiance_l1b, 98.0d0), &
          i_win, Sa, Sa_inv)
 
+    ! -----------------------------------------------------------------------
     ! Get the albedo prior estimated through the L1B radiances using a simple
     ! Lambertian model.
     select type(my_instrument)
@@ -1261,12 +1276,11 @@ contains
           ! Allocate Solar continuum (irradiance) array. We do this here already,
           ! since it's handy to have it for estimating the albedo
 
-
           call calculate_solar_planck_function(6500.0d0, solar_dist, &
                solar_spectrum_regular(:,1), solar_irrad)
 
        else if (MCS%algorithm%solar_type == "oco_hdf") then
-
+          ! The OCO-HDF-type spectrum needs to be first re-gridded here
           call pwl_value_1d( &
                N_solar, &
                solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
@@ -1278,6 +1292,7 @@ contains
        else
           call logger%error(fname, "Solar type: " // MCS%algorithm%solar_type%chars() // "is unknown.")
        end if
+
        ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
        ! comes with its own irradiance
 
@@ -1286,7 +1301,7 @@ contains
        ! Take that into account Stokes coef of instrument for the incoming solar irradiance
        albedo_apriori = albedo_apriori / stokes_coef(1, i_fp, i_fr)
     end select
-
+    ! -----------------------------------------------------------------------
 
     ! We can now populate the prior state vector
 
@@ -1303,7 +1318,7 @@ contains
        SV%svap(SV%idx_solar_shift(1)) = 0.0d0
     end if
 
-    ! Solar shift factor is set to one
+    ! Solar stretch factor is set to one
     if (SV%num_solar_stretch == 1) then
        SV%svap(SV%idx_solar_stretch(1)) = 1.0d0
     end if
@@ -1318,12 +1333,12 @@ contains
        SV%svap(SV%idx_zlo(1)) = 0.0d0
     end if
 
-    ! ZLO starts with zero too
+    ! Temperature offset starts with zero
     if (SV%num_temp > 0) then
        SV%svap(SV%idx_temp(1)) = 0.0d0
     end if
 
-    ! Dispersion
+    ! Dispersion prior is taken from L1B
     if (SV%num_dispersion > 0) then
        ! Start with the L1b dispersion values as priors
        do i=1, SV%num_dispersion
@@ -1331,7 +1346,7 @@ contains
        end do
     end if
 
-    ! ILS stretch
+    ! ILS stretch - we assume the L1B is unstretched
     if (SV%num_ils_stretch > 0) then
        ! Set the first coefficient to 1.0d0, i.e. no stretch
        SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
@@ -1378,6 +1393,9 @@ contains
        end if
 
        if (iteration == 1) then
+
+          ! Here we set up quantities that need to be done
+          ! for the very first iteration.
 
           divergent_step = .false.
           ! Initialise Chi2 with an insanely large value
@@ -1473,7 +1491,8 @@ contains
           ! current state vector.
 
           ! Albedo coefficients grabbed from the SV and used to construct
-          ! new albedo(:) array for high-resolution grid.
+          ! new albedo(:) array for high-resolution grid. Reminder: albedo slope is
+          ! defined with respect to the center pixel (and higher orders).
           if (SV%num_albedo > 0) then
              albedo = 0.0d0
              do i=1, SV%num_albedo
@@ -1510,6 +1529,10 @@ contains
 
           end if
        endif
+
+       ! NOTE
+       ! SIF and ZLO are (right now) exactly the same, i.e. an additive radiance
+       ! contribution that is constant w.r.t. wavelength.
 
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
@@ -1593,79 +1616,19 @@ contains
 
                 if ((iteration == 1) .or. (SV%num_psurf == 1)) then
 
-                   ! We need to 'reverse-lookup' to see which SV index belongs to this
-                   ! gas to grab the right scaling factor. This is done only on the first
-                   ! iteration - or if we retrieve surface pressure.
-                   do i=1, SV%num_gas
+                   ! From the user SV input, determine which levels belong to the
+                   ! gas subcolumn retrieval.
+                   call set_gas_scale_levels(SV, j, i_win, this_atm, this_psurf, &
+                        s_start, s_stop, do_gas_jac, success_scale_levels)
 
-                      if (MCS%window(i_win)%gas_retrieve_scale(j)) then
-
-                         do_gas_jac = .true.
-                         if (SV%gas_idx_lookup(i) == j) then
-
-                            ! This bit here figures out which level/layer range a
-                            ! certain scaling factor corresponds to. They are fractions
-                            ! of surface pressure, so we use 'searchsorted' to find
-                            ! where they would belong to. We also make sure it can't
-                            ! go below or above the first/last level.
-
-                            s_start(i) = searchsorted_dp(log(this_atm%p), &
-                                 SV%gas_retrieve_scale_start(i) * log(this_psurf), .true.)
-                            s_start(i) = max(1, s_start(i))
-                            s_stop(i) = searchsorted_dp(log(this_atm%p), &
-                                 SV%gas_retrieve_scale_stop(i) * log(this_psurf), .true.) + 1
-                            s_stop(i) = min(num_active_levels, s_stop(i))
-
-                         end if
-                      end if
-
-                   end do
-
-                   ! We need to make sure that we are not "doubling up" on a specific
-                   ! gas VMR level when retrieving scale factors. E.g. 0:0.5 0.5:1.0 will
-                   ! produce overlapping s_start/s_stop.
-
-                   do i=1, SV%num_gas
-                      do l=1, SV%num_gas
-                         ! Skip gases if index does not match
-                         if (SV%gas_idx_lookup(i) /= j) cycle
-                         if (SV%gas_idx_lookup(l) /= j) cycle
-
-                         if (s_start(i) == s_stop(l)) then
-                            s_start(i) = s_start(i) + 1
-                         end if
-                      end do
-                   end do
-
-                   do i=1, SV%num_gas
-
-                      ! Skip gases if index does not match
-                      if (SV%gas_idx_lookup(i) /= j) cycle
-
-                      if (s_stop(i) - s_start(i) == 1) then
-                         write(tmp_str, '(A,A)') "Scale factor index error for ", &
-                              results%SV_names(SV%idx_gas(i,1))%chars()
-                         call logger%error(fname, trim(tmp_str))
-                         !write(*,*) s_start(i), s_stop(i), SV%gas_retrieve_scale_start(i), &
-                         !     SV%gas_retrieve_scale_stop(i)
-
-                         !do l=1, num_levels
-                         !   write(*,*) l, this_atm%p(l), this_atm%p(l) / this_atm%p(num_levels)
-                         !end do
-
-                         return
-                      end if
-                   end do
-
+                   if (.not. success_scale_levels) then
+                      call logger%error(fname, "Error calculating subcolumn boundaries.")
+                      return
+                   end if
                 end if
 
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
-
-                      !write(*,*) "GAS: ", MCS%window(i_win)%gases(j)%chars()
-                      !write(*,*) "s_start: ", s_start(i)
-                      !write(*,*) "s_stop: ", s_stop(i)
-
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
                       this_vmr_profile(s_start(i):s_stop(i), j) = &
@@ -1696,6 +1659,7 @@ contains
              if (SV%num_temp == 1) then
                 ! First, we calculate gas OD's with a 1K temperature perturbation, but we only need
                 ! to do this if we retrieve the T offset.
+
                 call calculate_gas_tau( &
                      .true., & ! We are using pre-gridded spectroscopy!
                      is_H2O, & ! Is this gas H2O?
@@ -1744,25 +1708,41 @@ contains
              end if
           end do
 
+          ! ----------------------------------------------------------
+          ! Rayleigh optical depth calculations are done here as well,
+          ! and reside in a matrix for all wavelengths and layers
+          ! The depolarization factors depend on wavelength only
+          ! ----------------------------------------------------------
+
+          allocate(rayleigh_tau(N_hires, size(this_atm%p) - 1))
+          allocate(rayleigh_depolf(N_hires))
+          call calculate_rayleigh_tau(hires_grid, this_atm%p, &
+               rayleigh_tau, rayleigh_depolf)
+
           ! ---------------------------------------------------------------
           ! If there are aerosols in the scene, calculate the optical depth
           ! profiles here.
           ! ---------------------------------------------------------------
 
 
-
+          ! ---------------------------------------------------------------
+          ! Optical depth cleanup
+          ! ---------------------------------------------------------------
 
           ! Set tiny gas OD values to some lower threshold. Some RT solvers
           ! do not like gas OD = 0
           where(gas_tau < 1d-10) gas_tau = 1d-10
+          where(rayleigh_tau < 1d-10) rayleigh_tau = 1d-10
           ! Total optical depth is calculated as sum of all gas ODs
           allocate(total_tau(N_hires))
-          total_tau(:) = sum(sum(gas_tau, dim=2), dim=2)
+          total_tau(:) = sum(sum(gas_tau, dim=2) + rayleigh_tau, dim=2)
+
+
+
+          ! ----------------------------------
+          ! END SECTION FOR GASES / ATMOSPHERE
+          ! ----------------------------------
        end if
-
-
-
-
 
 
        ! Grab a copy of the dispersion coefficients from the L1B
@@ -1788,7 +1768,8 @@ contains
 
        ! Here we grab the index limits for the radiances for
        ! the choice of our microwindow and the given dispersion relation
-       call calculate_dispersion_limits(this_dispersion, i_win, l1b_wl_idx_min, l1b_wl_idx_max)
+       call calculate_dispersion_limits(this_dispersion, i_win, &
+            l1b_wl_idx_min, l1b_wl_idx_max)
 
        ! Number of spectral points in the output resolution
        N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
@@ -1810,7 +1791,6 @@ contains
 
        ! Calculate the sun-normalized TOA radiances and store them in
        ! 'radiance_calc_work_hi'.
-
        ! One last check if the radiances (measured) are valid
 
        select type(my_instrument)
@@ -2397,8 +2377,8 @@ contains
        else
           ! Not converged yet - change LM-gamma according to the chi2_ratio.
 
-          !! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
-          !! we revert to the last state vector, and increase lm_gamma
+          ! See Rogers (2000) Section 5.7 - if Chi2 increases as a result of the iteration,
+          ! we revert to the last state vector, and increase lm_gamma
 
           if (iteration == 1) then
              chi2_ratio = 0.5d0
@@ -2455,7 +2435,8 @@ contains
        !---------------------------------------------------------------------
 
        ! If the user requests a step-through, then we print a bunch of debug information about
-       ! the retrieval for each iteration and wait for a return by the user
+       ! the retrieval for each iteration and wait for a return by the user.
+       ! Also, various variables (SV, spectra, AK, gain matrix etc.) are written out.
        if (MCS%algorithm%step_through) then
 
           call logger%debug(fname, "---------------------------------")
@@ -2615,7 +2596,6 @@ contains
   !> @param i_win Window index for MCS
   !> @param Sa Prior covariance matrix
   !> @param Sa_inv Inverse of prior covariance matrix
-
   subroutine populate_prior_covariance(SV, continuum, i_win, Sa, Sa_inv)
 
     implicit none
@@ -2709,6 +2689,94 @@ contains
 
   end subroutine populate_prior_covariance
 
+  !> @brief Calculates the boundaries of the subcolumns
+  !>
+  !> @param SV State vector object
+  !> @param gas_idx gas index (from MCS%gas)
+
+  subroutine set_gas_scale_levels(SV, gas_idx, i_win, atm, psurf, &
+       s_start, s_stop, do_gas_jac, success)
+
+    type(statevector), intent(in) :: SV
+    integer, intent(in) :: gas_idx
+    integer, intent(in) :: i_win
+    type(atmosphere), intent(in) :: atm
+    double precision, intent(in) :: psurf
+    integer, intent(inout) :: s_start(:)
+    integer, intent(inout) :: s_stop(:)
+    logical, intent(inout) :: do_gas_jac
+    logical, intent(inout) :: success
+
+    character(len=*), parameter :: fname = "set_gas_scale_levels"
+    character(len=999) :: tmp_str
+    integer :: i, l
+
+
+    success = .false.
+
+    ! We need to 'reverse-lookup' to see which SV index belongs to this
+    ! gas to grab the right scaling factor. This is done only on the first
+    ! iteration - or if we retrieve surface pressure.
+    do i=1, SV%num_gas
+
+       if (MCS%window(i_win)%gas_retrieve_scale(gas_idx)) then
+
+          do_gas_jac = .true.
+          if (SV%gas_idx_lookup(i) == gas_idx) then
+
+             ! This bit here figures out which level/layer range a
+             ! certain scaling factor corresponds to. They are fractions
+             ! of surface pressure, so we use 'searchsorted' to find
+             ! where they would belong to. We also make sure it can't
+             ! go below or above the first/last level.
+
+             s_start(i) = searchsorted_dp(log(atm%p), &
+                  SV%gas_retrieve_scale_start(i) * log(psurf), .true.)
+             s_start(i) = max(1, s_start(i))
+             s_stop(i) = searchsorted_dp(log(atm%p), &
+                  SV%gas_retrieve_scale_stop(i) * log(psurf), .true.) + 1
+             s_stop(i) = min(size(atm%p), s_stop(i))
+
+          end if
+       end if
+
+    end do
+
+    ! We need to make sure that we are not "doubling up" on a specific
+    ! gas VMR level when retrieving scale factors. E.g. 0:0.5 0.5:1.0 will
+    ! produce overlapping s_start/s_stop.
+
+    do i=1, SV%num_gas
+       do l=1, SV%num_gas
+          ! Skip gases if index does not match
+          if (SV%gas_idx_lookup(i) /= gas_idx) cycle
+          if (SV%gas_idx_lookup(l) /= gas_idx) cycle
+
+          if (s_start(i) == s_stop(l)) then
+             s_start(i) = s_start(i) + 1
+          end if
+       end do
+    end do
+
+    ! Last check - we run through all gas statevectors and
+    ! check if they are at least 2 apart - meaning you can't
+    ! (as of now) retrieve a single gas layer.
+    do i=1, SV%num_gas
+
+       ! Skip gases if index does not match
+       if (SV%gas_idx_lookup(i) /= gas_idx) cycle
+
+       if (s_stop(i) - s_start(i) == 1) then
+          write(tmp_str, '(A,A)') "Scale factor index error for ", &
+               results%SV_names(SV%idx_gas(i,1))%chars()
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+    end do
+
+    success = .true.
+
+  end subroutine set_gas_scale_levels
 
 
   !> @brief Given a dispersion array "this_dispersion", in window "i_win", this

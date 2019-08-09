@@ -37,7 +37,7 @@ module control_mod
   !> Number of maximally allowed algorithms
   integer, parameter :: MAX_ALGORITHMS = 2
   !> Number of retrieval windows
-  integer, parameter :: MAX_WINDOWS = 10
+  integer, parameter :: MAX_WINDOWS = 20
   !> Number of absorbers
   integer, parameter :: MAX_GASES = 10
   !> Number of aerosols

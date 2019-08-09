@@ -378,16 +378,9 @@ contains
              ! Yes, it is - now we look which particular gas this is, and set the
              ! retrieved-flag accordingly.
 
-             write(*,*) check_gas_name%chars()
-             write(*,*) check_gas_retr_type%chars()
-             write(*,*) known_SV(j)%chars()
-             write(*,*) is_gas_SV(j)
-             write(*,*) "----------"
-
              do k=1, MCS%window(i_win)%num_gases
                 gas_index = MCS%window(i_win)%gas_index(k)
                 ! If this gas is not used in this window, skip!
-                write(*,*) gas_index, MCS%gas(gas_index)%used
                 if (.not. MCS%gas(gas_index)%used) cycle
                 ! Otherwise, loop through the gases we have in the window
                 ! and set them as 'retrieved'

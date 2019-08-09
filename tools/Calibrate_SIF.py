@@ -4,8 +4,12 @@ import h5py
 import sys
 from IPython import embed
 
+print("This file: ", sys.argv[1])
+
 l2 = h5py.File(sys.argv[1], 'r+')
 calibs = [sys.argv[2], sys.argv[3]]
+
+
 
 for i, band in enumerate(['757', '771']):
 
@@ -13,8 +17,8 @@ for i, band in enumerate(['757', '771']):
     calib_curve = pickle.load(bfile)
     bfile.close()
 
-    sif = l2[f'RetrievalResults/physical/{band}nm/sif_radiance_gbg'][:]
-    cont = l2[f'RetrievalResults/physical/{band}nm/continuum_level_radiance_gbg'][:]
+    sif = l2[f'RetrievalResults/physical/{band}nm/sif_radiance_gbg'][:].copy()
+    cont = l2[f'RetrievalResults/physical/{band}nm/continuum_level_radiance_gbg'][:].copy()
 
     sif_corr = np.zeros_like(sif)
     sif_corr[:] = np.nan
@@ -24,6 +28,8 @@ for i, band in enumerate(['757', '771']):
 
     if not 'Fluorescence' in l2['HighLevelResults']:
         l2.create_group('/HighLevelResults/Fluorescence')
+    else:
+        print("Fluorescence group already exists.")
 
     try:
         if not f'sif_{band}nm' in l2['HighLevelResults/Fluorescence']:
@@ -39,3 +45,4 @@ for i, band in enumerate(['757', '771']):
             l2[f'HighLevelResults/Fluorescence/sif_raw_{band}nm'][:] = sif
     except:
         print("Could not write SIF results.")
+        embed()

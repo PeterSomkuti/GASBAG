@@ -76,7 +76,7 @@ if __name__ == "__main__":
         logger.info(f"Opening {args.infile} was successful.")
     except:
         logger.error(f"Error opening {args.infile}.")
-
+        sys.exit(1)
 
     # Calculate ratios and stick them into the file
     insert_ratios(h5)

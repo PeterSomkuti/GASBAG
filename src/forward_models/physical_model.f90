@@ -320,8 +320,6 @@ contains
 
     end select
 
-
-
     ! Create the HDF group in which all the results go in the end
     call h5lexists_f(l1b_file_id, "/RetrievalResults", result_exists, hdferr)
     if (.not. result_exists) then
@@ -569,7 +567,7 @@ contains
        ! enough for my humble purposes.
        ! As you can see, it does not require much, whereas MPI would be more effort.
 
-       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(static) &
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
@@ -1204,8 +1202,6 @@ contains
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
-
-
     allocate(radiance_calc_work_hi(size(this_solar, 1)))
     allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
     allocate(albedo(size(radiance_calc_work_hi)))
@@ -1225,10 +1221,10 @@ contains
     type is (oco2_instrument)
 
        allocate(solar_irrad(N_hires))
+
        if (MCS%algorithm%solar_type == "toon") then
           ! Allocate Solar continuum (irradiance) array. We do this here already,
           ! since it's handy to have it for estimating the albedo
-
 
           call calculate_solar_planck_function(6500.0d0, solar_dist, &
                solar_spectrum_regular(:,1), solar_irrad)
@@ -1792,6 +1788,7 @@ contains
 
           solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
           this_solar(:,2) = solar_spectrum_regular(:,2) * solar_irrad(:)
+
        end if
 
        ! If we retrieve either solar shift or stretch (or both), then we

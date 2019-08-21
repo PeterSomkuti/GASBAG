@@ -55,7 +55,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O2")
+  set(opt "-O2 -fexternal-blas")
   set(bounds "-fbounds-check")
 else()
   # only support Gfortran for now

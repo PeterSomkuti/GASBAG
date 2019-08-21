@@ -340,6 +340,17 @@ contains
        idx_hires_ILS_min = searchsorted_dp(wl_input, ILS_delta_min)
        idx_hires_ILS_max = searchsorted_dp(wl_input, ILS_delta_max)
 
+       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
+          call logger%error(fname, "idx_hires_ILS_min out of bounds.")
+          return
+       end if
+
+       if ((idx_hires_ILS_max < 1) .or. (idx_hires_ILS_max > size(wl_input))) then
+          call logger%error(fname, "idx_hires_ILS_max out of bounds.")
+          return
+       end if
+
+
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min
        allocate(ILS_upsampled(N_this_wl + 1))
        ILS_upsampled = 0.0d0
@@ -420,8 +431,10 @@ contains
     character(len=*), parameter :: fname = "percentile"
 
     if ((perc < 0) .or. (perc > 100)) then
-       call logger%fatal(fname, "Percentile must be between 0 and 100!")
-       stop 1
+       !call logger%fatal(fname, "Percentile must be between 0 and 100!")
+       !stop 1
+       percentile = -9999
+       return
     end if
 
     allocate(x_sort(size(x)))
@@ -432,6 +445,12 @@ contains
 
     position_int = floor(position)
     position_remainder = position - floor(position)
+
+    if ((position_int < 1) .or. (position_int > size(x))) then
+       percentile = -9999
+       return
+    end if
+
 
     percentile = (x_sort(position_int) * (1.0d0 - position_remainder)) + &
          (x_sort(position_int + 1) * position_remainder)

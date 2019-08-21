@@ -2,8 +2,10 @@ cmake_minimum_required(VERSION 3.5)
 cmake_policy(SET CMP0074 NEW)
 
 project(GASBAG)
+
+
 set(PROJECT_DESCRIPTION "Generic Algorithm for Single Band Acquisition of Gases - GASBAG")
-enable_language(Fortran)
+enable_language(Fortran C)
 
 # This contains extra CMAKE modules to find NetCDF libraries
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
@@ -42,11 +44,18 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
-  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -mcmodel=large -fopenmp")
+  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512")
+
+  # Make OpenMP conditional
+  if(USE_OPENMP)
+    set(dialect "${dialect} -fopenmp")
+    message(STATUS "Compiling with OpenMP")
+  endif()
+
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O3 -mtune=native")
+  set(opt "-O2 -fexternal-blas")
   set(bounds "-fbounds-check")
 else()
   # only support Gfortran for now
@@ -59,9 +68,11 @@ else()
 endif()
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} -fcheck=all -fbacktrace")
+set(CMAKE_Fortran_FLAGS_DEBUG "-Og -g ${bounds} -fcheck=all -fbacktrace -fno-omit-frame-pointer")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
-set(CMAKE_Fortran_FLAGS_PROFILE "-Og -g -pg -fprofile-arcs -ftest-coverage")
+set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
+
+set(CMAKE_CXX_FLAGS "-O3")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
@@ -77,6 +88,65 @@ file(GLOB_RECURSE sources src/*.?90)
 file(GLOB_RECURSE third-party third-party/*.?90)
 # Add generated files to the list
 file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
+# Add Greg's XRTM
+# This is a little bit of a manual hackjob, and one can argue that
+# using Greg's makefile setup might be nice. One would compile XRTM
+# separately and just link to the resulting library. This however, lets
+# you make changes to compiler flags more easily etc.
+
+set(xrtm
+  ####
+  third-party/xrtm/src/xrtm_adding.c
+  third-party/xrtm/src/xrtm_adding_a.c
+  third-party/xrtm/src/xrtm_brdf.c
+  third-party/xrtm/src/xrtm_brdf_a.c
+  third-party/xrtm/src/xrtm_doub_rts.c
+  third-party/xrtm/src/xrtm_doubling.c
+  third-party/xrtm/src/xrtm_eig_bvp.c
+  third-party/xrtm/src/xrtm_eig_bvp_a.c
+  third-party/xrtm/src/xrtm_eig_rts.c
+  third-party/xrtm/src/xrtm_eig_rts_a.c
+  third-party/xrtm/src/xrtm_eig_util.c
+  third-party/xrtm/src/xrtm_eig_util_a.c
+  third-party/xrtm/src/xrtm_fd.c
+  third-party/xrtm/src/xrtm_interface.c
+  third-party/xrtm/src/xrtm_matrix.c
+  third-party/xrtm/src/xrtm_mem_bvp.c
+  third-party/xrtm/src/xrtm_model.c
+  third-party/xrtm/src/xrtm_model_a.c
+  third-party/xrtm/src/xrtm_pade_rts.c
+  third-party/xrtm/src/xrtm_radiance.c
+  third-party/xrtm/src/xrtm_radiance_a.c
+  third-party/xrtm/src/xrtm_save_tree.c
+  third-party/xrtm/src/xrtm_scatter.c
+  third-party/xrtm/src/xrtm_scatter_a.c
+  third-party/xrtm/src/xrtm_single.c
+  third-party/xrtm/src/xrtm_single_a.c
+  third-party/xrtm/src/xrtm_sos.c
+  third-party/xrtm/src/xrtm_source.c
+  third-party/xrtm/src/xrtm_source_a.c
+  third-party/xrtm/src/xrtm_stacks.c
+  third-party/xrtm/src/xrtm_support.c
+  third-party/xrtm/src/xrtm_two_os.c
+  third-party/xrtm/src/xrtm_utility.c
+  third-party/xrtm/src/xrtm_utility_a.c
+  third-party/xrtm/src/xrtm_work.c
+  third-party/xrtm/src/xrtm_external.c
+  ####
+  third-party/xrtm/misc/gmath_matrix.c
+  third-party/xrtm/misc/gmath_vector.c
+  third-party/xrtm/misc/gstruct.c
+  third-party/xrtm/misc/gutil_alloc.c
+  third-party/xrtm/misc/gutil_error.c
+  third-party/xrtm/misc/gutil_parse.c
+  third-party/xrtm/misc/rtutil_math.c
+  third-party/xrtm/misc/rtutil_scat_io.c
+  third-party/xrtm/misc/rtutil_support.c
+  ####
+  third-party/xrtm/interfaces/xrtm_int_f90_util.c
+          )
+
+
 
 # Third-party libraries are assumed to work fine, so compile with optimisation
 # and no debugging options.
@@ -86,6 +156,12 @@ set_source_files_properties(
   COMPILE_FLAGS "${opt}"
 )
 
+set_source_files_properties(
+  ${xrtm}
+  PROPERTIES
+  COMPILE_FLAGS "-O2 -cpp"
+  )
+
 # Our code is definitely in the need of having warnings
 # show up!
 set_source_files_properties(
@@ -94,8 +170,16 @@ set_source_files_properties(
   COMPILE_FLAGS "${warnings}"
 )
 
+
 # Define the executable
-add_executable(GASBAG ${sources} ${third-party} ${generated})
+add_executable(GASBAG ${sources} ${third-party} ${xrtm} ${generated})
+
+target_include_directories(GASBAG PRIVATE
+  "third-party/xrtm"
+  "third-party/xrtm/interfaces"
+  "third-party/xrtm/utils"
+  "third-party/xrtm/misc"
+  "third-party/xrtm/src")
 
 message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
@@ -103,6 +187,7 @@ message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 target_include_directories(GASBAG PUBLIC ${HDF5_Fortran_INCLUDE_DIRS}
 #${GPERFTOOLS_INCLUDE_DIR}
 )
+
 target_link_libraries(GASBAG
 ${LAPACK_LIBRARIES}
 ${BLAS_LIBRARIES}

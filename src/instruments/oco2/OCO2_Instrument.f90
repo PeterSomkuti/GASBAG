@@ -45,6 +45,7 @@ module oco2_mod
      procedure, nopass :: read_sounding_location
      procedure, nopass :: read_bad_sample_list
      procedure, nopass :: read_spike_filter
+     procedure, nopass :: read_stokes_coef
      procedure, nopass :: read_MET_data
   end type oco2_instrument
 
@@ -59,7 +60,7 @@ contains
 
     type(string) :: l1b_file
 
-    character(len=*), parameter :: fname = "scan_l1b_file"
+    character(len=*), parameter :: fname = "oco2_scan_l1b_file"
     character(len=999) :: msg
     integer(hid_t) :: file_id
     integer(8), allocatable :: n_fp_frames(:), dim_spec(:)
@@ -275,7 +276,9 @@ contains
     ! be read from the file.
 
     ! If we have OpenMP, lock this section of the code, to make sure
-    ! only one thread at a time is reading in a spectrum..
+    ! only one thread at a time is reading in a spectrum.
+    ! NOTE: HDF5 (without the parallel) is not designed for concurrent access,
+    ! so we MUST restrict reading from a file to one thread/process at a time.
 
 !$OMP CRITICAL
     call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)
@@ -294,6 +297,9 @@ contains
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, spectrum, dim_mem, &
          hdferr, memspace_id, dspace_id)
     call check_hdf_error(hdferr, fname, "Error reading spectrum data from " // trim(dset_name))
+
+    call h5dclose_f(dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error closing dataset id for " // trim(dset_name))
 !$OMP END CRITICAL
 
   end subroutine read_one_spectrum
@@ -582,6 +588,47 @@ contains
     end if
 
   end subroutine read_sounding_geometry
+
+  subroutine read_stokes_coef(l1b_file_id, band, stokes_coefs)
+
+    implicit none
+
+    integer(hid_t), intent(in) :: l1b_file_id
+    integer, intent(in) :: band
+    double precision, dimension(:,:,:), allocatable, intent(out) :: stokes_coefs
+
+    character(len=*), parameter :: fname = "read_stokes_coefs(oco2)"
+    integer(hsize_t), dimension(:), allocatable :: dset_dims
+    double precision, dimension(:,:,:,:), allocatable :: tmp_array4d
+    double precision, dimension(:,:,:,:,:), allocatable :: tmp_array5d
+    integer :: i
+
+    call logger%debug(fname, "Trying to allocate stokes coef. array.")
+    allocate(stokes_coefs(4, MCS%general%N_fp, MCS%general%N_frame))
+
+    ! Hack - GeoCarb files have an extra dimension here. So let's check for that first
+    call get_HDF5_dset_dims(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+         dset_dims)
+
+    if (size(dset_dims) == 4) then
+
+       deallocate(dset_dims)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+            tmp_array4d, dset_dims)
+       stokes_coefs(:,:,:) = tmp_array4d(:,band,:,:)
+       deallocate(tmp_array4d)
+
+    else if (size(dset_dims) == 5) then
+
+       deallocate(dset_dims)
+       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+            tmp_array5d, dset_dims)
+       stokes_coefs(:,:,:) = tmp_array5d(1,:,band,:,:)
+       deallocate(tmp_array5d)
+
+    end if
+
+  end subroutine read_stokes_coef
 
   subroutine read_ils_data(l1b_file_id, ils_delta_lambda, ils_relative_response)
 

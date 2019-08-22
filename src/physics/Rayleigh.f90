@@ -30,14 +30,18 @@ contains
     double precision, parameter :: F_Ar = 0.934d0
     double precision, parameter :: F_CO2 = 1.15d0
     double precision :: depolf
+    double precision :: wl2, wl4
 
     double precision :: n300_1, nCO2_1, ns
     double precision :: ray_sigma
 
     do i=1, size(wl)
 
-       F_N2 = 1.034d0 + 3.17d0 * 1.0d-4 * (wl(i)**(-2))
-       F_O2 = 1.096d0 + 1.385d0 * 1.0d-3 * (wl(i)**(-2)) + 1.448 * 1.0d-4 * (wl(i)**(-4))
+       wl2 = wl(i) * wl(i)
+       wl4 = wl2 * wl2
+
+       F_N2 = 1.034d0 + 3.17d0 * 1.0d-4 / wl2
+       F_O2 = 1.096d0 + 1.385d0 * 1.0d-3 / wl2 + 1.448 * 1.0d-4 / wl4
 
        depolf = N2_C * F_N2 + O2_C * F_O2 + Ar_C * F_ar + CO2_C * F_CO2
        depolf = depolf / (N2_C + O2_C + Ar_C + CO2_C)
@@ -73,19 +77,22 @@ contains
   subroutine calculate_rayleigh_scatt_matrix(depolf, coeffs)
     double precision, intent(in) :: depolf
     double precision, intent(inout) :: coeffs(:,:)
+    double precision :: depol_rho
+
+    depol_rho = (6.0d0 * depolf - 6.0d0) / (7.0d0 * depolf + 3.0d0)
 
     ! Reset the matrix
     coeffs(:,:) = 0.0d0
 
     ! Set beta (for scalar transport)
     coeffs(1, 1) = 1.0d0 ! beta_0
-    coeffs(3, 1) = (1.0d0 - depolf) / (2.0d0 * depolf) ! beta_2
+    coeffs(3, 1) = (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! beta_2
 
     ! Set other coefficients for vector transport
     if (size(coeffs, 2) == 6) then
-       coeffs(3, 2) = 6.0d0 * (1.0d0 - depolf) / (2.0d0 + depolf) ! alpha_2
-       coeffs(2, 4) = 3.0d0 * (1.0d0 - 2.0d0 * depolf) / (2.0d0 + depolf) ! delta_1
-       coeffs(3, 5) = 2.449489742d0 * (1.0d0 - depolf) / (2.0d0 + depolf)
+       coeffs(3, 2) = 6.0d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! alpha_2
+       coeffs(2, 4) = 3.0d0 * (1.0d0 - 2.0d0 * depol_rho) / (2.0d0 + depol_rho) ! delta_1
+       coeffs(3, 5) = 2.449489742d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho)
        ! gamma_2 (that funky number is ~sqrt(6.0)
     end if
 

@@ -27,12 +27,135 @@ module math_utils_mod
   double precision, parameter :: DRY_AIR_MASS = 0.0289644d0
   double precision, parameter :: PSURF_PERTURB = 100.0d0 !Pa
   double precision, parameter :: SH_H2O_CONV = DRY_AIR_MASS / H2Om
+  double precision, parameter :: Rd = 8.314472d0 / DRY_AIR_MASS
+  double precision, parameter :: EPSILON = H2Om / DRY_AIR_MASS
   double precision, parameter :: PLANCK_CONST = 6.62607015d-34
   double precision, parameter :: BOLTZMANN_CONST = 1.38064852d-23
   double precision, parameter :: SOLAR_RADIUS = 695.660d6 ! [m]
   double precision, parameter :: AU_UNIT = 149597870d3 ! [m]
+  double precision, parameter :: EARTH_EQUATORIAL_RADIUS = 6378178.0d0 ! [m]
+
 
 contains
+
+
+  subroutine scene_altitude(p_levels, T_levels, SH_levels, lat, elevation, &
+       altitude_levels)
+
+    double precision, intent(in) :: p_levels(:)
+    double precision, intent(in) :: T_levels(:)
+    double precision, intent(in) :: SH_levels(:)
+    double precision, intent(in) :: lat
+    double precision, intent(in) :: elevation
+    double precision, intent(inout) :: altitude_levels(:)
+
+
+    double precision :: SH_layer, g_layer, p_layer, T_layer, Tv, dP
+    double precision :: logratio, dz, constant
+
+    integer :: N_lev
+    integer :: i
+
+    N_lev = size(p_levels)
+
+    ! Set altitudes to zero, and the lowest level to the altitude
+    altitude_levels(:) = 0.0d0
+    altitude_levels(N_lev) = elevation
+
+    ! Loop through layers, starting with the bottom-most (surface) one
+    do i = N_lev - 1, 1, -1
+
+       SH_layer = (SH_levels(i) + SH_levels(i+1)) * 0.5d0
+       g_layer = jpl_gravity(lat, altitude_levels(i+1))
+       p_layer = (p_levels(i) + p_levels(i+1)) * 0.5d0
+       dP = p_levels(i+1) - p_levels(i)
+       T_layer = (T_levels(i) + T_levels(i+1)) * 0.5d0
+       Tv = T_layer * (1.0d0 + SH_layer * (1.0d0 - EPSILON) / EPSILON)
+       logratio = log(p_levels(i+1) / p_levels(i))
+       dz = logratio * Tv * Rd / g_layer
+       g_layer = jpl_gravity(lat, altitude_levels(i+1) + 0.5d0 * dz)
+       dz = logratio * Tv * Rd / g_layer
+       constant = dP / (DRY_AIR_MASS * g_layer)
+       altitude_levels(i) = altitude_levels(i+1) + dz
+
+    end do
+
+
+
+  end subroutine scene_altitude
+
+
+
+  !> @brief Calculate acceleration g(lat, altitude)
+  !> @param gdlat Geodetic latitude [deg]
+  !> @param altit Geometric altitude [m]
+  pure function jpl_gravity(gdlat,altit) result(gravity)
+    ! NOTE
+    ! This code was taken from MS3 and just modified slightly for data
+    ! types.
+    !
+    ! Computes the effective Earth gravity at a given latitude and altitude.
+    ! This is the sum of the gravitational and centripital accelerations.
+    ! These are based on equation I.2.4-(17) in US Standard Atmosphere 1962
+    ! The Earth is assumed to be an oblate ellipsoid, with a ratio of the
+    ! major to minor axes = sqrt(1+con) where con=.006738
+    ! This eccentricity makes the Earth's gravititational field smaller at the
+    ! poles and larger at the equator than if the Earth were a sphere of the
+    ! same mass. It also makes the local mid-latitude gravity field not point
+    ! toward the center of mass.
+    !
+    ! Input Parameters:
+    ! gdlat       GeoDetric Latitude (degrees)
+    !	altit       Geometric Altitude (meters) ! CHANGED CWO 6/22/2009
+    !
+    ! Output Parameter:
+    !	gravity     Effective Gravitational Acceleration (m/s2)
+    !
+    ! Interestingly, since the centripital effect of the Earth's rotation
+    ! (-ve at equator, 0 at poles) has almost the opposite shape to the
+    ! second order gravitational field (+ve at equator, -ve at poles), their
+    ! sum is almost constant so that the surface gravity can be approximated
+    ! (to .07%) by the simple expression g = 0.99746*GM/radius**2, the latitude
+    ! variation coming entirely from the variation of surface r with latitude.
+
+    implicit none
+
+    ! In/Out variables
+    double precision, intent(in) :: gdlat   ! geodetic latitude [degrees]
+    double precision, intent(in) :: altit   ! geometric altitude [meters]
+    double precision :: gravity ! gravitational acceleration [m/s^2]
+
+    ! Local Variables
+    double precision :: radius        ! radial distance (metres)
+    double precision :: gclat         ! geocentric latitude [radians]
+    double precision :: ff, hh, ge       ! scratch variables
+
+    ! Parameters
+    ! Gravitational constant times Earth's Mass (m3/s2)
+    double precision, parameter  :: gm = 3.9862216d14
+    ! Earth's angular rotational velocity (radians/s)
+    double precision, parameter  :: omega = 7.292116d-5
+    ! (a/b)**2-1 where a & b are equatorial & polar radii
+    double precision, parameter  :: con = 0.006738d0
+    ! 2nd harmonic coefficient of Earth's gravity field
+    double precision, parameter  :: shc = 1.6235d-3
+
+    ! Convert from geodetic latitude (GDLAT) to geocentric latitude (GCLAT).
+    gclat=atan(tan(DEG2RAD*gdlat)/(1+con))  ! radians
+    ! On computers which crash at the poles try the following expression
+    ! gclat=d2r*gdlat-con*sin(d2r*gdlat)*cos(d2r*gdlat)/(1+con*cos(d2r*gdlat)**2)
+    radius= altit + EARTH_EQUATORIAL_RADIUS/sqrt(1.0d0+con*sin(gclat)**2)
+    ff=(radius/ EARTH_EQUATORIAL_RADIUS)**2
+    hh=radius*omega**2
+    ge=gm/ EARTH_EQUATORIAL_RADIUS**2                       ! = gravity at Re
+    gravity=(ge*(1-shc*(3.0d0*sin(gclat)**2-1.0d0)/ff)/ff-hh*cos(gclat)**2) &
+         *(1.0d0+0.5d0*(sin(gclat)*cos(gclat)*(hh/ge+2.0d0*shc/ff**2))**2)
+
+  end function jpl_gravity
+
+
+
+
 
   !> @brief Calculates reduced CHI2 statistic for two spectra
   !> @param array1 One of two spectra
@@ -428,7 +551,7 @@ contains
     double precision, dimension(:), allocatable :: x_sort
     double precision :: position, position_remainder
     integer :: position_int
-    character(len=*), parameter :: fname = "percentile"
+    !character(len=*), parameter :: fname = "percentile"
 
     if ((perc < 0) .or. (perc > 100)) then
        !call logger%fatal(fname, "Percentile must be between 0 and 100!")

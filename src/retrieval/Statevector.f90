@@ -48,10 +48,13 @@ module statevector_mod
      double precision, allocatable :: SNR_std(:,:)
      !> Continuum level radiance estimate
      double precision, allocatable :: continuum(:,:)
+     !> Single-sounding retrieval processing time
+     double precision, allocatable :: processing_time(:,:)
      !> Number of moles of dry air per m2 for various sections
      !> of the model atmosphere - corresponding to retrieved
      !> gas scale factors.
      double precision, allocatable :: ndry(:,:,:)
+
   end type result_container
 
     public initialize_statevector, parse_and_initialize_SV, &

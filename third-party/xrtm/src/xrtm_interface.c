@@ -3458,7 +3458,8 @@ static int xrtm_set_coef_x(xrtm_data *d, double ***coef,
           if (d->n_coef_layer[i] > 1) {
                if (fabs(1. - coef[ii][0][0]) > DBL_EPSILON) {
                     eprintf("ERROR: the first phase function coefficient for layer %d is not = one\n", i_layer);
-                    return -1;
+                    eprintf("Value: %15.5e\n", coef[ii][0][0]);
+		    return -1;
                }
           }
 

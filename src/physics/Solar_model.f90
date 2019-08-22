@@ -250,6 +250,7 @@ contains
 
     allocate(solar_irrad(N_solar, 2))
     solar_irrad(:,1) = solar_spectrum(:,1)
+    solar_irrad(:,2) = 0.0d0
 
     ! Construct the solar irradiance as function of the polynomial coefficients
     do j=0, Npoly-1

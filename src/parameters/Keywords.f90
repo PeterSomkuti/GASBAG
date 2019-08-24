@@ -141,6 +141,8 @@ contains
        valid_options(this_idx,31) = "ils_stretch_covariance"
        valid_options(this_idx,32) = "rt_model"
        valid_options(this_idx,33) = "aerosols"
+       valid_options(this_idx,34) = "xrtm_options"
+       valid_options(this_idx,35) = "xrtm_solvers"
     end do
 
     ! Section for gases

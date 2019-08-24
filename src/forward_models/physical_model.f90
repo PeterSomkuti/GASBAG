@@ -1092,8 +1092,11 @@ contains
     integer :: xrtm_kernels(1)
     ! Was the call to XRTM successful?
     logical :: xrtm_success
+    integer :: xrtm_error
     ! How many derivatives does XRTM need to calculate?
     integer :: xrtm_n_derivs
+    ! To pass gas scale factors to XRTM, we need a separate container here
+    double precision, allocatable :: xrtm_gas_scale_factors(:)
 
     ! Miscellaneous stuff
     ! String to hold various names etc.
@@ -1101,13 +1104,13 @@ contains
     ! Function name
     character(len=*), parameter :: fname = "physical_FM"
     ! Loop variables
-    integer :: i, j, l
+    integer :: i, j
     ! File unit for debugging
     integer :: funit
 
 
     ! DEBUG STUFF
-    double precision :: cpu_start, cpu_stop
+    ! double precision :: cpu_start, cpu_stop
 
     ! Grab a copy of the state vector for local use
     SV = global_SV
@@ -1321,12 +1324,20 @@ contains
 
        ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
        ! comes with its own irradiance
-
+       ! Also take that into account Stokes coef of instrument for the
+       ! incoming solar irradiance
        albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(solar_irrad) * mu0)
-       ! Take that into account Stokes coef of instrument for the incoming solar irradiance
-       albedo_apriori = albedo_apriori / stokes_coef(1, i_fp, i_fr)
+            (1.0d0 * maxval(solar_irrad) * mu0) / stokes_coef(1, i_fp, i_fr)
     end select
+
+    ! XRTM will NOT allow an unphysical albedo, so might as well just quit here
+    if (RT_MODEL == RT_XRTM) then
+       if ((albedo_apriori <= 0.0d0) .or. (albedo_apriori >= 1.0d0)) then
+          call logger%error(fname, "Albedo for XRTM out of range [0,1].")
+          return
+       end if
+    end if
+
     ! -----------------------------------------------------------------------
 
 
@@ -1598,15 +1609,15 @@ contains
        ! changes per iterations, this MUST be within the iteration loop
 
        if (RT_model == RT_XRTM) then
-          xrtm_solvers_string(1) = "EIG_BVP"
-          xrtm_options_string(1) = ""
+          !xrtm_solvers_string(1) = "EIG_BVP"
+          !xrtm_options_string(1) = ""
 
           ! This function "translates" our verbose configuration file options
           ! into proper XRTM language and sets the corresponding options.
 
-          call setup_XRTM(xrtm, &
-               xrtm_options_string, &
-               xrtm_solvers_string, &
+          call setup_XRTM( &
+               MCS%window(i_win)%xrtm_options, &
+               MCS%window(i_win)%xrtm_solvers, &
                xrtm_options, &
                xrtm_solvers, &
                xrtm_kernels, &
@@ -1626,7 +1637,7 @@ contains
                xrtm_options, & ! XRTM options bitmask
                xrtm_solvers, & ! XRTM solvers bitmask
                3, & ! Max coef
-               2, & ! Quadrature points
+               16, & ! Quadrature points
                1, & ! Number of stokes coeffs
                xrtm_n_derivs, & ! Number of derivatives
                num_active_levels-1, & ! Number of layers
@@ -1902,6 +1913,12 @@ contains
           !end do
           !close(funit)
        case (RT_XRTM)
+
+          if (SV%num_gas > 0) then
+              allocate(xrtm_gas_scale_factors(SV%num_gas))
+              xrtm_gas_scale_factors(:) = SV%svsv(SV%idx_gas(1:SV%num_gas,1))
+          end if
+              
           call calculate_XRTM_radiance(xrtm, & ! XRTM handler
                hires_grid, & ! per pixel wavelength
                SZA(i_fp, i_fr), & ! solar zenith angle
@@ -1913,14 +1930,27 @@ contains
                gas_tau(:,1:num_active_levels-1,:), & ! per-wl per-layer per gas optical depths
                ray_tau(:,1:num_active_levels-1), & ! & per-wl per-layer Rayleigh extinction
                ray_depolf, & ! & per-wl Rayleigh depolarization factor
-               SV%svsv(SV%idx_gas(1:SV%num_gas,1)), & ! Gas scale factors (current)
+               xrtm_gas_scale_factors, & ! Gas scale factors (current)
                1, & ! Number of Stokes parameters to calculate
                xrtm_n_derivs, & ! Number of derivatives to be calculated
                num_active_levels-1, & ! Number of atmospheric layers
                s_start, & ! sub-column start indices
                s_stop, & ! sub_column stop indices
                SV%gas_idx_lookup, & ! gas lookup array to match retrieved gases to atmosphere gases
-               radiance_calc_work_hi, dI_dgas, dI_dsurf)
+               radiance_calc_work_hi, dI_dgas, dI_dsurf, &
+               xrtm_success)
+
+          ! XRTM must be destroyed at some point, otherwise it will just keep
+          ! creating arrays and filling up memory (quickly!). Why not destroy
+          ! it right here - all the results are transferred to various arrays
+          ! so we do not really need the XRTM instance anymore. In addition, the
+          ! function should also be called everytime an error is raised.
+
+          call xrtm_destroy_f90(xrtm, xrtm_error)
+
+          if (allocated(xrtm_gas_scale_factors)) deallocate(xrtm_gas_scale_factors)
+          if (.not. xrtm_success) return
+
        end select
 
        ! Take a copy of the solar spectrum and re-adjust the solar spectrum wavelength grid
@@ -2701,6 +2731,7 @@ contains
        end if
 
     end do
+
 
   end function physical_FM
 

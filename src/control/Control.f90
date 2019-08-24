@@ -161,6 +161,10 @@ module control_mod
      type(string) :: inverse_method
      !> Type of Radiative Transfer model to use
      type(string) :: RT_model
+     !> XRTM options to use
+     type(string), allocatable :: XRTM_options(:)
+     !> XRTM solvers to use
+     type(string), allocatable :: XRTM_solvers(:)
   end type CS_window
 
   type, private :: CS_input
@@ -612,6 +616,20 @@ contains
 
              call fini_extract(fini, tmp_str, 'rt_model', .true., fini_char)
              MCS%window(window_nr)%RT_model = trim(fini_char)
+
+             call fini_extract(fini, tmp_str, 'xrtm_options', .false., fini_string_array)
+             if (allocated(fini_string_array)) then
+                allocate(MCS%window(window_nr)%XRTM_options(size(fini_string_array)))
+                MCS%window(window_nr)%XRTM_options(:) = fini_string_array(:)
+                deallocate(fini_string_array)
+             end if
+
+             call fini_extract(fini, tmp_str, 'xrtm_solvers', .false., fini_string_array)
+             if (allocated(fini_string_array)) then
+                allocate(MCS%window(window_nr)%XRTM_solvers(size(fini_string_array)))
+                MCS%window(window_nr)%XRTM_solvers(:) = fini_string_array(:)
+                deallocate(fini_string_array)
+             end if
 
           end if
 

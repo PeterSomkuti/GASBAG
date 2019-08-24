@@ -3,12 +3,9 @@ cmake_policy(SET CMP0074 NEW)
 
 project(GASBAG)
 
-
 set(PROJECT_DESCRIPTION "Generic Algorithm for Single Band Acquisition of Gases - GASBAG")
 enable_language(Fortran C)
 
-# This contains extra CMAKE modules to find NetCDF libraries
-set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake/modules)
 
 # This here lets us use the current GIT revision as part of
 # the make process (TODO!!)
@@ -55,8 +52,9 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
   set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(opt "-O3 -mtune=native")
+  set(opt "-O3 -ftree-vectorize -mtune=native")
   set(bounds "-fbounds-check")
+
 else()
   # only support Gfortran for now
 endif()
@@ -66,6 +64,7 @@ if (CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 8.0)
 else()
     message(STATUS "gfortran version is sufficcient!")
 endif()
+
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
 set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g ${bounds} -fcheck=all -fbacktrace -fno-omit-frame-pointer")

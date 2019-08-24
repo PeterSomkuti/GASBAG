@@ -2,7 +2,6 @@
 !> @file XRTM.f90
 !> @author Peter Somkuti
 
-
 module XRTM_mod
 
   ! User modules
@@ -16,23 +15,28 @@ module XRTM_mod
 
   implicit none
 
-  public :: setup_XRTM, calculate_XRTM_radiance
+  public :: setup_XRTM, create_XRTM, calculate_XRTM_radiance
 
 contains
 
 
-
-  subroutine setup_XRTM(xrtm, xrtm_options_string, xrtm_solvers_string, &
+  !> @brief "Translates" configuration values into XRTM settings
+  !> @param xrtm_options_string Array of strings containing XRTM options
+  !> @param xrtm_solvers_string Array of strings containing XRTM solvers
+  !> @param xrtm_options Integer bitmask for XRTM options
+  !> @param xrtm_solvers Integer bitmask for XRTM solvers
+  !> @param xrtm_kernels Integer array specifying which surface kernels
+  !> @param success Did any error occur?
+  subroutine setup_XRTM(xrtm_options_string, xrtm_solvers_string, &
        xrtm_options, xrtm_solvers, xrtm_kernels, success)
-    implicit none
-    type(xrtm_type), intent(inout) :: xrtm
-    type(string), intent(in) :: xrtm_options_string(:)
-    type(string), intent(in) :: xrtm_solvers_string(:)
-    logical, intent(inout) :: success
 
+    implicit none
+    type(string), allocatable, intent(in) :: xrtm_options_string(:)
+    type(string), allocatable, intent(in) :: xrtm_solvers_string(:)
     integer, intent(inout) :: xrtm_options
     integer, intent(inout) :: xrtm_solvers
     integer, intent(inout) :: xrtm_kernels(:)
+    logical, intent(inout) :: success
 
     character(len=*), parameter :: fname = "setup_XRTM"
 
@@ -51,39 +55,43 @@ contains
 
 
     ! Populate solvers bit field, depending on requested options
-    do i=1, size(xrtm_solvers_string)
-       ! Grab local copy of string
-       tmp_str = xrtm_solvers_string(i)
+    if (allocated(xrtm_solvers_string)) then
+       do i=1, size(xrtm_solvers_string)
+          ! Grab local copy of string
+          tmp_str = xrtm_solvers_string(i)
 
-       if (tmp_str == "TWO_OS") then
-          ! Vijay-like 2OS, gives you SECOND ORDER ONLY
-          xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_TWO_OS)
-       else if (tmp_str == "SINGLE") then
-          ! Single scattering only
-          xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_SINGLE)
-       else if (tmp_str == "EIG_BVP") then
-          ! Quadrature (LIDORT-like)
-          xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_EIG_ADD)
-       else
-          call logger%error(fname, "XRTM solver option is not implemented, and will be ignored: " &
-               // tmp_str%chars())
-       end if
-    end do
+          if (tmp_str == "TWO_OS") then
+             ! Vijay-like 2OS, gives you SECOND ORDER ONLY
+             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_TWO_OS)
+             call logger%debug(fname, "Using XRTM in 2-orders-of-scattering mode")
+          else if (tmp_str == "SINGLE") then
+             ! Single scattering only
+             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_SINGLE)
+             call logger%debug(fname, "Using XRTM in single-scattering mode")
+          else if (tmp_str == "EIG_BVP") then
+             ! Quadrature (LIDORT-like)
+             call logger%debug(fname, "Using XRTM in discrete-ordinate mode")
+             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_EIG_BVP)
+          else if (tmp_str == "PADE_ADD") then
+             ! Pade approximation and adding
+             call logger%debug(fname, "Using XRTM in Pade-adding mode")
+             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_PADE_ADD)
+          else
+             call logger%error(fname, "XRTM solver option is not implemented, and will be ignored: " &
+                  // tmp_str%chars())
+          end if
+       end do
+    end if
+
 
     xrtm_options = ior(XRTM_OPTION_CALC_DERIVS, XRTM_OPTION_PSA)
+    !xrtm_options = ior(xrtm_options, XRTM_OPTION_N_T_TMS)
+    !xrtm_options = ior(xrtm_options, XRTM_OPTION_DELTA_M)
     !xrtm_options = XRTM_OPTION_CALC_DERIVS
     !xrtm_solvers = ior(XRTM_SOLVER_SINGLE, XRTM_SOLVER_TWO_OS)
     !xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_EIG_BVP)
-    xrtm_solvers = XRTM_SOLVER_EIG_BVP
+    !xrtm_solvers = XRTM_SOLVER_SINGLE
     !write(*,*) "Solvers: ", xrtm_solvers
-
-    ! Some general set-up's that are not expected to change, and can
-    ! be safely hard-coded.
-    call xrtm_set_fourier_tol_f90(xrtm, .0001d0, xrtm_error)
-    if (xrtm_error /= 0) then
-       call logger%error(fname, "Error calling xrtm_set_fourier_tol_f90")
-       return
-    endif
 
     success = .true.
 
@@ -132,6 +140,7 @@ contains
 
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_create_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
        return
     endif
 
@@ -145,7 +154,8 @@ contains
        altitude_levels, albedo, gas_tau, ray_tau, ray_depolf, gas_scale, &
        n_stokes, n_derivs, n_layers, &
        s_start, s_stop, gas_lookup, &
-       radiance, dI_dgas, dI_dsurf)
+       radiance, dI_dgas, dI_dsurf, &
+       success)
 
     implicit none
     type(xrtm_type), intent(inout) :: xrtm
@@ -155,17 +165,19 @@ contains
     double precision, intent(in) :: gas_tau(:,:,:)
     double precision, intent(in) :: ray_tau(:,:)
     double precision, intent(in) :: ray_depolf(:)
-    double precision, intent(in) :: gas_scale(:)
+    double precision, allocatable, intent(in) :: gas_scale(:)
     integer, intent(in) :: n_stokes
     integer, intent(in) :: n_derivs
     integer, intent(in) :: n_layers
     integer, intent(in) :: s_start(:)
     integer, intent(in) :: s_stop(:)
-    integer, intent(in) :: gas_lookup(:)
+    integer, allocatable, intent(in) :: gas_lookup(:)
 
     double precision, intent(inout) :: radiance(:)
     double precision, intent(inout) :: dI_dgas(:,:)
     double precision, intent(inout) :: dI_dsurf(:)
+
+    logical, intent(inout) :: success
 
 
     ! Local
@@ -179,6 +191,7 @@ contains
     double precision, allocatable    :: K_m(:,:,:,:,:)
 
     character(len=*), parameter :: fname = "calculate_XRTM_radiance"
+    character(len=999) :: tmp_str
     integer :: xrtm_error
     double precision :: out_thetas(1)
     double precision :: out_phis(1,1)
@@ -195,6 +208,8 @@ contains
     integer :: funit
 
     double precision :: cpu_start, cpu_end
+
+    success = .false.
 
     xrtm_options = xrtm_get_options_f90(xrtm)
     xrtm_solvers = xrtm_get_solvers_f90(xrtm)
@@ -228,6 +243,16 @@ contains
     allocate(K_p(n_stokes, 1, 1, n_derivs, 1))
     allocate(K_m(n_stokes, 1, 1, n_derivs, 1))
 
+
+    ! Some general set-up's that are not expected to change, and can
+    ! be safely hard-coded.
+    call xrtm_set_fourier_tol_f90(xrtm, .0001d0, xrtm_error)
+    if (xrtm_error /= 0) then
+       call logger%error(fname, "Error calling xrtm_set_fourier_tol_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
+       return
+    endif
+
     ! !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     ! First, plug in the values that XRTM needs for its calculations, which DO NOT
     ! depend on wavelength (i.e. do not need to be called repeatedly), such as
@@ -243,6 +268,7 @@ contains
        call xrtm_set_planet_r_f90(xrtm, EARTH_EQUATORIAL_RADIUS, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_planet_r_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -250,6 +276,7 @@ contains
        call xrtm_set_levels_z_f90(xrtm, altitude_levels(1:n_layers+1), xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_levels_z_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -259,6 +286,16 @@ contains
        call xrtm_set_sos_params_f90(xrtm, 2, 10.0d0, 0.01d0, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_sos_params_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
+          return
+       endif
+    end if
+
+    if (iand(xrtm_solvers, XRTM_SOLVER_PADE_ADD) /= 0) then
+       call xrtm_set_pade_params_f90(xrtm, 0, 2, xrtm_error)
+       if (xrtm_error /= 0) then
+          call logger%error(fname, "Error calling xrtm_set_pade_params_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        endif
     end if
@@ -267,6 +304,7 @@ contains
     call xrtm_set_out_levels_f90(xrtm, out_levels, xrtm_error)
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_set_out_levels_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
        return
     endif
 
@@ -274,6 +312,7 @@ contains
     call xrtm_set_F_0_f90(xrtm, 1.0d0, xrtm_error)
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_set_F_0_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
        return
     end if
 
@@ -281,6 +320,7 @@ contains
     call xrtm_set_theta_0_f90(xrtm, SZA, xrtm_error)
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_set_theta_0_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
        return
     end if
 
@@ -288,6 +328,7 @@ contains
     call xrtm_set_out_thetas_f90(xrtm, out_thetas, xrtm_error)
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_set_out_thetas_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
        return
     end if
 
@@ -295,6 +336,7 @@ contains
     call xrtm_set_phi_0_f90(xrtm, SAA, xrtm_error)
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_set_phi_0_f90")
+       call xrtm_destroy_f90(xrtm, xrtm_error)
        return
     end if
 
@@ -325,6 +367,7 @@ contains
        ! RESPECT TO THE gas species, and NOT the total tau / omega
        ltau(:,:) = 0.0d0
        lomega(:,:) = 0.0d0
+
        do j=1, size(s_start)
           ltau(j, s_start(j):s_stop(j)-1) = gas_tau(i, s_start(j):s_stop(j)-1, gas_lookup(j)) / gas_scale(j)
           lomega(j, s_start(j):s_stop(j)-1) = -omega(s_start(j):s_stop(j)-1) / tau(s_start(j):s_stop(j)-1) * ltau(j, s_start(j):s_stop(j)-1)
@@ -341,6 +384,7 @@ contains
        call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_kernel_ampfac_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -348,6 +392,7 @@ contains
        call xrtm_set_ltau_n_f90(xrtm, tau, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_ltau_n_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -355,6 +400,7 @@ contains
        call xrtm_set_ltau_l_nn_f90(xrtm, ltau, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_ltau_nn_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -362,6 +408,7 @@ contains
        call xrtm_set_omega_n_f90(xrtm, omega, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_omega_n_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -369,6 +416,7 @@ contains
        call xrtm_set_omega_l_nn_f90(xrtm, lomega, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_omega_l_nn_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -376,6 +424,7 @@ contains
        call xrtm_set_coef_n_f90(xrtm, n_coef, coef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_n_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -383,6 +432,7 @@ contains
        call xrtm_set_coef_l_nn_f90(xrtm, lcoef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -390,6 +440,7 @@ contains
        call xrtm_set_kernel_ampfac_l_n_f90(xrtm, 0, lsurf(:), xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_kernel_ampflac_l_n_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -397,6 +448,7 @@ contains
        call xrtm_update_varied_layers_f90(xrtm, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_update_varied_layers_f90")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
           return
        end if
 
@@ -411,6 +463,12 @@ contains
             K_m, & ! Downward jacobians
             xrtm_error)
 
+       if (xrtm_error /= 0) then
+           call logger%error(fname, "Error calling xrtm_radiance_f90")
+           call xrtm_destroy_f90(xrtm, xrtm_error)
+           return
+       end if
+
        radiance(i) = I_p(1,1,1,1)
 
        ! Store gas subcolumn derivatives
@@ -422,19 +480,16 @@ contains
 
        !write(funit, *) I_p(1,1,1,1), (K_p(1,1,1,j,1), j=1, n_derivs)
 
-       if (xrtm_error /= 0) then
-          call logger%error(fname, "Error calling xrtm_radiance_f90)")
-          return
-       end if
-
     end do
 
     !close(funit)
 
     !write(*,*) "Finished monochromatic loop"
     call cpu_time(cpu_end)
-    !write(*,*) cpu_end - cpu_start, "seconds"
+    write(tmp_str, '(A, F7.3, A)') "XRTM monochromatic calculations: ", cpu_end - cpu_start, " sec"
+    call logger%debug(fname, trim(tmp_str))
 
+    success = .true.
 
   end subroutine calculate_XRTM_radiance
 

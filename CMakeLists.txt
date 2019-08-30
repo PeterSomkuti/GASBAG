@@ -51,7 +51,8 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
-  set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
+  #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
+  set(warnings "-Wall -Wextra -Wpedantic")
   set(opt "-O3 -ftree-vectorize -mtune=native")
   set(bounds "-fbounds-check")
 

@@ -60,6 +60,8 @@ module guanter_model_mod
   double precision, allocatable :: retrieved_SIF_rel_uncertainty(:,:)
   !> Final retrieved CHI2
   double precision, allocatable :: chi2(:,:)
+  !> Needed for noise calculation
+  double precision, allocatable :: MaxMS(:)
 
   !> Final radiance at last iteration
   double precision, allocatable :: final_radiance(:,:,:)
@@ -112,6 +114,8 @@ contains
     character(len=999) :: dset_name
     !> HDF dataset and group IDs
     integer(hid_t) :: dset_id, sif_result_gid
+    !> HDF dataset dimensions
+    integer(hsize_t), allocatable :: dset_dims(:)
     !> HDF group name
     character(len=999) :: group_name
     !> HDF error variable
@@ -122,7 +126,7 @@ contains
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
-    !
+    ! Numbers for easy access in loops
     N_fp = MCS%general%N_fp
     N_fr = MCS%general%N_frame
     N_bands = MCS%general%N_bands
@@ -190,6 +194,10 @@ contains
     ! Read-in of dispersion and noise coefficients (THIS IS INSTRUMENT SPECIFIC!)
     select type(my_instrument)
     type is (oco2_instrument)
+
+       if (allocated(MaxMS)) deallocate(MaxMS)
+       dset_name = "/InstrumentHeader/measureable_signal_max_observed"
+       call read_DP_hdf_dataset(l1b_file_id, dset_name, MaxMS, dset_dims)
 
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
@@ -528,7 +536,7 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
        call my_instrument%calculate_noise(snr_coefs, radiance_work, &
-            noise_work, i_fp, band, &
+            noise_work, i_fp, band, MaxMS(band), &
             l1b_wl_idx_min, l1b_wl_idx_max)
     end select
 

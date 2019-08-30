@@ -40,7 +40,7 @@ contains
 
 
   subroutine scene_altitude(p_levels, T_levels, SH_levels, lat, elevation, &
-       altitude_levels)
+       altitude_levels, grav, ndry)
 
     double precision, intent(in) :: p_levels(:)
     double precision, intent(in) :: T_levels(:)
@@ -48,6 +48,8 @@ contains
     double precision, intent(in) :: lat
     double precision, intent(in) :: elevation
     double precision, intent(inout) :: altitude_levels(:)
+    double precision, intent(inout) :: grav(:)
+    double precision, intent(inout) :: ndry(:)
 
 
     double precision :: SH_layer, g_layer, p_layer, T_layer, Tv, dP
@@ -61,6 +63,8 @@ contains
     ! Set altitudes to zero, and the lowest level to the altitude
     altitude_levels(:) = 0.0d0
     altitude_levels(N_lev) = elevation
+
+    ndry(:) = 0.0d0
 
     ! Loop through layers, starting with the bottom-most (surface) one
     do i = N_lev - 1, 1, -1
@@ -76,8 +80,12 @@ contains
        g_layer = jpl_gravity(lat, altitude_levels(i+1) + 0.5d0 * dz)
        dz = logratio * Tv * Rd / g_layer
        constant = dP / (DRY_AIR_MASS * g_layer)
-       altitude_levels(i) = altitude_levels(i+1) + dz
 
+       !----------------------------------------------
+       grav(i) = jpl_gravity(lat, altitude_levels(i))
+       ndry(i) = constant * (1.0d0 - SH_layer)
+       altitude_levels(i) = altitude_levels(i+1) + dz
+       !----------------------------------------------
     end do
 
 

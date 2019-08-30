@@ -10,22 +10,23 @@ module absco_mod
 
 contains
 
-  subroutine read_absco_HDF(filename, gas, absco_dims, wl_min, wl_max)
+  subroutine read_absco_HDF(filename, gas, absco_dims, hitran_index)
 
     implicit none
     character(len=*), intent(in) :: filename
     type(CS_gas), intent(inout) :: gas
     integer, intent(inout) :: absco_dims
-    double precision, intent(in) :: wl_min, wl_max ! Not used yet!
+    integer, intent(in) :: hitran_index
 
     character(len=*), parameter :: fname = "read_absco_HDF"
     integer(hid_t) :: absco_file_id, dset_id, filetype
     integer(hsize_t), allocatable :: dset_dims(:)
     integer :: hdferr
     character(len=3) :: gas_index ! Is this always going to stay 2-characters long?
-    double precision, allocatable :: tmp_absco_3D(:,:,:), tmp_absco_4D(:,:,:,:)
-    character(len=999) :: tmp_str
-    integer :: wl_idx_left, wl_idx_right, N_wl, i
+    double precision, allocatable :: tmp_absco_3D(:,:,:)
+    character(len=999) :: tmp_str, gas_str
+    logical :: gas_exists
+    integer :: N_wl
 
     call logger%trivia(fname, "Reading in ABSCO HDF file at: " // trim(filename))
 
@@ -35,31 +36,49 @@ contains
 
     ! And now populate the required fields of the 'gas' structure ..
 
-    ! First, find out which gas_index this particular file has
-    call h5dopen_f(absco_file_id, "/Gas_Index", dset_id, hdferr)
-    call check_hdf_error(hdferr, fname, "Could not open dataset /Gas_Index")
-    call h5dget_type_f(dset_id, filetype, hdferr)
+    ! If the user supplied a HITRAN index, we do not need to look for which
+    ! gas(es) are in this file, we only need to check if the supplied index
+    ! also appears in the file. Default value is -1, which means user does
+    ! not know which gas index is used.
 
-    allocate(dset_dims(1))
-    dset_dims(1) = 3
-    call h5dread_f(dset_id, filetype, gas_index, dset_dims, hdferr)
+    if (hitran_index /= -1) then
 
-    if (allocated(dset_dims)) deallocate(dset_dims)
-    call check_hdf_error(hdferr, fname, "Error reading in: /Gas_Index")
+       write(gas_str, "(A, I0.2, A)") "Gas_", hitran_index, "_Absorption"
+       call h5lexists_f(absco_file_id, trim(gas_str), &
+            gas_exists, hdferr)
+       call check_hdf_error(hdferr, fname, "Error reading in: " // trim(gas_str))
 
-    ! Let the user know which gas index this ABSCO file has
-    call logger%debug(fname, "This ABSCO has a Gas_Index: " // gas_index)
+    else
+
+       ! find out which gas_index this particular file has
+       call h5dopen_f(absco_file_id, "/Gas_Index", dset_id, hdferr)
+       call check_hdf_error(hdferr, fname, "Could not open dataset /Gas_Index")
+       call h5dget_type_f(dset_id, filetype, hdferr)
+
+       allocate(dset_dims(1))
+       dset_dims(1) = 3
+       call h5dread_f(dset_id, filetype, gas_index, dset_dims, hdferr)
+
+       if (allocated(dset_dims)) deallocate(dset_dims)
+       call check_hdf_error(hdferr, fname, "Error reading in: /Gas_Index")
+
+       ! Let the user know which gas index this ABSCO file has
+       call logger%debug(fname, "This ABSCO has a Gas_Index: " // gas_index)
+
+       write(gas_str, "(A,A,A)") "Gas_" // gas_index(1:2) // "_Absorption"
+
+    end if
 
     ! Grab the full ABSCO table
     call logger%debug(fname, "Starting to read in cross section data..")
 
-    call get_HDF5_dset_dims(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", dset_dims)
+    call get_HDF5_dset_dims(absco_file_id, trim(gas_str), dset_dims)
     absco_dims = size(dset_dims)
     deallocate(dset_dims)
 
     if (absco_dims == 4) then
        call logger%debug(fname, "ABSCO file has 4 dimensions")
-       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", &
+       call read_DP_hdf_dataset(absco_file_id, trim(gas_str), &
             gas%cross_section, dset_dims)
        gas%has_h2o = .true.
     else if (absco_dims == 3) then
@@ -70,7 +89,7 @@ contains
        ! over, skipping the H2O dimension.
 
        call logger%debug(fname, "ABSCO file has 3 dimensions")
-       call read_DP_hdf_dataset(absco_file_id, "Gas_" // gas_index(1:2) // "_Absorption", tmp_absco_3D, dset_dims)
+       call read_DP_hdf_dataset(absco_file_id, trim(gas_str), tmp_absco_3D, dset_dims)
        ! Copy to gas structure
        if (allocated(gas%cross_section)) deallocate(gas%cross_section)
        allocate(gas%cross_section(dset_dims(1), 1, dset_dims(2), dset_dims(3)))
@@ -88,6 +107,7 @@ contains
     deallocate(dset_dims)
     call read_DP_hdf_dataset(absco_file_id, "Pressure", gas%p, dset_dims)
     deallocate(dset_dims)
+
     call read_DP_hdf_dataset(absco_file_id, "Wavenumber", gas%wavelength, dset_dims)
     ! ABSCO comes in wavenumber, but we'd rather work in wavelengths [microns], so let's convert
     gas%wavelength = 1.0d4 / gas%wavelength
@@ -120,7 +140,7 @@ contains
 
        call read_DP_hdf_dataset(absco_file_id, "Broadener_" // gas_index(1:2) // "_VMR", gas%H2O, dset_dims)
 
-    end if 
+    end if
 
 
   end subroutine read_absco_HDF

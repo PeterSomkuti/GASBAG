@@ -92,7 +92,7 @@ contains
     if (size(coeffs, 2) == 6) then
        coeffs(3, 2) = 6.0d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! alpha_2
        coeffs(2, 4) = 3.0d0 * (1.0d0 - 2.0d0 * depol_rho) / (2.0d0 + depol_rho) ! delta_1
-       coeffs(3, 5) = 2.449489742d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho)
+       coeffs(3, 5) = 2.449489742d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! -gamma_2
        ! gamma_2 (that funky number is ~sqrt(6.0)
     end if
 

@@ -65,6 +65,12 @@ module physical_model_mod
      double precision, allocatable :: p(:)
      !> Model atmosphere specific humidity
      double precision, allocatable :: sh(:)
+     !> Model atmosphere gravity at pressure levels
+     double precision, allocatable :: grav(:)
+     !> Model atmosphere altitude at pressure levels
+     double precision, allocatable :: altitude_levels(:)
+     !> Model atmosphere dry air column at layers
+     double precision, allocatable :: ndry(:)
   end type atmosphere
 
 
@@ -118,6 +124,8 @@ module physical_model_mod
   integer, allocatable :: bad_sample_list(:,:,:)
   !> If required, an array to hold the spike value (pixel, footprint, band)
   integer, allocatable :: spike_list(:,:,:)
+  !> For OCO-types, we need the maximally allowed radiance
+  double precision, allocatable :: MaxMS(:)
 
   !> MET data temperature profiles (level, footprint, frame)
   double precision, allocatable :: met_T_profiles(:,:,:)
@@ -286,6 +294,10 @@ contains
           call logger%trivia(fname, "Finished reading in land fraction.")
        end if
 
+       if (allocated(MaxMS)) deallocate(MaxMS)
+       dset_name = "/InstrumentHeader/measureable_signal_max_observed"
+       call read_DP_hdf_dataset(l1b_file_id, dset_name, MaxMS, dset_dims)
+
        ! Grab the SNR coefficients for noise calculations
        call my_instrument%read_l1b_snr_coef(l1b_file_id, snr_coefs)
        ! Read the time strings
@@ -368,8 +380,7 @@ contains
              if (MCS%gas(j)%type%lower() == "absco") then
                 call logger%trivia(fname, "Reading in ABSCO-type gas: " // MCS%window(i_win)%gases(i))
                 call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims, &
-                     MCS%window(i_win)%wl_min + hires_pad, & ! This is not yet used
-                     MCS%window(i_win)%wl_max + hires_pad) ! Also this
+                     MCS%gas(j)%hitran_index)
              else
                 call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type &
                      // " not implemented!")
@@ -424,7 +435,7 @@ contains
 
        ! This is the amount by which we have to pad the hi-resolution grid in order to
        ! allow for ILS protrusion. (and add small percentage to be on the safe side)
-       hires_pad = (ils_max_wl - ils_min_wl) * 1.10d0
+       hires_pad = (ils_max_wl - ils_min_wl) * 1.025d0
 
        ! Grab the desired high-resolution wavelength grid spacing
        hires_spacing = MCS%window(i_win)%wl_spacing
@@ -579,8 +590,10 @@ contains
        ! This could be further expanded to use MPI, but at the moment, this seems fast
        ! enough for my humble purposes.
        ! As you can see, it does not require much, whereas MPI would be more effort.
+       ! Note that other modules in GASBAG have some OMP directives to make sure that
+       ! only one thread at a time is accessing and reading from the HDF5 file.
 
-       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) &
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
@@ -609,6 +622,7 @@ contains
              call cpu_time(cpu_time_stop)
 #endif
 
+             ! Store the processing time
              results%processing_time(i_fp, i_fr) = cpu_time_stop - cpu_time_start
 
              ! Increase the rerival count tracker and compute the average processing
@@ -901,14 +915,18 @@ contains
          radiance_tmp_work(:), &
          radiance_meas_work(:), &
          radiance_calc_work(:), &
-         radiance_tmp_hi_nosif_nozlo(:), &
+         radiance_tmp_hi_nosif_nozlo(:,:), & ! This has Stokes parameters
          radiance_calc_work_hi(:), &
+         radiance_calc_work_hi_stokes(:,:), & ! This has Stokes parameters
          noise_work(:)
 
-    ! For e.g. XRTM, we need containers for the derivatives w.r.t.
-    double precision, allocatable :: dI_dgas(:,:), dI_dsurf(:)
+    ! Number of stokes elements
+    integer :: n_stokes
 
-    ! Radiative transfer models
+    ! For e.g. XRTM, we need containers for the derivatives w.r.t.
+    double precision, allocatable :: dI_dgas(:,:,:), dI_dsurf(:,:)
+
+    ! Radiative transfer models - which one are we using?
     integer :: RT_model
 
     ! The current atmosphere. This will be a copy from the initial_atm
@@ -954,7 +972,7 @@ contains
     ! Solar distance, solar relative velocity, earth relative velocity, and
     ! solar doppler shift - which happens because of the relative motion between
     ! the moving and rotating Earth and the fixed sun.
-    double precision :: solar_dist, solar_rv, earth_rv, solar_doppler
+    double precision :: solar_dist, solar_rv, solar_doppler
     ! This solar is the full solar spectrum, i.e. the pseudo-transmittance multiplied
     ! by the solar continuum / irradiance
     double precision, dimension(:,:), allocatable :: this_solar
@@ -972,11 +990,9 @@ contains
     double precision, allocatable :: gas_tau_dtemp(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
     double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
     double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
-    double precision, allocatable :: altitude_levels(:)
 
-
-    ! Perturbed VMR profile and per-iteration-and-per-gas VMR profile for OD calculation (level)
-    double precision, allocatable :: vmr_pert(:), this_vmr_profile(:,:)
+    ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
+    double precision, allocatable :: this_vmr_profile(:,:)
     ! Rayleigh extinction optical depth (spectral, layer)
     double precision, allocatable :: ray_tau(:,:)
     ! Rayleigh depolarization factor (spectral)
@@ -984,7 +1000,7 @@ contains
     ! Total column optical depth (spectral)
     double precision, allocatable :: total_tau(:)
     ! Single scatter albedo (spectral, layer)
-    double precision, allocatable :: omega(:,:)
+    ! double precision, allocatable :: omega(:,:)
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
     ! Is this gas H2O?
@@ -1031,7 +1047,7 @@ contains
     double precision :: dsigma_sq
     ! Jacobian matrices for high-res and lowres spectral grids
     ! they have the shape (N_spec_hi, N_sv) and (N_spec, N_sv)
-    double precision, allocatable :: K_hi(:,:), K(:,:)
+    double precision, allocatable :: K_hi(:,:), K_hi_stokes(:,:,:), K(:,:)
     ! Noise covariance, prior covariance (and its inverse), shape: (N_sv, N_sv)
     double precision, allocatable :: Se_inv(:,:), Sa(:,:), Sa_inv(:,:)
     ! Posterior covariance matrix and its inverse (N_sv, N_sv)
@@ -1080,14 +1096,12 @@ contains
 
     ! XRTM Radiative Transfer model handler
     type(xrtm_type) :: xrtm
-    ! What are the options we pass onto XRTM?
-    type(string) :: xrtm_options_string(1)
-    ! Which solver(s) do we want to use?
-    type(string) :: xrtm_solvers_string(1)
     ! Actual options variable
     integer :: xrtm_options
     ! Actual solvers variable
     integer :: xrtm_solvers
+    ! Solvers separated into individual one's
+    integer, allocatable :: xrtm_separate_solvers(:)
     ! XRTM surface kernels
     integer :: xrtm_kernels(1)
     ! Was the call to XRTM successful?
@@ -1104,7 +1118,7 @@ contains
     ! Function name
     character(len=*), parameter :: fname = "physical_FM"
     ! Loop variables
-    integer :: i, j
+    integer :: i, j, q
     ! File unit for debugging
     integer :: funit
 
@@ -1122,8 +1136,18 @@ contains
     ! Set the used radiative transfer model
     if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
+       ! Beer Lambert is intensity-only right now
+       n_stokes = 1
     else if (MCS%window(i_win)%RT_model%lower() == "xrtm") then
        RT_model = RT_XRTM
+
+       ! Depending on a user choice, we can run XRTM with polarization
+       ! enabled or not.
+       if (MCS%window(i_win)%do_polarization) then
+          n_stokes = 3
+       else
+          n_stokes = 1
+       end if
     else
        call logger%error(fname, "RT Method: " // MCS%window(i_win)%RT_model%chars() // " unknown.")
        stop 1
@@ -1192,6 +1216,7 @@ contains
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
     ! Epoch is needed by the MS3 solar doppler code
+    epoch(:) = 0
     epoch(1) = date%getYear()
     epoch(2) = date%getMonth()
     epoch(3) = date%getDay()
@@ -1236,6 +1261,7 @@ contains
     ! The "instrument doppler shift" is caused by the relative velocity
     ! between the point on the surface and the spacecraft. Obviously, this
     ! contribution is zero for space-solar geometries.
+    solar_doppler = 0.0d0
     if (MCS%algorithm%observation_mode == "downlooking") then
        instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
@@ -1269,6 +1295,11 @@ contains
     ! number of pixels might change, while the hi-res K stays the same
     allocate(K_hi(N_spec_hi, N_sv))
     K_hi(:,:) = 0.0d0
+    ! We need to have one version of the hi-res Jacobians to hold
+    ! the various Stokes parameters
+    allocate(K_hi_stokes(N_spec_hi, N_sv, n_stokes))
+    K_hi_stokes(:,:,:) = 0.0d0
+
 
     ! Allocate OE-related matrices here
     allocate(Sa(N_sv, N_sv))
@@ -1282,7 +1313,8 @@ contains
     allocate(AK(N_sv, N_sv))
 
     allocate(radiance_calc_work_hi(N_spec_hi))
-    allocate(radiance_tmp_hi_nosif_nozlo(N_spec_hi))
+    allocate(radiance_calc_work_hi_stokes(N_spec_hi, n_stokes))
+    allocate(radiance_tmp_hi_nosif_nozlo(N_spec_hi, n_stokes))
     allocate(albedo(N_spec_hi))
 
     Sa_inv(:,:) = 0.0d0
@@ -1297,6 +1329,8 @@ contains
     ! -----------------------------------------------------------------------
     ! Get the albedo prior estimated through the L1B radiances using a simple
     ! Lambertian model.
+    ! -----------------------------------------------------------------------
+    albedo_apriori = -1.0d0
     select type(my_instrument)
     type is (oco2_instrument)
 
@@ -1333,7 +1367,7 @@ contains
     ! XRTM will NOT allow an unphysical albedo, so might as well just quit here
     if (RT_MODEL == RT_XRTM) then
        if ((albedo_apriori <= 0.0d0) .or. (albedo_apriori >= 1.0d0)) then
-          call logger%error(fname, "Albedo for XRTM out of range [0,1].")
+          call logger%error(fname, "Apriori albedo for XRTM out of range [0,1].")
           return
        end if
     end if
@@ -1457,12 +1491,15 @@ contains
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
 
+             ! Number of levels in the model atmosphere
+             ! AS GIVEN BY THE ATMOSPHERE FILE
+             ! After accounging for surface pressure - refer to num_active_levels
+             num_levels = size(this_atm%p)
+
              if (this_psurf < 1.0d-10) then
                 call logger%error(fname, "MET surface pressure is almost 0.")
                 return
              end if
-
-             num_levels = size(this_atm%p)
 
              ! And get the T and SH MET profiles onto our new atmosphere grid. We are
              ! sampling it on a log(p) grid.
@@ -1510,10 +1547,15 @@ contains
                 end if
              end do
 
-             allocate(altitude_levels(num_levels))
-             call scene_altitude(this_atm%p(:), &
-                  this_atm%T(:), this_atm%sh(:), lat(i_fp, i_fr), &
-                  altitude(i_fp, i_fr), altitude_levels)
+             call scene_altitude(&
+                  this_atm%p(:), & ! Input pressure levels
+                  this_atm%T(:), & ! Input temperature levels
+                  this_atm%sh(:), & ! Input specific humidity levels
+                  lat(i_fp, i_fr), & ! Input latitude
+                  altitude(i_fp, i_fr), & ! Input altitude at surface
+                  this_atm%altitude_levels, & ! Output altitude at pressure levels
+                  this_atm%grav, & ! Output gravity at pressure levels
+                  this_atm%ndry) ! Output dry air column layers
 
           else
              ! If we don't do gases, just set this variable to zero, mainly to avoid
@@ -1572,20 +1614,15 @@ contains
                 return
              end if
 
-             ! When rerieving surface pressure, we must recalculate the
-             ! level and layer heights accordingly
-             if (allocated(altitude_levels)) deallocate(altitude_levels)
-             allocate(altitude_levels(num_levels))
-             call scene_altitude(this_atm%p(:), &
-                  this_atm%T(:), this_atm%sh(:), lat(i_fp, i_fr), &
-                  altitude(i_fp, i_fr), altitude_levels)
-
           end if
        endif
 
        ! NOTE
        ! SIF and ZLO are (right now) exactly the same, i.e. an additive radiance
        ! contribution that is constant w.r.t. wavelength.
+
+       K_hi(:,:) = 0.0d0
+       K_hi_stokes(:,:,:) = 0.0d0
 
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
@@ -1620,6 +1657,7 @@ contains
                MCS%window(i_win)%xrtm_solvers, &
                xrtm_options, &
                xrtm_solvers, &
+               xrtm_separate_solvers, &
                xrtm_kernels, &
                xrtm_success)
 
@@ -1635,10 +1673,10 @@ contains
 
           call create_XRTM(xrtm, & ! XRTM handler
                xrtm_options, & ! XRTM options bitmask
-               xrtm_solvers, & ! XRTM solvers bitmask
+               xrtm_solvers, & ! XRTM solvers combined bitmask
                3, & ! Max coef
-               16, & ! Quadrature points
-               1, & ! Number of stokes coeffs
+               2, & ! Quadrature points
+               n_stokes, & ! Number of stokes coeffs
                xrtm_n_derivs, & ! Number of derivatives
                num_active_levels-1, & ! Number of layers
                1, & ! Number of surface kernels
@@ -1648,6 +1686,7 @@ contains
 
           if (.not. xrtm_success) then
              call logger%error(fname, "Call to create_XRTM unsuccessful.")
+             call xrtm_destroy_f90(xrtm, xrtm_error)
              return
           end if
 
@@ -1661,15 +1700,23 @@ contains
        if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
           allocate(gas_tau(N_hires, num_levels-1, num_gases))
+          gas_tau(:,:,:) = 0.0d0
           allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
+          gas_tau_pert(:,:,:,:) = 0.0d0
           allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
+          gas_tau_dpsurf(:,:,:) = 0.0d0
           allocate(gas_tau_dtemp(N_hires, num_levels-1, num_gases))
+          gas_tau_dtemp(:,:,:) = 0.0d0
           allocate(ray_tau(N_hires, num_levels-1))
-          allocate(omega(N_hires, num_levels-1))
+          ray_tau(:,:) = 0.0d0
+          !allocate(omega(N_hires, num_levels-1))
           allocate(ray_depolf(N_hires))
-          allocate(vmr_pert(num_levels))
+          ray_depolf(:) = 0.0d0
           allocate(this_vmr_profile(num_levels, num_gases))
+          this_vmr_profile(:,:) = 0.0d0
           allocate(ndry(num_levels), ndry_tmp(num_levels))
+          ndry(:) = 0.0d0
+          ndry_tmp(:) = 0.0d0
 
           ! Allocate these containers only if XRTM is used
           if (RT_model == RT_XRTM) then
@@ -1678,8 +1725,8 @@ contains
              ! b) Temperature jacobian [NOT IMPLEMENTED YET]
              ! c) Surface pressure [NOT IMPLEMENTED YET]
 
-             allocate(dI_dgas(N_hires, SV%num_gas))
-             allocate(dI_dsurf(N_hires))
+             allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
+             allocate(dI_dsurf(N_hires, n_stokes))
           end if
 
           ! If we retrieve surface pressure, grab it from the state vector,
@@ -1766,12 +1813,12 @@ contains
                      this_atm%p(:), & ! Atmospheric profile pressures
                      this_atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
                      this_atm%sh(:), & ! Atmospheric profile humidity
+                     this_atm%grav(:), & ! Gravity per level
                      MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                      MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                      do_psurf_jac, & ! Do we require surface pressure jacobians?
                      gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
                      gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                     ndry_tmp, & ! Output: ndry molecules per m2
                      success_gas) ! Output: Was the calculation successful?
              end if
 
@@ -1785,18 +1832,13 @@ contains
                   this_atm%p(:), & ! Atmospheric profile pressures
                   this_atm%T(:) + this_temp_offset, & ! Atmospheric profile temperature
                   this_atm%sh(:), & ! Atmospheric profile humidity
+                  this_atm%grav(:), & ! Gravity per level
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                   MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
                   gas_tau(:,:,j), & ! Output: Gas ODs
                   gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                  ndry_tmp, & ! Output: ndry molecules per m2
                   success_gas) ! Output: Was the calculation successful?
-
-             ! Only copy ndry over if it's a non-H2O gas
-             if (.not. is_H2O) then
-                ndry(:) = ndry_tmp(:)
-             end if
 
              ! If the calculation goes wrong, we exit as we can't go on
              if (.not. success_gas) then
@@ -1818,7 +1860,7 @@ contains
           ! profiles here.
           ! ---------------------------------------------------------------
 
-          omega(:,:) = ray_tau(:,:) / (sum(gas_tau(:,:,:), dim=3) + ray_tau(:,:))
+          !omega(:,:) = ray_tau(:,:) / (sum(gas_tau(:,:,:), dim=3) + ray_tau(:,:))
 
 
           ! ---------------------------------------------------------------
@@ -1904,48 +1946,42 @@ contains
        case (RT_BEER_LAMBERT)
           call calculate_BL_radiance(hires_grid, mu0, mu, &
                albedo, total_tau, &
-               radiance_calc_work_hi)
-
-          !open(file="beer.debug", newunit=funit)
-          !do i=1, N_hires
-          !   write(funit, *) radiance_calc_work_hi(i), -radiance_calc_work_hi(i) &
-          !        * ((1.0d0 / mu0) + (1.0d0 / mu))
-          !end do
-          !close(funit)
+               radiance_calc_work_hi_stokes(:, 1))
        case (RT_XRTM)
 
           if (SV%num_gas > 0) then
               allocate(xrtm_gas_scale_factors(SV%num_gas))
               xrtm_gas_scale_factors(:) = SV%svsv(SV%idx_gas(1:SV%num_gas,1))
           end if
-              
+
           call calculate_XRTM_radiance(xrtm, & ! XRTM handler
+               xrtm_separate_solvers, & ! separate XRTM solvers
                hires_grid, & ! per pixel wavelength
                SZA(i_fp, i_fr), & ! solar zenith angle
                VZA(i_fp, i_fr), & ! viewing zenith angle
                SAA(i_fp, i_fr), & ! solar azimuth angle
                VAA(i_fp, i_fr), & ! viewing azimuth angle
-               altitude_levels, & ! per-level altitude
+               this_atm%altitude_levels, & ! per-level altitude
                albedo, & ! Surface albedo
                gas_tau(:,1:num_active_levels-1,:), & ! per-wl per-layer per gas optical depths
                ray_tau(:,1:num_active_levels-1), & ! & per-wl per-layer Rayleigh extinction
                ray_depolf, & ! & per-wl Rayleigh depolarization factor
                xrtm_gas_scale_factors, & ! Gas scale factors (current)
-               1, & ! Number of Stokes parameters to calculate
+               n_stokes, & ! Number of Stokes parameters to calculate
                xrtm_n_derivs, & ! Number of derivatives to be calculated
                num_active_levels-1, & ! Number of atmospheric layers
                s_start, & ! sub-column start indices
                s_stop, & ! sub_column stop indices
                SV%gas_idx_lookup, & ! gas lookup array to match retrieved gases to atmosphere gases
-               radiance_calc_work_hi, dI_dgas, dI_dsurf, &
+               radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, &
                xrtm_success)
 
           ! XRTM must be destroyed at some point, otherwise it will just keep
           ! creating arrays and filling up memory (quickly!). Why not destroy
           ! it right here - all the results are transferred to various arrays
-          ! so we do not really need the XRTM instance anymore. In addition, the
-          ! function should also be called everytime an error is raised.
-
+          ! so we do not really need the XRTM instance anymore.
+          ! If the calculation of radiances failed for whatever reason, the program
+          ! returns here anyway such that XRTM is destroyed as well.
           call xrtm_destroy_f90(xrtm, xrtm_error)
 
           if (allocated(xrtm_gas_scale_factors)) deallocate(xrtm_gas_scale_factors)
@@ -1999,9 +2035,14 @@ contains
        ! Multiply with the solar spectrum for physical units and add SIF and ZLO contributions.
        ! For various Jacobian calculations we also need the radiance MINUS the additive
        ! contributions, so we store them in a separate array.
-       radiance_calc_work_hi(:) = this_solar(:,2) * radiance_calc_work_hi(:)
-       radiance_tmp_hi_nosif_nozlo(:) = radiance_calc_work_hi(:)
-       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + this_sif_radiance + this_zlo_radiance
+       do q=1, n_stokes
+          radiance_tmp_hi_nosif_nozlo(:,q) = this_solar(:,2) * radiance_calc_work_hi_stokes(:,q)
+          if (q == 1) then
+             radiance_calc_work_hi_stokes(:,q) = radiance_tmp_hi_nosif_nozlo(:,q) + this_sif_radiance + this_zlo_radiance
+          else
+             radiance_calc_work_hi_stokes(:,q) = radiance_calc_work_hi_stokes(:,q) * radiance_calc_work_hi_stokes(:,1)
+          end if
+       end do
 
        !----------------------------------------------------------------
        ! JACOBIAN CALCULATIONS - FOR HIGH-RES SPECTRA BEFORE CONVOLUTION
@@ -2012,15 +2053,19 @@ contains
 
        ! Solar shift jacobian
        if (SV%num_solar_shift == 1) then
-          K_hi(:, SV%idx_solar_shift(1)) = -radiance_tmp_hi_nosif_nozlo(:) &
-               / this_solar(:,2) * dsolar_dlambda(:)
+          do q=1, n_stokes
+             K_hi_stokes(:, SV%idx_solar_shift(1), q) = -radiance_tmp_hi_nosif_nozlo(:,q) &
+                  / this_solar(:,2) * dsolar_dlambda(:)
+          end do
        end if
 
        ! Solar stretch jacobian
        if (SV%num_solar_stretch == 1) then
-          K_hi(:, SV%idx_solar_stretch(1)) = -radiance_tmp_hi_nosif_nozlo(:) &
-               / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:, 1) &
-               / (1.0d0 - solar_doppler)
+          do q=1, n_stokes
+             K_hi_stokes(:, SV%idx_solar_stretch(1), q) = -radiance_tmp_hi_nosif_nozlo(:,q) &
+                  / this_solar(:,2) * dsolar_dlambda(:) * solar_spectrum_regular(:,1) &
+                  / (1.0d0 - solar_doppler)
+          end do
        end if
 
        ! Surface pressure Jacobian
@@ -2029,8 +2074,8 @@ contains
           ! SIF in it, take it out beforehand.
           select case (RT_model)
           case (RT_BEER_LAMBERT)
-             call calculate_BL_psurf_jacobian(radiance_tmp_hi_nosif_nozlo, &
-                  gas_tau_dpsurf, mu0, mu, K_hi(:, SV%idx_psurf(1)))
+             call calculate_BL_psurf_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
+                  gas_tau_dpsurf, mu0, mu, K_hi_stokes(:, SV%idx_psurf(1),1))
           case default
              call logger%error(fname, "Surface pressure Jacobian not implemented " &
                   // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
@@ -2042,8 +2087,8 @@ contains
        if (SV%num_temp == 1) then
           select case (RT_model)
           case (RT_BEER_LAMBERT)
-             call calculate_BL_temp_jacobian(radiance_tmp_hi_nosif_nozlo, &
-                  gas_tau, gas_tau_dtemp, mu0, mu,  K_hi(:, SV%idx_temp(1)))
+             call calculate_BL_temp_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
+                  gas_tau, gas_tau_dtemp, mu0, mu,  K_hi_stokes(:, SV%idx_temp(1), 1))
           case default
              call logger%error(fname, "Temperature offset Jacobian not implemented " &
                   // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
@@ -2058,11 +2103,13 @@ contains
              if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
                 select case (RT_model)
                 case (RT_BEER_LAMBERT)
-                   call calculate_BL_gas_subcolumn_jacobian(radiance_tmp_hi_nosif_nozlo, &
+                   call calculate_BL_gas_subcolumn_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
                         mu0, mu, gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), &
-                        SV%svsv(SV%idx_gas(i,1)), K_hi(:, SV%idx_gas(i,1)))
+                        SV%svsv(SV%idx_gas(i,1)), K_hi_stokes(:, SV%idx_gas(i,1), 1))
                 case (RT_XRTM)
-                   K_hi(:, SV%idx_gas(i,1)) = this_solar(:, 2) * dI_dgas(:,i)
+                   do q=1, n_stokes
+                      K_hi_stokes(:, SV%idx_gas(i,1), q) = this_solar(:,2) * dI_dgas(:,i,q)
+                   end do
                 case default
                    call logger%error(fname, "Gas sub-column Jacobian not implemented " &
                         // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
@@ -2076,12 +2123,14 @@ contains
           select case (RT_model)
           case (RT_BEER_LAMBERT)
              do i=1, SV%num_albedo
-                call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo, albedo, &
-                     hires_grid, center_pixel_hi, i, K_hi(:, SV%idx_albedo(i)))
+                call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), albedo, &
+                     hires_grid, center_pixel_hi, i, K_hi_stokes(:, SV%idx_albedo(i), 1))
              end do
           case (RT_XRTM)
              do i=1, SV%num_albedo
-                K_hi(:, SV%idx_albedo(i)) = this_solar(:,2) * dI_dsurf(:) * (hires_grid(:) - hires_grid(center_pixel_hi))**(dble(i-1))
+                do q=1, n_stokes
+                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,q) * (hires_grid(:) - hires_grid(center_pixel_hi))**(dble(i-1))
+                end do
              end do
           case default
              call logger%error(fname, "Albedo Jacobian not implemented " &
@@ -2092,11 +2141,14 @@ contains
 
 
        ! Stokes coefficients
-       ! TODO: apply Stokes coefficients here via instrument parameters from L1b?
-       radiance_calc_work_hi(:) = radiance_calc_work_hi(:) * stokes_coef(1, i_fp, i_fr)
-       K_hi(:,:) = K_hi(:,:) * stokes_coef(1, i_fp, i_fr)
+       radiance_calc_work_hi(:) = 0.0d0
+       K_hi(:,:) = 0.0d0
+       do q=1, n_stokes
+          radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + radiance_calc_work_hi_stokes(:, q) * stokes_coef(q, i_fp, i_fr)
+          K_hi(:,:) = K_hi(:,:) + K_hi_stokes(:,:,q) * stokes_coef(q, i_fp, i_fr)
+       end do
 
-       ! Grab a copy of the L1b radiances
+       ! Grab a copy of the L1b radiances, but subset to the pixels that we use
        radiance_meas_work(:) = radiance_l1b(l1b_wl_idx_min:l1b_wl_idx_max)
 
        ! These are the 'trivial' Jacobians that don't really need their own functions
@@ -2119,7 +2171,7 @@ contains
 
           call my_instrument%calculate_noise( &
                snr_coefs, radiance_meas_work, &
-               noise_work, i_fp, band, &
+               noise_work, i_fp, band, MaxMS(band), &
                l1b_wl_idx_min, l1b_wl_idx_max)
 
           if (any(ieee_is_nan(noise_work))) then
@@ -2309,17 +2361,12 @@ contains
              return
           end if
 
-          !
-          ! tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
-          !          radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
-
           ! This here updates the AP essentially, so the next step launches from the
           ! last iteration's result.
           tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
                radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - old_sv))
 
           ! Update state vector
-          !SV%svsv = SV%svap + tmp_v2
           SV%svsv = old_sv + tmp_v2
        else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
 
@@ -2440,7 +2487,7 @@ contains
 
                       ! We also want to have the corresponding number of molecules of dry air
                       ! for the various sections of the atmopshere.
-                      results%ndry(i_fp, i_fr, i) = sum(ndry(s_start(i):s_stop(i)))
+                      results%ndry(i_fp, i_fr, i) = sum(this_atm%ndry(s_start(i):s_stop(i)-1))
                    end if
                 end do
 
@@ -2646,10 +2693,18 @@ contains
 
           open(file="hires_spectra.dat", newunit=funit)
           do i=1, N_hires
-             write(funit, *) radiance_calc_work_hi(i)
+             write(funit, *) hires_grid(i), radiance_calc_work_hi(i), radiance_calc_work_hi_stokes(i, 1), this_solar(i, 2)
           end do
           close(funit)
           call logger%debug(fname, "Written file: hires_spectra.dat (modelled)")
+
+          open(file="total_tau.dat", newunit=funit)
+          do i=1, N_hires
+             write(funit, *) total_tau(i)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: total_tau.dat (modelled)")
+
 
           call logger%debug(fname, "---------------------------------")
 
@@ -2715,15 +2770,15 @@ contains
        if (allocated(gas_tau_dtemp)) deallocate(gas_tau_dtemp)
        if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
        if (allocated(ray_tau)) deallocate(ray_tau)
-       if (allocated(omega)) deallocate(omega)
+       !if (allocated(omega)) deallocate(omega)
        if (allocated(total_tau)) deallocate(total_tau)
-       if (allocated(vmr_pert)) deallocate(vmr_pert)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
        if (allocated(ndry)) deallocate(ndry)
        if (allocated(ndry_tmp)) deallocate(ndry_tmp)
        if (allocated(ray_depolf)) deallocate(ray_depolf)
        if (allocated(dI_dgas)) deallocate(dI_dgas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
+       if (allocated(xrtm_separate_solvers)) deallocate(xrtm_separate_solvers)
 
        if (.not. divergent_step) then
           ! Make sure we keep the 'old' Chi2 only from a valid iteration
@@ -3169,6 +3224,9 @@ contains
     ! Go back to the top of the file.
     rewind(unit=funit, iostat=iostat)
 
+    idx_p = -1
+    idx_t = -1
+
     ! Reset the line counter since we're starting from the top again.
     line_count = 0
     do
@@ -3221,6 +3279,9 @@ contains
           if (allocated(atm%gas_names)) deallocate(atm%gas_names)
           if (allocated(atm%gas_index)) deallocate(atm%gas_index)
           if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
+          if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
+          if (allocated(atm%grav)) deallocate(atm%grav)
+          if (allocated(atm%ndry)) deallocate(atm%ndry)
 
           ! Allocate according to the file structure
           allocate(atm%T(level_count))
@@ -3229,6 +3290,9 @@ contains
           allocate(atm%gas_names(num_gases))
           allocate(atm%gas_vmr(level_count, num_gases))
           allocate(atm%gas_index(num_gases))
+          allocate(atm%altitude_levels(level_count))
+          allocate(atm%grav(level_count))
+          allocate(atm%ndry(level_count))
 
           allocate(this_gas_index(size(gas_strings)))
 

@@ -165,6 +165,8 @@ module control_mod
      type(string), allocatable :: XRTM_options(:)
      !> XRTM solvers to use
      type(string), allocatable :: XRTM_solvers(:)
+     !> Do we accountn for polarization?
+     logical :: do_polarization
   end type CS_window
 
   type, private :: CS_input
@@ -202,6 +204,8 @@ module control_mod
      type(string) :: type
      !> Path to ABSCO file
      type(string) :: filename
+     !> HITRAN index of the gas
+     integer :: hitran_index
 
      ! At the time, we are using JPL ABSCO tables, which are 4-dimensional.
      ! Should we ever want to use different spectroscopy in the future, where the
@@ -631,6 +635,15 @@ contains
                 deallocate(fini_string_array)
              end if
 
+             call fini_extract(fini, tmp_str, 'polarization', .false., fini_char)
+             fini_string = fini_char
+             if (fini_string == "") then
+                ! If not supplied, default state is "no"
+                MCS%window(window_nr)%do_polarization = .false.
+             else
+                MCS%window(window_nr)%do_polarization = string_to_bool(fini_string)
+             end if
+
           end if
 
           ! The rest is potentially optional. Whether a certain option is
@@ -828,6 +841,13 @@ contains
 
           call fini_extract(fini, tmp_str, 'spectroscopy_file', .true., fini_char)
           MCS%gas(gas_nr)%filename = trim(fini_char)
+
+          call fini_extract(fini, tmp_str, 'hitran_index', .false., fini_int)
+          if (fini_int == -9999) then
+             call logger%debug(fname, "No HITRAN index supplied.")
+             fini_int = -1
+          end if
+          MCS%gas(gas_nr)%hitran_index = fini_int
 
        else
           MCS%gas(gas_nr)%used = .false.

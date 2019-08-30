@@ -143,6 +143,7 @@ contains
        valid_options(this_idx,33) = "aerosols"
        valid_options(this_idx,34) = "xrtm_options"
        valid_options(this_idx,35) = "xrtm_solvers"
+       valid_options(this_idx,36) = "polarization"
     end do
 
     ! Section for gases
@@ -155,6 +156,7 @@ contains
        valid_options(this_idx,1) = "name"
        valid_options(this_idx,2) = "spectroscopy_type"
        valid_options(this_idx,3) = "spectroscopy_file"
+       valid_options(this_idx,4) = "hitran_index"
     end do
 
     ! Section for aerosols

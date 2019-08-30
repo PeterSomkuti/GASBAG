@@ -43,10 +43,10 @@ contains
   !> all variables are loaded into memory. Using pre-gridded spectroscopy makes
   !> this a bit faster than having to interpolate into the ABSCO wavelength grid.
   subroutine calculate_gas_tau(pre_gridded, is_H2O, &
-       wl, gas_vmr, psurf, p, T, sh, &
+       wl, gas_vmr, psurf, p, T, sh, grav, &
        gas, N_sub, need_psurf_jac, &
        gas_tau, gas_tau_dpsurf, &
-       ndry, success)
+       success)
 
     implicit none
     logical, intent(in) :: pre_gridded
@@ -57,12 +57,13 @@ contains
     double precision, intent(in) :: p(:)
     double precision, intent(in) :: T(:)
     double precision, intent(in) :: sh(:)
+    double precision, intent(in) :: grav(:)
     type(CS_gas), intent(in) :: gas
     integer, intent(in) :: N_sub
     logical, intent(in) :: need_psurf_jac
+
     double precision, intent(inout) :: gas_tau(:,:)
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
-    double precision, intent(inout) :: ndry(:)
     logical, intent(inout) :: success
 
 
@@ -71,19 +72,25 @@ contains
     logical :: log_scaling ! Are we interpolating in log-p space? (rather than linear p space)
     ! Placeholders to store the lower and higher (in altitude, i.e. layer boundaries)
     ! values of p,T,sh, etc.
-    double precision :: p_lower, p_higher, T_lower, T_higher, sh_lower, sh_higher
+    double precision :: p_lower, p_higher
+    double precision :: T_lower, T_higher
+    double precision :: sh_lower, sh_higher
     double precision :: VMR_lower, VMR_higher
+    double precision :: grav_lower, grav_higher
     ! For H2O, we need a different factor to calculate the ODs (no SH-adjustment)
     double precision :: H2O_corr
     ! Values for this particular layer, and perturbations for psurf Jacobian
     double precision :: this_H2O, this_H2O_pert
-    double precision :: this_p, p_fac, this_p_fac, this_T, this_sh, this_VMR, this_M
+    double precision :: this_p, p_fac, this_p_fac
+    double precision :: this_T, this_sh, this_VMR, this_M
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert
+    double precision :: this_grav
     double precision :: T_lower_pert, this_T_pert
     double precision :: VMR_lower_pert, this_VMR_pert
     double precision :: sh_lower_pert, this_sh_pert
     double precision :: this_M_pert
     double precision :: C_tmp
+    double precision :: ndry
     double precision, allocatable :: gas_tmp(:), this_CS_value(:)
     integer, allocatable :: wl_left_indices(:)
 
@@ -148,7 +155,6 @@ contains
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
-    ndry(:) = 0.0d0
 
     ! Pre-compute the indicies of the ABSCO wavelength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
@@ -195,6 +201,7 @@ contains
           T_lower = (1.0d0 - p_fac) * T(l-1) + p_fac * T(l)
           sh_lower = (1.0d0 - p_fac) * sh(l-1) + p_fac * sh(l)
           VMR_lower = (1.0d0 - p_fac) * gas_vmr(l-1) + p_fac * gas_vmr(l)
+          grav_lower = (1.0d0 - p_fac) * grav(l-1) + p_fac * grav(l)
 
           if (need_psurf_jac) then
              ! Calculate perturbed properties when psurf jacobian is needed.
@@ -217,12 +224,14 @@ contains
           T_lower = T(l)
           sh_lower = sh(l)
           VMR_lower = gas_vmr(l)
+          grav_lower = grav(l)
        end if
 
        p_higher = p(l-1)
        T_higher = T(l-1)
        sh_higher = sh(l-1)
        VMR_higher = gas_vmr(l-1)
+       grav_higher = grav(l-1)
 
        ! Should the perturbed surface pressure actually fall onto the next-higher level,
        ! we need to make a small adjustment, otherwise, we end up dividing by zero later on.
@@ -299,6 +308,7 @@ contains
           this_sh = (1.0d0 - this_p_fac) * sh_lower + this_p_fac * sh_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
           this_M = 1.0d3 * DRY_AIR_MASS
+          this_grav = (1.0d0 - this_p_fac) * grav_lower + this_p_fac * grav_higher
 
           ! Gas CS routine works in H2O VMR rather than SH
           this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
@@ -314,19 +324,19 @@ contains
              H2O_corr = (1.0d0 - this_sh)
           end if
 
-          C_tmp = 1.0d0 / 9.80665d0 * NA * 0.1d0 * H2O_corr / this_M
+          C_tmp = 1.0d0 / this_grav * NA * 0.1d0 * H2O_corr / this_M
 
           ! Tau for this sublayer
           if (log_scaling) then
              !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp * this_p
-             ndry(l-1) = GK_weights_f(k) * C_tmp * this_p
+             ndry = GK_weights_f(k) * C_tmp * this_p
           else
              !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
-             ndry(l-1) = GK_weights_f(k) * C_tmp
+             ndry = GK_weights_f(k) * C_tmp
           end if
 
           ! Add sublayer contribution to full layer tau
-          gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry(l-1) * this_CS_value(:) * this_VMR)
+          gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry * this_CS_value(:) * this_VMR)
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
@@ -513,9 +523,13 @@ contains
        idx_r_H2O = 1
     end if
 
-    if ((idx_l_H2O < 1) .or. (idx_l_H2O > size(gas%H2O) - 1)) then
-       call logger%error(fname, "idx_l_H2O out of range.")
-       return
+    if (gas%has_H2O) then
+       ! Check if H2O is out of range, but this check only makes sense
+       ! if we have spectroscopy with an H2O dimension.
+       if ((idx_l_H2O < 1) .or. (idx_l_H2O > size(gas%H2O) - 1)) then
+          call logger%error(fname, "idx_l_H2O out of range.")
+          return
+       end if
     end if
 
 

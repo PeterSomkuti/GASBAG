@@ -130,6 +130,11 @@ contains
     MCS%general%N_spec(2) = dim_spec(1)
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
     MCS%general%N_spec(3) = dim_spec(1)
+    if (MCS%general%N_bands == 4) then
+       call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_ch4", dim_spec)
+       MCS%general%N_spec(4) = dim_spec(1)
+    end if
+
 
     ! Close this instance, as it will be loaded by "perform_retrievals" again
     call h5fclose_f(file_id, hdferr)
@@ -240,6 +245,8 @@ contains
        dset_name = "/SoundingMeasurements/radiance_weak_co2"
     else if (band == 3) then
        dset_name = "/SoundingMeasurements/radiance_strong_co2"
+    else if (band == 4) then
+       dset_name = "/SoundingMeasurements/radiance_ch4"
     else
        call logger%fatal(fname, "Band number must be between 1 and 3!")
        stop 1
@@ -353,28 +360,24 @@ contains
   !> @param noise Noise-equivalent radiances
   !> @param fp Footprint number
   !> @param band Band number
+  !> @param maxms Maximally allowed radiance in band
   !> @param idx_start Starting index of radiance slice
   !> @param idx_end Last index of radiance slice (not used)
-  subroutine calculate_noise(snr_coefs, radiance, noise, fp, band, idx_start, idx_end)
+  subroutine calculate_noise(snr_coefs, radiance, noise, fp, band, maxms, idx_start, idx_end)
 
     implicit none
 
     double precision, intent(in) :: snr_coefs(:,:,:,:)
     double precision, intent(in) :: radiance(:)
     double precision, intent(inout) :: noise(:)
+    double precision, intent(in) :: maxms
     integer, intent(in) :: fp, band, idx_start, idx_end
 
-    double precision, allocatable :: MaxMS(:)
     integer(hsize_t), allocatable :: dims(:)
     integer :: i
 
-!$OMP CRITICAL
-    call read_DP_hdf_dataset(MCS%input%l1b_file_id, &
-         "/InstrumentHeader/measureable_signal_max_observed", MaxMS, dims)
-!$OMP END CRITICAL
-
     do i=1, size(noise)
-       noise(i) = (MaxMS(band) / 100.0d0) * sqrt(abs(100.0d0 * radiance(i) / MaxMS(band)) * &
+       noise(i) = (maxms / 100.0d0) * sqrt(abs(100.0d0 * radiance(i) / maxms) * &
             (snr_coefs(1,idx_start+i-1,fp,band)**2) + (snr_coefs(2,idx_start+i-1,fp,band)**2))
     end do
 
@@ -746,8 +749,11 @@ contains
     elseif (band == 3) then
        call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_strong_co2", &
             spike_list, dset_dims)
+    else if (band == 4) then
+       call read_INT_hdf_dataset(l1b_file_id, "/SpikeEOF/spike_eof_weighted_residual_ch4", &
+            spike_list, dset_dims)
     else
-       call logger%fatal("read_spike_filter(oco2)", "Sorry - I only know bands 1 through 3!")
+       call logger%fatal("read_spike_filter(oco2)", "Sorry - I only know bands 1 through 4!")
        stop 1
     end if
 

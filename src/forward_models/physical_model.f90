@@ -607,7 +607,7 @@ contains
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
                      (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', &
                      this_converged, ", Thread #: ", this_thread
-                call logger%debug(fname, trim(tmp_str))
+                call logger%info(fname, trim(tmp_str))
              end if
 
           end do

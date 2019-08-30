@@ -1116,12 +1116,14 @@ contains
     doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
 
     ! Epoch is needed by the MS3 solar doppler code
+    epoch(:) = 0
     epoch(1) = date%getYear()
     epoch(2) = date%getMonth()
     epoch(3) = date%getDay()
     epoch(4) = date%getHour()
     epoch(5) = date%getMinute()
-    epoch(7) = date%getSecond()
+    epoch(6) = date%getSecond()
+
 
     write(tmp_str, "(A, A)") "Date: ", date%isoformat()
     call logger%debug(fname, trim(tmp_str))

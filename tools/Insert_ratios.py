@@ -4,8 +4,6 @@ import argparse
 import logging
 import os.path
 
-from IPython import embed
-
 logformat = ("%(asctime)s %(levelname)-8s - "
              "[%(funcName)s:%(lineno)d] %(message)s")
 logging.basicConfig(level=logging.DEBUG, format=logformat)
@@ -34,8 +32,16 @@ def insert_ratios(h5):
 
         # .. and calculate both ratio and uncertainty on the ratio
         gas_ratio = gas_weak / gas_strong
+        # Is is simply the weak/strong XCO2 uncertainties propagated through the fraction weak/strong
         gas_ratio_ucert = gas_ratio * np.sqrt((gas_weak_ucert / gas_weak)**2 +
                                               (gas_strong_ucert / gas_strong)**2)
+
+        # If the gas ratio ends up being EXACTLY 1.0, we might have a problem on our hands,
+        # and thus set those scenes to NaN.
+
+        if (gas_ratio == 1.0):
+            gas_ratio = np.nan
+            gas_ratio_ucert = np.nan
 
         if ('HighLevelResults' not in h5):
             h5.create_group('HighLevelResults')

@@ -3,6 +3,7 @@ import h5py
 import argparse
 import logging
 import os.path
+import sys
 
 logformat = ("%(asctime)s %(levelname)-8s - "
              "[%(funcName)s:%(lineno)d] %(message)s")
@@ -39,9 +40,9 @@ def insert_ratios(h5):
         # If the gas ratio ends up being EXACTLY 1.0, we might have a problem on our hands,
         # and thus set those scenes to NaN.
 
-        if (gas_ratio == 1.0):
-            gas_ratio = np.nan
-            gas_ratio_ucert = np.nan
+        exact_one = np.where(gas_ratio == 1.0)[0]
+        gas_ratio[exact_one] = np.nan
+        gas_ratio_ucert[exact_one] = np.nan
 
         if ('HighLevelResults' not in h5):
             h5.create_group('HighLevelResults')
@@ -55,8 +56,9 @@ def insert_ratios(h5):
             h5.create_dataset(f'HighLevelResults/CloudScreen/{gas}_ratio_error', data=gas_ratio_ucert)
             logger.info(f"Written out: HighLevelResults/CloudScreen/{gas}_ratio_error")
         else:
-            logger.info(f'HighLevelResults/CloudScreen/{gas}_ratio already exists. Skipping.')
-
+            logger.info(f'HighLevelResults/CloudScreen/{gas}_ratio already exists.')
+            h5[f'HighLevelResults/CloudScreen/{gas}_ratio'][:] = gas_ratio
+            h5[f'HighLevelResults/CloudScreen/{gas}_ratio_error'][:] = gas_ratio_ucert
 
 
 if __name__ == "__main__":

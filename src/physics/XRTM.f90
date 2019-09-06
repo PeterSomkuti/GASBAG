@@ -7,6 +7,7 @@ module XRTM_mod
   ! User modules
   use math_utils_mod
   use Rayleigh_mod, only : calculate_rayleigh_scatt_matrix
+  use statevector_mod
 
   ! Third-party modules
   use xrtm_int_f90
@@ -139,8 +140,6 @@ contains
     integer, intent(in) :: xrtm_kernels(:)
     logical, intent(inout) :: success
 
-
-
     character(len=*), parameter :: fname = "create_XRTM"
     integer :: xrtm_error
 
@@ -174,20 +173,26 @@ contains
 
 
   subroutine calculate_XRTM_radiance(xrtm, xrtm_separate_solvers, &
+       SV, &
        wavelengths, SZA, VZA, SAA, VAA, &
-       altitude_levels, albedo, gas_tau, ray_tau, ray_depolf, gas_scale, &
+       altitude_levels, albedo, gas_tau, &
+       dtau_dtemp, &
+       ray_tau, ray_depolf, gas_scale, &
        n_stokes, n_derivs, n_layers, &
        s_start, s_stop, gas_lookup, &
-       radiance, dI_dgas, dI_dsurf, &
+       radiance, &
+       dI_dgas, dI_dsurf, dI_dTemp, &
        success)
 
     implicit none
     type(xrtm_type), intent(inout) :: xrtm
     integer, intent(in) :: xrtm_separate_solvers(:)
+    type(statevector), intent(in) :: SV
     double precision, intent(in) :: wavelengths(:)
     double precision, intent(in) :: SZA, VZA, SAA, VAA, albedo(:)
     double precision, intent(in) :: altitude_levels(:)
     double precision, intent(in) :: gas_tau(:,:,:)
+    double precision, intent(in) :: dtau_dtemp(:,:)
     double precision, intent(in) :: ray_tau(:,:)
     double precision, intent(in) :: ray_depolf(:)
     double precision, allocatable, intent(in) :: gas_scale(:)
@@ -201,6 +206,7 @@ contains
     double precision, intent(inout) :: radiance(:,:)
     double precision, intent(inout) :: dI_dgas(:,:,:)
     double precision, intent(inout) :: dI_dsurf(:,:)
+    double precision, intent(inout) :: dI_dTemp(:,:)
 
     logical, intent(inout) :: success
 
@@ -210,10 +216,10 @@ contains
     integer :: xrtm_options
     integer :: xrtm_solvers
 
-    double precision, allocatable    :: I_p(:,:,:,:)
-    double precision, allocatable    :: I_m(:,:,:,:)
-    double precision, allocatable    :: K_p(:,:,:,:,:)
-    double precision, allocatable    :: K_m(:,:,:,:,:)
+    double precision, allocatable :: I_p(:,:,:,:)
+    double precision, allocatable :: I_m(:,:,:,:)
+    double precision, allocatable :: K_p(:,:,:,:,:)
+    double precision, allocatable :: K_m(:,:,:,:,:)
 
     character(len=*), parameter :: fname = "calculate_XRTM_radiance"
     character(len=999) :: tmp_str
@@ -248,6 +254,7 @@ contains
     radiance(:,:) = 0.0d0
     dI_dgas(:,:,:) = 0.0d0
     dI_dsurf(:,:) = 0.0d0
+    dI_dTemp(:,:) = 0.0d0
 
     out_thetas(1) = VZA
     out_phis(1,1) = VAA
@@ -259,7 +266,7 @@ contains
     lsurf(:) = 0.0d0
 
     ! Third derivative dI/dsurf
-    lsurf(n_derivs) = 1.0d0
+    lsurf(SV%num_gas + SV%num_temp + 1) = 1.0d0
 
     if (n_stokes > 1) then
        allocate(ray_coef(3, 6))
@@ -277,7 +284,6 @@ contains
     allocate(I_m(n_stokes, 1, 1, 1))
     allocate(K_p(n_stokes, 1, 1, n_derivs, 1))
     allocate(K_m(n_stokes, 1, 1, n_derivs, 1))
-
 
     ! Some general set-up's that are not expected to change, and can
     ! be safely hard-coded.
@@ -393,10 +399,18 @@ contains
        ltau(:,:) = 0.0d0
        lomega(:,:) = 0.0d0
 
-       do j=1, size(s_start)
+
+       do j=1, SV%num_gas
           ltau(j, s_start(j):s_stop(j)-1) = gas_tau(i, s_start(j):s_stop(j)-1, gas_lookup(j)) / gas_scale(j)
           lomega(j, s_start(j):s_stop(j)-1) = -omega(s_start(j):s_stop(j)-1) / tau(s_start(j):s_stop(j)-1) * ltau(j, s_start(j):s_stop(j)-1)
        end do
+
+       ! Position of the temperature Jacobian is right after the
+       ! gas sub-column jacobians.
+       if (SV%num_temp > 0) then
+          ltau(SV%num_gas + 1, :) = dtau_dtemp(i, :)
+          lomega(SV%num_gas + 1, :) = -omega(:) / tau(:) * dtau_dtemp(i, :)
+       end if
 
        ! Calculate the rayleigh scattering matrix
        call calculate_rayleigh_scatt_matrix(ray_depolf(i), ray_coef)
@@ -499,12 +513,15 @@ contains
           !if (i == 1) write(*,*) "First radiance :", radiance(i,:)
 
           ! Store gas subcolumn derivatives
-          do j=1, size(s_start)
+          do j=1, SV%num_gas
              dI_dgas(i,j,:) = dI_dgas(i,j,:) + K_p(:,1,1,j,1)
           end do
 
+          if (SV%num_temp > 0) then
+             dI_dTemp(i,:) = dI_dTemp(i,:) + K_p(:,1,1,SV%num_gas + 1,1)
+          end if
           ! Store surface jacobian
-          dI_dsurf(i,:) = dI_dsurf(i,:) + K_p(:,1,1,size(s_start)+1,1)
+          dI_dsurf(i,:) = dI_dsurf(i,:) + K_p(:,1,1,SV%num_gas + SV%num_temp + 1,1)
 
        end do
 

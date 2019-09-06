@@ -924,7 +924,7 @@ contains
     integer :: n_stokes
 
     ! For e.g. XRTM, we need containers for the derivatives w.r.t.
-    double precision, allocatable :: dI_dgas(:,:,:), dI_dsurf(:,:)
+    double precision, allocatable :: dI_dgas(:,:,:), dI_dsurf(:,:), dI_dTemp(:,:)
 
     ! Radiative transfer models - which one are we using?
     integer :: RT_model
@@ -1547,6 +1547,7 @@ contains
                 end if
              end do
 
+             ! Calculate the scene gravity and altitude for levels
              call scene_altitude(&
                   this_atm%p(:), & ! Input pressure levels
                   this_atm%T(:), & ! Input temperature levels
@@ -1667,9 +1668,14 @@ contains
           end if
 
           ! Number of XRTM derivatives
-          ! Right now - we have one for every gas sub-column)
-          ! plus one for surface properties.
-          xrtm_n_derivs = SV%num_gas + 1
+          ! These are the number of derivatives that need to be plugged
+          ! into XRTM. Not all derivatives need to be taken into account by
+          ! the RT model. The order is as follows:
+          !
+          ! Gas sub-column scaling factors
+          ! Temperature (at the moment up to 1)
+          ! Surface (at the moment only 1, always)
+          xrtm_n_derivs = SV%num_gas + SV%num_temp + 1
 
           call create_XRTM(xrtm, & ! XRTM handler
                xrtm_options, & ! XRTM options bitmask
@@ -1727,6 +1733,9 @@ contains
 
              allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
              allocate(dI_dsurf(N_hires, n_stokes))
+             if (SV%num_temp > 0) then
+                allocate(dI_dTemp(N_hires, n_stokes))
+             end if
           end if
 
           ! If we retrieve surface pressure, grab it from the state vector,
@@ -1925,8 +1934,6 @@ contains
        ! RT CALCULATIONS
        !---------------------------------------------------------------------
 
-       ! Calculate the sun-normalized TOA radiances and store them in
-       ! 'radiance_calc_work_hi'.
        ! One last check if the radiances (measured) are valid
 
        select type(my_instrument)
@@ -1956,6 +1963,7 @@ contains
 
           call calculate_XRTM_radiance(xrtm, & ! XRTM handler
                xrtm_separate_solvers, & ! separate XRTM solvers
+               SV, & ! State vector structure - useful for decoding SV positions
                hires_grid, & ! per pixel wavelength
                SZA(i_fp, i_fr), & ! solar zenith angle
                VZA(i_fp, i_fr), & ! viewing zenith angle
@@ -1964,6 +1972,7 @@ contains
                this_atm%altitude_levels, & ! per-level altitude
                albedo, & ! Surface albedo
                gas_tau(:,1:num_active_levels-1,:), & ! per-wl per-layer per gas optical depths
+               sum(gas_tau_dtemp(:,1:num_active_levels-1,:) - gas_tau(:,1:num_active_levels-1,:), dim=3), & ! dTau/dTemp
                ray_tau(:,1:num_active_levels-1), & ! & per-wl per-layer Rayleigh extinction
                ray_depolf, & ! & per-wl Rayleigh depolarization factor
                xrtm_gas_scale_factors, & ! Gas scale factors (current)
@@ -1973,7 +1982,7 @@ contains
                s_start, & ! sub-column start indices
                s_stop, & ! sub_column stop indices
                SV%gas_idx_lookup, & ! gas lookup array to match retrieved gases to atmosphere gases
-               radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, &
+               radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, &
                xrtm_success)
 
           ! XRTM must be destroyed at some point, otherwise it will just keep
@@ -1985,6 +1994,7 @@ contains
           call xrtm_destroy_f90(xrtm, xrtm_error)
 
           if (allocated(xrtm_gas_scale_factors)) deallocate(xrtm_gas_scale_factors)
+          ! If XRTM failed, no need to continue and move on to next retrieval.
           if (.not. xrtm_success) return
 
        end select
@@ -2089,6 +2099,10 @@ contains
           case (RT_BEER_LAMBERT)
              call calculate_BL_temp_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
                   gas_tau, gas_tau_dtemp, mu0, mu,  K_hi_stokes(:, SV%idx_temp(1), 1))
+          case (RT_XRTM)
+             do q=1, n_stokes
+                K_hi_stokes(:, SV%idx_temp(1), q) = this_solar(:,2) * dI_dTemp(:, q)
+             end do
           case default
              call logger%error(fname, "Temperature offset Jacobian not implemented " &
                   // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
@@ -2129,7 +2143,8 @@ contains
           case (RT_XRTM)
              do i=1, SV%num_albedo
                 do q=1, n_stokes
-                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,q) * (hires_grid(:) - hires_grid(center_pixel_hi))**(dble(i-1))
+                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,q) &
+                        * (hires_grid(:) - hires_grid(center_pixel_hi))**(dble(i-1))
                 end do
              end do
           case default
@@ -2140,9 +2155,10 @@ contains
        end if
 
 
-       ! Stokes coefficients
+       ! Apply instrument Stokes coefficients to obtain total radiance
        radiance_calc_work_hi(:) = 0.0d0
        K_hi(:,:) = 0.0d0
+
        do q=1, n_stokes
           radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + radiance_calc_work_hi_stokes(:, q) * stokes_coef(q, i_fp, i_fr)
           K_hi(:,:) = K_hi(:,:) + K_hi_stokes(:,:,q) * stokes_coef(q, i_fp, i_fr)
@@ -2778,6 +2794,7 @@ contains
        if (allocated(ray_depolf)) deallocate(ray_depolf)
        if (allocated(dI_dgas)) deallocate(dI_dgas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
+       if (allocated(dI_dTemp)) deallocate(dI_dTemp)
        if (allocated(xrtm_separate_solvers)) deallocate(xrtm_separate_solvers)
 
        if (.not. divergent_step) then

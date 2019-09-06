@@ -553,6 +553,10 @@ contains
     do i=1, size(wl)
 
        if (.not. pre_gridded) then
+
+          ! Non-pre-gridded spectroscopy has to be sampled at the requested
+          ! wavelengths first.
+
           wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
                (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
 
@@ -621,7 +625,6 @@ contains
        ! Finally, we interpolate along pressure, which is the final result that
        ! we pass back. If below zero, set to zero.
        CS_value(i) = max(C1(0) * (1.0d0 - p_d) + C1(1) * p_d, 0.0d0)
-       !if (CS_value(i) < 0.0d0) CS_value(i) = 0.0d0
 
     end do
 

@@ -1650,52 +1650,6 @@ contains
           !xrtm_solvers_string(1) = "EIG_BVP"
           !xrtm_options_string(1) = ""
 
-          ! This function "translates" our verbose configuration file options
-          ! into proper XRTM language and sets the corresponding options.
-
-          call setup_XRTM( &
-               MCS%window(i_win)%xrtm_options, &
-               MCS%window(i_win)%xrtm_solvers, &
-               xrtm_options, &
-               xrtm_solvers, &
-               xrtm_separate_solvers, &
-               xrtm_kernels, &
-               xrtm_success)
-
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to setup_XRTM unsuccessful.")
-             return
-          end if
-
-          ! Number of XRTM derivatives
-          ! These are the number of derivatives that need to be plugged
-          ! into XRTM. Not all derivatives need to be taken into account by
-          ! the RT model. The order is as follows:
-          !
-          ! Gas sub-column scaling factors
-          ! Temperature (at the moment up to 1)
-          ! Surface (at the moment only 1, always)
-          xrtm_n_derivs = SV%num_gas + SV%num_temp + 1
-
-          call create_XRTM(xrtm, & ! XRTM handler
-               xrtm_options, & ! XRTM options bitmask
-               xrtm_solvers, & ! XRTM solvers combined bitmask
-               3, & ! Max coef
-               2, & ! Quadrature points
-               n_stokes, & ! Number of stokes coeffs
-               xrtm_n_derivs, & ! Number of derivatives
-               num_active_levels-1, & ! Number of layers
-               1, & ! Number of surface kernels
-               50, & ! Number of kernel quadrature points
-               xrtm_kernels, & ! XRTM surface kernels
-               xrtm_success) ! Call successful?
-
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to create_XRTM unsuccessful.")
-             call xrtm_destroy_f90(xrtm, xrtm_error)
-             return
-          end if
-
        end if
 
 
@@ -1960,6 +1914,53 @@ contains
               allocate(xrtm_gas_scale_factors(SV%num_gas))
               xrtm_gas_scale_factors(:) = SV%svsv(SV%idx_gas(1:SV%num_gas,1))
           end if
+
+          ! This function "translates" our verbose configuration file options
+          ! into proper XRTM language and sets the corresponding options.
+
+          call setup_XRTM( &
+               MCS%window(i_win)%xrtm_options, &
+               MCS%window(i_win)%xrtm_solvers, &
+               xrtm_options, &
+               xrtm_solvers, &
+               xrtm_separate_solvers, &
+               xrtm_kernels, &
+               xrtm_success)
+
+          if (.not. xrtm_success) then
+             call logger%error(fname, "Call to setup_XRTM unsuccessful.")
+             return
+          end if
+
+          ! Number of XRTM derivatives
+          ! These are the number of derivatives that need to be plugged
+          ! into XRTM. Not all derivatives need to be taken into account by
+          ! the RT model. The order is as follows:
+          !
+          ! Gas sub-column scaling factors
+          ! Temperature (at the moment up to 1)
+          ! Surface (at the moment only 1, always)
+          xrtm_n_derivs = SV%num_gas + SV%num_temp + 1
+
+          call create_XRTM(xrtm, & ! XRTM handler
+               xrtm_options, & ! XRTM options bitmask
+               xrtm_solvers, & ! XRTM solvers combined bitmask
+               3, & ! Max coef
+               2, & ! Quadrature points
+               n_stokes, & ! Number of stokes coeffs
+               xrtm_n_derivs, & ! Number of derivatives
+               num_active_levels-1, & ! Number of layers
+               1, & ! Number of surface kernels
+               50, & ! Number of kernel quadrature points
+               xrtm_kernels, & ! XRTM surface kernels
+               xrtm_success) ! Call successful?
+
+          if (.not. xrtm_success) then
+             call logger%error(fname, "Call to create_XRTM unsuccessful.")
+             call xrtm_destroy_f90(xrtm, xrtm_error)
+             return
+          end if
+
 
           call calculate_XRTM_radiance(xrtm, & ! XRTM handler
                xrtm_separate_solvers, & ! separate XRTM solvers

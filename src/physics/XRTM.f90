@@ -210,9 +210,7 @@ contains
 
     logical, intent(inout) :: success
 
-
     ! Local
-
     integer :: xrtm_options
     integer :: xrtm_solvers
 
@@ -265,7 +263,7 @@ contains
     lcoef(:,:,:,:) = 0.0d0
     lsurf(:) = 0.0d0
 
-    ! Third derivative dI/dsurf
+    ! Derivative dI/dsurf - for the time being only Albedo
     lsurf(SV%num_gas + SV%num_temp + 1) = 1.0d0
 
     if (n_stokes > 1) then
@@ -378,12 +376,8 @@ contains
     ! and is easily the most costly portion of the entire forward model.
     ! -----------------------------------------------------------------------------------
 
-    !open(file="xrtm.debug", newunit=funit)
-    !write(*,*) "Starting monochromatic loop"
     call cpu_time(cpu_start)
     do i=1, N_spec
-
-       ! if (mod(i, 100) == 0) write(*,*) i, N_spec
 
        ! TOTAL atmospheric optical properties - these go into the
        ! RT code for the forward calculation.
@@ -402,7 +396,8 @@ contains
 
        do j=1, SV%num_gas
           ltau(j, s_start(j):s_stop(j)-1) = gas_tau(i, s_start(j):s_stop(j)-1, gas_lookup(j)) / gas_scale(j)
-          lomega(j, s_start(j):s_stop(j)-1) = -omega(s_start(j):s_stop(j)-1) / tau(s_start(j):s_stop(j)-1) * ltau(j, s_start(j):s_stop(j)-1)
+          lomega(j, s_start(j):s_stop(j)-1) = -omega(s_start(j):s_stop(j)-1) / tau(s_start(j):s_stop(j)-1) &
+               * ltau(j, s_start(j):s_stop(j)-1)
        end do
 
        ! Position of the temperature Jacobian is right after the
@@ -505,18 +500,15 @@ contains
              return
           end if
 
-          !write(*,*) I_p(:,1,1,1)
-
           ! Store radiances
           radiance(i,:) = radiance(i,:) + I_p(:,1,1,1)
-
-          !if (i == 1) write(*,*) "First radiance :", radiance(i,:)
 
           ! Store gas subcolumn derivatives
           do j=1, SV%num_gas
              dI_dgas(i,j,:) = dI_dgas(i,j,:) + K_p(:,1,1,j,1)
           end do
 
+          ! Store the temperature offset Jacobian if needed
           if (SV%num_temp > 0) then
              dI_dTemp(i,:) = dI_dTemp(i,:) + K_p(:,1,1,SV%num_gas + 1,1)
           end if
@@ -525,13 +517,8 @@ contains
 
        end do
 
-       !write(funit, *) I_p(:,1,1,1) !, (K_p(1,1,1,j,1), j=1, n_derivs)
-
     end do
 
-    !close(funit)
-
-    !write(*,*) "Finished monochromatic loop"
     call cpu_time(cpu_end)
     write(tmp_str, '(A, F7.3, A)') "XRTM monochromatic calculations: ", cpu_end - cpu_start, " sec"
     call logger%debug(fname, trim(tmp_str))

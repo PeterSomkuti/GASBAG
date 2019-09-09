@@ -14,6 +14,8 @@
 module physical_model_mod
 
   ! User modules
+  use physical_model_addon_mod
+
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
   use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, MCS_find_gases
@@ -50,29 +52,6 @@ module physical_model_mod
 
   public :: physical_retrieval
   private :: physical_fm, calculate_dispersion_limits
-
-  !> A simple structure to keep the atmosphere data nice and tidy
-  type atmosphere
-     !> The name(s) of the gas(es), (gas number)
-     type(string), allocatable :: gas_names(:)
-     !> Gas mixing ratios (level, gas number)
-     double precision, allocatable :: gas_vmr(:,:)
-     !> To which spectroscopy data does this gas correspond to? (gas number)
-     integer, allocatable :: gas_index(:)
-     !> Model atmosphere temperature
-     double precision, allocatable :: T(:)
-     !> Model atmosphere pressure
-     double precision, allocatable :: p(:)
-     !> Model atmosphere specific humidity
-     double precision, allocatable :: sh(:)
-     !> Model atmosphere gravity at pressure levels
-     double precision, allocatable :: grav(:)
-     !> Model atmosphere altitude at pressure levels
-     double precision, allocatable :: altitude_levels(:)
-     !> Model atmosphere dry air column at layers
-     double precision, allocatable :: ndry(:)
-  end type atmosphere
-
 
   !> Spacing of the high-resolution wavelength grid in um
   double precision :: hires_spacing
@@ -294,6 +273,7 @@ contains
           call logger%trivia(fname, "Finished reading in land fraction.")
        end if
 
+       ! Reads the MaxMS field needed to calculate noise levels
        if (allocated(MaxMS)) deallocate(MaxMS)
        dset_name = "/InstrumentHeader/measureable_signal_max_observed"
        call read_DP_hdf_dataset(l1b_file_id, dset_name, MaxMS, dset_dims)
@@ -305,6 +285,7 @@ contains
        ! Read in the instrument ILS data
        call my_instrument%read_ils_data(l1b_file_id, ils_delta_lambda, &
             ils_relative_response)
+
        ! Read in bad sample list (if it exists)
        call h5lexists_f(l1b_file_id, "/InstrumentHeader/bad_sample_list", &
             bad_sample_exists, hdferr)
@@ -347,8 +328,9 @@ contains
     call h5lexists_f(l1b_file_id, "/RetrievalResults", result_exists, hdferr)
     if (.not. result_exists) then
        call h5gcreate_f(output_file_id, "RetrievalResults", result_gid, hdferr)
+       call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults")
     end if
-    call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults")
+
     call h5gcreate_f(output_file_id, "/RetrievalResults/physical", result_gid, hdferr)
     call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults/physical")
 
@@ -944,7 +926,7 @@ contains
     ! Sounding location variables
     double precision :: mu0, mu ! cos(sza) and cos(vza)
     ! Epoch, which is just the date split into an integer array
-    integer, dimension(7) :: epoch
+    integer :: epoch(7)
 
     ! Instrument stuff
     ! Instrument doppler shift based on relative motion between ground footprint
@@ -982,6 +964,10 @@ contains
     ! Per-iteration values for the solar shift value and the solar stretch factor
     double precision :: this_solar_shift, this_solar_stretch
 
+
+    ! Scene object
+    type(scene) :: scn
+
     ! Atmosphere stuff
     ! Number of gases, total levels, and number of active levels (changes with surface pressure)
     integer :: num_gases, num_levels, num_active_levels
@@ -999,8 +985,7 @@ contains
     double precision, allocatable :: ray_depolf(:)
     ! Total column optical depth (spectral)
     double precision, allocatable :: total_tau(:)
-    ! Single scatter albedo (spectral, layer)
-    ! double precision, allocatable :: omega(:,:)
+
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
     ! Is this gas H2O?
@@ -1133,6 +1118,23 @@ contains
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
+    ! Ingest scene geometry
+    scn%SZA = SZA(i_fp, i_fr)
+    scn%VZA = VZA(i_fp, i_fr)
+    scn%mu0 = cos(DEG2RAD * scn%SZA)
+    scn%mu = cos(DEG2RAD * scn%VZA)
+    scn%SAA = SAA(i_fp, i_fr)
+    scn%VAA = VAA(i_fp, i_fr)
+
+    scn%lon = lon(i_fp, i_fr)
+    scn%lat = lat(i_fp, i_fr)
+    scn%alt = altitude(i_fp, i_fr)
+
+    ! For convenience, calculate cos(sza) and cos(vza) here
+    mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
+    mu = cos(DEG2RAD * VZA(i_fp, i_fr))
+
+
     ! Set the used radiative transfer model
     if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
@@ -1163,7 +1165,10 @@ contains
 
     ! Use user-supplied value for convergence critertion
     dsigma_scale = MCS%window(i_win)%dsigma_scale
-    if (dsigma_scale < 0.0d0) dsigma_scale = 1.0d0
+    if (dsigma_scale < 0.0d0) then
+       call logger%debug(fname, "Requested dsigma_scale is < 0, setting to 1.0.")
+       dsigma_scale = 1.0d0
+    end if
 
     select type(my_instrument)
     type is (oco2_instrument)
@@ -1182,7 +1187,7 @@ contains
        end if
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
-            date, success_time_convert)
+            scn%date, success_time_convert)
     end select
 
     ! If extraction of the date-time fails, abort and return. Date and time is
@@ -1204,7 +1209,7 @@ contains
             MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &!expected_wavelengths_in, &
             MCS%window(i_win)%smart_scale_first_guess_wl_out(:), &!expected_wavelengths_out, &
             MCS%window(i_win)%smart_scale_first_guess_delta_tau(:), &!expected_delta_tau, &
-            SZA(i_fp, i_fr), VZA(i_fp, i_fr), scale_first_guess)
+            scn%SZA, scn%VZA, scale_first_guess)
     else
        ! Otherwise just start with 1.0
        allocate(scale_first_guess(1))
@@ -1213,36 +1218,36 @@ contains
 
 
     ! Calculate the day of the year into a full fractional value
-    doy_dp = dble(date%yearday()) + dble(date%getHour()) / 24.0d0
+    doy_dp = dble(scn%date%yearday()) + dble(scn%date%getHour()) / 24.0d0
 
     ! Epoch is needed by the MS3 solar doppler code
-    epoch(:) = 0
-    epoch(1) = date%getYear()
-    epoch(2) = date%getMonth()
-    epoch(3) = date%getDay()
-    epoch(4) = date%getHour()
-    epoch(5) = date%getMinute()
-    epoch(6) = date%getSecond()
+    scn%epoch(:) = 0
+    scn%epoch(1) = date%getYear()
+    scn%epoch(2) = date%getMonth()
+    scn%epoch(3) = date%getDay()
+    scn%epoch(4) = date%getHour()
+    scn%epoch(5) = date%getMinute()
+    scn%epoch(6) = date%getSecond()
 
     ! ----------------------------------------------
     ! Print out some debug information for the scene
     ! ----------------------------------------------
 
-    write(tmp_str, "(A, A)") "Date: ", date%isoformat()
+    write(tmp_str, "(A, A)") "Date: ", scn%date%isoformat()
     call logger%debug(fname, trim(tmp_str))
 
     write(tmp_str, "(A, F5.1)") "Day of the year: ", doy_dp
     call logger%debug(fname, trim(tmp_str))
 
     write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
-         "SZA: ", SZA(i_fp, i_fr), " - SAA: ", SAA(i_fp, i_fr), &
-         " - VZA: ", VZA(i_fp, i_fr), " - VAA: ", VAA(i_fp, i_fr)
+         "SZA: ", scn%SZA, " - SAA: ", scn%SAA, &
+         " - VZA: ", scn%VZA, " - VAA: ", scn%VAA
     call logger%debug(fname, trim(tmp_str))
 
     write(tmp_str, "(A, F8.2, A, F8.2, A, ES15.3)") &
-         "Lon.: ", lon(i_fp, i_fr), &
-         " Lat.: ", lat(i_fp, i_fr), &
-         " Alt.: ", altitude(i_fp, i_fr)
+         "Lon.: ", scn%lon, &
+         " Lat.: ", scn%lat, &
+         " Alt.: ", scn%alt
     call logger%debug(fname, trim(tmp_str))
 
     ! Dispersion array that contains the wavelenghts per pixel
@@ -1266,8 +1271,8 @@ contains
        instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
        ! THIS IS "BORROWED" FROM THE MS3 CODE
-       call solar_doppler_velocity(SZA(i_fp, i_fr), SAA(i_fp, i_fr), &
-            epoch, lat(i_fp, i_fr), altitude(i_fp, i_fr), solar_rv, solar_dist)
+       call solar_doppler_velocity(scn%SZA, scn%SAA, &
+            scn%epoch, scn%lat, scn%alt, solar_rv, solar_dist)
        solar_doppler = solar_rv / SPEED_OF_LIGHT
 
     else if (MCS%algorithm%observation_mode == "space_solar") then
@@ -1286,10 +1291,6 @@ contains
 
     ! Set the initial LM-Gamma parameter
     lm_gamma = MCS%window(i_win)%lm_gamma
-
-    ! For convenience, calculate cos(sza) and cos(vza) here
-    mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
-    mu = cos(DEG2RAD * VZA(i_fp, i_fr))
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change, while the hi-res K stays the same
@@ -1360,8 +1361,8 @@ contains
        ! comes with its own irradiance
        ! Also take that into account Stokes coef of instrument for the
        ! incoming solar irradiance
-       albedo_apriori = 1.0d0 * PI * maxval(radiance_l1b) / &
-            (1.0d0 * maxval(solar_irrad) * mu0) / stokes_coef(1, i_fp, i_fr)
+       albedo_apriori = PI * maxval(radiance_l1b) / &
+            (maxval(solar_irrad) * scn%mu0) / stokes_coef(1, i_fp, i_fr)
     end select
 
     ! XRTM will NOT allow an unphysical albedo, so might as well just quit here
@@ -1466,6 +1467,11 @@ contains
           iteration = iteration + 1
        end if
 
+       ! Allocate the optical property containers for the scene
+       call allocate_optical_properties(scn, N_hires, num_gases)
+       ! Put hires grid into scene container for easy access later on
+       scn%op%wl(:) = hires_grid
+
        if (iteration == 1) then
 
           ! Here we set up quantities that need to be done
@@ -1477,7 +1483,7 @@ contains
           old_chi2 = 9.9d10
           linear_prediction_chi2 = 9.9d9
           ! For the first iteration, we want to use the prior albedo
-          albedo(:) = albedo_apriori
+          scn%op%albedo(:) = albedo_apriori
           ! and the first guess state vector is the prior
           SV%svsv = SV%svap
           !
@@ -1490,11 +1496,12 @@ contains
              ! microwindow.
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
+             scn%atm = initial_atm
 
              ! Number of levels in the model atmosphere
              ! AS GIVEN BY THE ATMOSPHERE FILE
              ! After accounging for surface pressure - refer to num_active_levels
-             num_levels = size(this_atm%p)
+             num_levels = scn%atm%num_levels
 
              if (this_psurf < 1.0d-10) then
                 call logger%error(fname, "MET surface pressure is almost 0.")
@@ -1507,31 +1514,31 @@ contains
              call pwl_value_1d( &
                   size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
-                  size(this_atm%p), &
-                  log(this_atm%p), this_atm%T)
+                  size(scn%atm%p), &
+                  log(scn%atm%p), scn%atm%T)
 
              call pwl_value_1d( &
                   size(met_P_levels, 1), &
                   log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
-                  size(this_atm%p), &
-                  log(this_atm%p), this_atm%sh)
+                  size(scn%atm%p), &
+                  log(scn%atm%p), scn%atm%sh)
 
              ! Obtain the number of active levels. Loop from the TOA down to the bottom,
              ! and see where the surface pressure falls into.
              do j=1, num_levels
-                if (this_psurf > this_atm%p(j)) then
+                if (this_psurf > scn%atm%p(j)) then
                    num_active_levels = j+1
                 end if
 
                 ! Should SH drop below 0 for whatever reason, shift it back
                 ! some tiny value.
-                if (this_atm%sh(j) < 0.0d0) this_atm%sh(j) = 1.0d-10
+                if (scn%atm%sh(j) < 0.0d0) scn%atm%sh(j) = 1.0d-10
              end do
 
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
                 write(tmp_str, '(A, F10.3, A, F10.3)') "Psurf at ", this_psurf, &
-                     " is larger than p(BOA) at ", this_atm%p(size(this_atm%p))
+                     " is larger than p(BOA) at ", scn%atm%p(size(this_atm%p))
                 call logger%error(fname, trim(tmp_str))
                 return
              end if
@@ -1542,26 +1549,18 @@ contains
                    ! If H2O needs to be retrieved, take it from the MET atmosphere
                    ! specific humidty directly, rather than the H2O column of the
                    ! atmosphere text file.
-                   this_atm%gas_vmr(:,i) = this_atm%sh / (1.0d0 - this_atm%sh) * SH_H2O_CONV
+                   scn%atm%gas_vmr(:,i) = scn%atm%sh / (1.0d0 - scn%atm%sh) * SH_H2O_CONV
 
                 end if
              end do
 
              ! Calculate the scene gravity and altitude for levels
-             call scene_altitude(&
-                  this_atm%p(:), & ! Input pressure levels
-                  this_atm%T(:), & ! Input temperature levels
-                  this_atm%sh(:), & ! Input specific humidity levels
-                  lat(i_fp, i_fr), & ! Input latitude
-                  altitude(i_fp, i_fr), & ! Input altitude at surface
-                  this_atm%altitude_levels, & ! Output altitude at pressure levels
-                  this_atm%grav, & ! Output gravity at pressure levels
-                  this_atm%ndry) ! Output dry air column layers
+             call scene_altitude(scn)
 
           else
              ! If we don't do gases, just set this variable to zero, mainly to avoid
              ! potential problems .. nasty segfaults etc.
-             num_active_levels = 0
+             Num_active_levels = 0
           end if
 
        else
@@ -1582,10 +1581,9 @@ contains
           ! new albedo(:) array for high-resolution grid. Reminder: albedo slope is
           ! defined with respect to the center pixel (and higher orders).
           if (SV%num_albedo > 0) then
-             albedo = 0.0d0
              do i=1, SV%num_albedo
-                albedo = albedo + SV%svsv(SV%idx_albedo(i)) &
-                     * ((hires_grid(:) - hires_grid(center_pixel_hi)) ** (dble(i-1)))
+                scn%op%albedo(:) = scn%op%albedo(:) + SV%svsv(SV%idx_albedo(i)) &
+                     * ((scn%op%wl(:) - scn%op%wl(center_pixel_hi)) ** (dble(i-1)))
              end do
           endif
 
@@ -1610,7 +1608,7 @@ contains
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
                 write(tmp_str, '(A, F12.3, A, F12.3)') "Psurf at ", this_psurf, &
-                     " is larger than p(BOA) at ", this_atm%p(size(this_atm%p))
+                     " is larger than p(BOA) at ", scn%atm%p(scn%atm%num_levels)
                 call logger%error(fname, trim(tmp_str))
                 return
              end if
@@ -1640,49 +1638,36 @@ contains
           this_zlo_radiance = 0.0d0
        end if
 
-
-       ! For XRTM, we need to initialize the model with the current number of
-       ! active levels / layers. This probably eats up a few cycles, but nothing
-       ! we should be worried about. For the rare cases where the number of layers
-       ! changes per iterations, this MUST be within the iteration loop
-
-       if (RT_model == RT_XRTM) then
-          !xrtm_solvers_string(1) = "EIG_BVP"
-          !xrtm_options_string(1) = ""
-
-       end if
-
-
        ! Heavy bit - calculate the optical properties given an atmosphere with gases
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
 
        if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
-          allocate(gas_tau(N_hires, num_levels-1, num_gases))
-          gas_tau(:,:,:) = 0.0d0
-          allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
-          gas_tau_pert(:,:,:,:) = 0.0d0
-          allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
-          gas_tau_dpsurf(:,:,:) = 0.0d0
-          allocate(gas_tau_dtemp(N_hires, num_levels-1, num_gases))
-          gas_tau_dtemp(:,:,:) = 0.0d0
-          allocate(ray_tau(N_hires, num_levels-1))
-          ray_tau(:,:) = 0.0d0
+          !allocate(gas_tau(N_hires, num_levels-1, num_gases))
+          !gas_tau(:,:,:) = 0.0d0
+          !allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
+          !gas_tau_pert(:,:,:,:) = 0.0d0
+          !allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
+          !gas_tau_dpsurf(:,:,:) = 0.0d0
+          !allocate(gas_tau_dtemp(N_hires, num_levels-1, num_gases))
+          !gas_tau_dtemp(:,:,:) = 0.0d0
+          !allocate(ray_tau(N_hires, num_levels-1))
+          !ray_tau(:,:) = 0.0d0
           !allocate(omega(N_hires, num_levels-1))
-          allocate(ray_depolf(N_hires))
-          ray_depolf(:) = 0.0d0
+          !allocate(ray_depolf(N_hires))
+          !ray_depolf(:) = 0.0d0
           allocate(this_vmr_profile(num_levels, num_gases))
           this_vmr_profile(:,:) = 0.0d0
-          allocate(ndry(num_levels), ndry_tmp(num_levels))
-          ndry(:) = 0.0d0
-          ndry_tmp(:) = 0.0d0
+          !allocate(ndry(num_levels), ndry_tmp(num_levels))
+          !ndry(:) = 0.0d0
+          !ndry_tmp(:) = 0.0d0
 
           ! Allocate these containers only if XRTM is used
           if (RT_model == RT_XRTM) then
              ! For dI/dtau and dI/domega, we need one element for
              ! a) Every retrieved gas subcolumn
-             ! b) Temperature jacobian [NOT IMPLEMENTED YET]
+             ! b) Temperature jacobian
              ! c) Surface pressure [NOT IMPLEMENTED YET]
 
              allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
@@ -1715,7 +1700,7 @@ contains
              ! segment, and applies the retrieved scale factor to it.
 
              ! Copy over this gases' VMR profile
-             this_vmr_profile(:,j) = this_atm%gas_vmr(:,j)
+             this_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
              do_gas_jac = .false.
 
              ! Enter this branch if we have at least one retrieved gas
@@ -1725,7 +1710,7 @@ contains
 
                    ! From the user SV input, determine which levels belong to the
                    ! gas subcolumn retrieval.
-                   call set_gas_scale_levels(SV, j, i_win, this_atm, this_psurf, &
+                   call set_gas_scale_levels(SV, j, i_win, scn%atm, this_psurf, &
                         s_start, s_stop, do_gas_jac, success_scale_levels)
 
                    if (.not. success_scale_levels) then
@@ -1770,18 +1755,18 @@ contains
                 call calculate_gas_tau( &
                      .true., & ! We are using pre-gridded spectroscopy!
                      is_H2O, & ! Is this gas H2O?
-                     hires_grid, & ! The high-resolution wavelength grid
+                     scn%op%wl, & ! The high-resolution wavelength grid
                      this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                      this_psurf, & ! Surface pressure
-                     this_atm%p(:), & ! Atmospheric profile pressures
-                     this_atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
-                     this_atm%sh(:), & ! Atmospheric profile humidity
-                     this_atm%grav(:), & ! Gravity per level
+                     scn%atm%p(:), & ! Atmospheric profile pressures
+                     scn%atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
+                     scn%atm%sh(:), & ! Atmospheric profile humidity
+                     scn%atm%grav(:), & ! Gravity per level
                      MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                      MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                      do_psurf_jac, & ! Do we require surface pressure jacobians?
-                     gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
-                     gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                     scn%op%gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
+                     scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
                      success_gas) ! Output: Was the calculation successful?
              end if
 
@@ -1789,18 +1774,18 @@ contains
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
-                  hires_grid, & ! The high-resolution wavelength grid
+                  scn%op%wl, & ! The high-resolution wavelength grid
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   this_psurf, & ! Surface pressure
-                  this_atm%p(:), & ! Atmospheric profile pressures
-                  this_atm%T(:) + this_temp_offset, & ! Atmospheric profile temperature
-                  this_atm%sh(:), & ! Atmospheric profile humidity
-                  this_atm%grav(:), & ! Gravity per level
+                  scn%atm%p(:), & ! Atmospheric profile pressures
+                  scn%atm%T(:) + this_temp_offset, & ! Atmospheric profile temperature
+                  scn%atm%sh(:), & ! Atmospheric profile humidity
+                  scn%atm%grav(:), & ! Gravity per level
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                   MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
-                  gas_tau(:,:,j), & ! Output: Gas ODs
-                  gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                  scn%op%gas_tau(:,:,j), & ! Output: Gas ODs
+                  scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
                   success_gas) ! Output: Was the calculation successful?
 
              ! If the calculation goes wrong, we exit as we can't go on
@@ -1815,8 +1800,8 @@ contains
           ! and reside in a matrix for all wavelengths and layers
           ! The depolarization factors depend on wavelength only
           ! ----------------------------------------------------------
-          call calculate_rayleigh_tau(hires_grid, this_atm%p, &
-               ray_tau, ray_depolf)
+          call calculate_rayleigh_tau(scn%op%wl, scn%atm%p, &
+               scn%op%ray_tau, scn%op%ray_depolf)
 
           ! ---------------------------------------------------------------
           ! If there are aerosols in the scene, calculate the optical depth
@@ -1832,11 +1817,11 @@ contains
 
           ! Set tiny gas OD values to some lower threshold. Some RT solvers
           ! do not like gas OD = 0
-          where(gas_tau < 1d-10) gas_tau = 1d-10
-          where(ray_tau < 1d-10) ray_tau = 1d-10
+          where(scn%op%gas_tau < 1d-10) scn%op%gas_tau = 1d-10
+          where(scn%op%ray_tau < 1d-10) scn%op%ray_tau = 1d-10
           ! Total optical depth is calculated as sum of all gas ODs
-          allocate(total_tau(N_hires))
-          total_tau(:) = sum(sum(gas_tau, dim=3) + ray_tau, dim=2)
+          scn%op%total_tau(:) = sum(sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau, dim=2)
+          scn%op%omega(:,:) = scn%op%ray_tau / (sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau)
 
           ! ----------------------------------
           ! END SECTION FOR GASES / ATMOSPHERE
@@ -1873,8 +1858,8 @@ contains
        ! Number of spectral points in the output resolution
        N_spec = l1b_wl_idx_max - l1b_wl_idx_min + 1
 
-       center_pixel = N_spec / 2
-       center_pixel_hi = N_spec_hi / 2
+       center_pixel = int(N_spec / 2)
+       center_pixel_hi = int(N_spec_hi / 2)
 
        ! Allocate various arrays that depend on N_spec
        allocate(K(N_spec, N_sv))
@@ -1905,9 +1890,10 @@ contains
 
        select case (RT_model)
        case (RT_BEER_LAMBERT)
-          call calculate_BL_radiance(hires_grid, mu0, mu, &
-               albedo, total_tau, &
+
+          call calculate_BL_radiance(scn, &
                radiance_calc_work_hi_stokes(:, 1))
+
        case (RT_XRTM)
 
           if (SV%num_gas > 0) then
@@ -1965,17 +1951,17 @@ contains
           call calculate_XRTM_radiance(xrtm, & ! XRTM handler
                xrtm_separate_solvers, & ! separate XRTM solvers
                SV, & ! State vector structure - useful for decoding SV positions
-               hires_grid, & ! per pixel wavelength
-               SZA(i_fp, i_fr), & ! solar zenith angle
-               VZA(i_fp, i_fr), & ! viewing zenith angle
-               SAA(i_fp, i_fr), & ! solar azimuth angle
-               VAA(i_fp, i_fr), & ! viewing azimuth angle
-               this_atm%altitude_levels, & ! per-level altitude
-               albedo, & ! Surface albedo
-               gas_tau(:,1:num_active_levels-1,:), & ! per-wl per-layer per gas optical depths
-               sum(gas_tau_dtemp(:,1:num_active_levels-1,:) - gas_tau(:,1:num_active_levels-1,:), dim=3), & ! dTau/dTemp
-               ray_tau(:,1:num_active_levels-1), & ! & per-wl per-layer Rayleigh extinction
-               ray_depolf, & ! & per-wl Rayleigh depolarization factor
+               scn%op%wl, & ! per pixel wavelength
+               scn%SZA, & ! solar zenith angle
+               scn%VZA, & ! viewing zenith angle
+               scn%SAA, & ! solar azimuth angle
+               scn%VAA, & ! viewing azimuth angle
+               scn%atm%altitude_levels, & ! per-level altitude
+               scn%op%albedo, & ! Surface albedo
+               scn%op%gas_tau(:,1:num_active_levels-1,:), & ! per-wl per-layer per gas optical depths
+               sum(scn%op%gas_tau_dtemp(:,1:num_active_levels-1,:) - scn%op%gas_tau(:,1:num_active_levels-1,:), dim=3), & ! dTau/dTemp
+               scn%op%ray_tau(:,1:num_active_levels-1), & ! & per-wl per-layer Rayleigh extinction
+               scn%op%ray_depolf, & ! & per-wl Rayleigh depolarization factor
                xrtm_gas_scale_factors, & ! Gas scale factors (current)
                n_stokes, & ! Number of Stokes parameters to calculate
                xrtm_n_derivs, & ! Number of derivatives to be calculated
@@ -2035,7 +2021,7 @@ contains
 
           allocate(solar_tmp(N_hires))
           call calculate_solar_jacobian(this_solar(:,1), this_solar(:,2), &
-               solar_irrad, hires_grid, solar_tmp, dsolar_dlambda)
+               solar_irrad, scn%op%wl, solar_tmp, dsolar_dlambda)
 
           this_solar(:,2) = solar_tmp(:)
           deallocate(solar_tmp)
@@ -2086,7 +2072,7 @@ contains
           select case (RT_model)
           case (RT_BEER_LAMBERT)
              call calculate_BL_psurf_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
-                  gas_tau_dpsurf, mu0, mu, K_hi_stokes(:, SV%idx_psurf(1),1))
+                  scn, K_hi_stokes(:, SV%idx_psurf(1),1))
           case default
              call logger%error(fname, "Surface pressure Jacobian not implemented " &
                   // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
@@ -2099,7 +2085,7 @@ contains
           select case (RT_model)
           case (RT_BEER_LAMBERT)
              call calculate_BL_temp_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
-                  gas_tau, gas_tau_dtemp, mu0, mu,  K_hi_stokes(:, SV%idx_temp(1), 1))
+                  scn,  K_hi_stokes(:, SV%idx_temp(1), 1))
           case (RT_XRTM)
              do q=1, n_stokes
                 K_hi_stokes(:, SV%idx_temp(1), q) = this_solar(:,2) * dI_dTemp(:, q)
@@ -2119,8 +2105,9 @@ contains
                 select case (RT_model)
                 case (RT_BEER_LAMBERT)
                    call calculate_BL_gas_subcolumn_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
-                        mu0, mu, gas_tau(:, s_start(i):s_stop(i)-1, SV%gas_idx_lookup(i)), &
+                        scn, s_start(i), s_stop(i)-1, SV%gas_idx_lookup(i), &
                         SV%svsv(SV%idx_gas(i,1)), K_hi_stokes(:, SV%idx_gas(i,1), 1))
+
                 case (RT_XRTM)
                    do q=1, n_stokes
                       K_hi_stokes(:, SV%idx_gas(i,1), q) = this_solar(:,2) * dI_dgas(:,i,q)
@@ -2138,14 +2125,14 @@ contains
           select case (RT_model)
           case (RT_BEER_LAMBERT)
              do i=1, SV%num_albedo
-                call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), albedo, &
-                     hires_grid, center_pixel_hi, i, K_hi_stokes(:, SV%idx_albedo(i), 1))
+                call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
+                     scn, center_pixel_hi, i, K_hi_stokes(:, SV%idx_albedo(i), 1))
              end do
           case (RT_XRTM)
              do i=1, SV%num_albedo
                 do q=1, n_stokes
                    K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,q) &
-                        * (hires_grid(:) - hires_grid(center_pixel_hi))**(dble(i-1))
+                        * (scn%op%wl(:) - scn%op%wl(center_pixel_hi))**(dble(i-1))
                 end do
              end do
           case default
@@ -2161,7 +2148,8 @@ contains
        K_hi(:,:) = 0.0d0
 
        do q=1, n_stokes
-          radiance_calc_work_hi(:) = radiance_calc_work_hi(:) + radiance_calc_work_hi_stokes(:, q) * stokes_coef(q, i_fp, i_fr)
+          radiance_calc_work_hi(:) = radiance_calc_work_hi(:) &
+               + radiance_calc_work_hi_stokes(:, q) * stokes_coef(q, i_fp, i_fr)
           K_hi(:,:) = K_hi(:,:) + K_hi_stokes(:,:,q) * stokes_coef(q, i_fp, i_fr)
        end do
 
@@ -2268,7 +2256,7 @@ contains
        type is (oco2_instrument)
 
           ! Convolution of the TOA radiances
-          call oco_type_convolution(hires_grid, radiance_calc_work_hi, &
+          call oco_type_convolution(scn%op%wl, radiance_calc_work_hi, &
                this_ILS_delta_lambda(:,:), &
                ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), radiance_calc_work, &
@@ -2311,7 +2299,7 @@ contains
 
              ! Otherwise just convolve the other Jacobians and save the result in
              ! the low-resolution Jacobian matrix 'K'
-             call oco_type_convolution(hires_grid, K_hi(:,i), &
+             call oco_type_convolution(scn%op%wl, K_hi(:,i), &
                   this_ILS_delta_lambda(:,:), &
                   ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), K(:,i), &
@@ -2338,7 +2326,7 @@ contains
                   this_dispersion_coefs, band, i_win, i_fp, N_spec, &
                   this_ILS_delta_lambda, ILS_relative_response, &
                   l1b_wl_idx_min, l1b_wl_idx_max, &
-                  instrument_doppler, hires_grid, radiance_calc_work, &
+                  instrument_doppler, scn%op%wl, radiance_calc_work, &
                   radiance_calc_work_hi, K(:, SV%idx_dispersion(i)))
           end do
        end if
@@ -2354,7 +2342,7 @@ contains
                   ILS_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   this_ILS_stretch, this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
                   l1b_wl_idx_min, l1b_wl_idx_max, &
-                  hires_grid, center_pixel, radiance_calc_work, &
+                  scn%op%wl, center_pixel, radiance_calc_work, &
                   radiance_calc_work_hi, K(:, SV%idx_ils_stretch(i)))
           end do
        end if
@@ -2510,7 +2498,7 @@ contains
 
                 ! Based on this 'current' VMR profile
                 call pressure_weighting_function( &
-                     this_atm%p(1:num_active_levels), &
+                     scn%atm%p(1:num_active_levels), &
                      this_psurf, &
                      this_vmr_profile(1:num_active_levels,j), &
                      pwgts)
@@ -2518,7 +2506,7 @@ contains
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) = sum( &
                      pwgts(:) &
-                     * this_vmr_profile(1:num_active_levels,j) &
+                     * this_vmr_profile(1:num_active_levels, j) &
                      )
 
              end do
@@ -2710,7 +2698,7 @@ contains
 
           open(file="hires_spectra.dat", newunit=funit)
           do i=1, N_hires
-             write(funit, *) hires_grid(i), radiance_calc_work_hi(i), radiance_calc_work_hi_stokes(i, 1), this_solar(i, 2)
+             write(funit, *) scn%op%wl(i), radiance_calc_work_hi(i), radiance_calc_work_hi_stokes(i, 1), this_solar(i, 2)
           end do
           close(funit)
           call logger%debug(fname, "Written file: hires_spectra.dat (modelled)")
@@ -2782,17 +2770,20 @@ contains
             noise_work, Se_inv, K, gain_matrix, solar_irrad, &
             this_ILS_stretch, this_ILS_delta_lambda)
 
-       if (allocated(gas_tau)) deallocate(gas_tau)
-       if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
-       if (allocated(gas_tau_dtemp)) deallocate(gas_tau_dtemp)
-       if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
-       if (allocated(ray_tau)) deallocate(ray_tau)
+       ! Deallocate scene optical property arrays
+       call destroy_optical_properties(scn)
+
+       !if (allocated(gas_tau)) deallocate(gas_tau)
+       !if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
+       !if (allocated(gas_tau_dtemp)) deallocate(gas_tau_dtemp)
+       !if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
+       !if (allocated(ray_tau)) deallocate(ray_tau)
        !if (allocated(omega)) deallocate(omega)
-       if (allocated(total_tau)) deallocate(total_tau)
+       !if (allocated(total_tau)) deallocate(total_tau)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
-       if (allocated(ndry)) deallocate(ndry)
-       if (allocated(ndry_tmp)) deallocate(ndry_tmp)
-       if (allocated(ray_depolf)) deallocate(ray_depolf)
+       !if (allocated(ndry)) deallocate(ndry)
+       !if (allocated(ndry_tmp)) deallocate(ndry_tmp)
+       !if (allocated(ray_depolf)) deallocate(ray_depolf)
        if (allocated(dI_dgas)) deallocate(dI_dgas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
        if (allocated(dI_dTemp)) deallocate(dI_dTemp)
@@ -3139,262 +3130,5 @@ contains
   end subroutine destroy_result_container
 
 
-
-
-
-  !> @brief Reads in the atmosphere file, which contains column-based profiles.
-  !>
-  !> @param filename Path to the atmosphere file
-  !> @param Array of 'strings' containing names of required gases
-  !> @param Atmosphere object that will be populated by this function
-  !>
-  !> @detail We supply here a filename, a list of gas strings and the
-  !> atmosphere-object. The function checks whether all required gases
-  !> are present in the atmosphere file, and will throw a fatal error if
-  !> that is not the case.
-  subroutine read_atmosphere_file(filename, gas_strings, atm)
-
-    implicit none
-    character(len=*), intent(in) :: filename
-    type(string), intent(in) :: gas_strings(:)
-    type(atmosphere), intent(inout) :: atm
-
-    ! Function name
-    character(len=*), parameter :: fname = "read_atmosphere_file"
-    ! File handler and IO stat variable
-    integer :: funit, iostat
-    ! Whether file exists
-    logical :: file_exist
-    ! Various counting variables to figure out where the
-    ! contents of the atmosphere file start.
-    integer :: line_count, nonempty_line_count, file_start, level_count
-    ! Indices which tell us which columns are pressure and temperature
-    integer :: idx_p, idx_t
-    ! Character variables to store lines
-    character(len=999) :: dummy, tmp_str
-    ! This dummy is for reading in numerical values
-    double precision :: dummy_dp
-    ! This dummy is for reading in strings
-    type(string) :: dummy_string
-    ! Lines will be split using this dummy variable
-    type(string), allocatable :: split_string(:)
-    ! Various loop counters
-    integer :: i, j, cnt
-    ! Too keep track of whether we have found the required gases, and
-    ! at which position/column they are.
-    integer, allocatable :: this_gas_index(:)
-
-    integer :: num_gases
-
-    ! Check whether the file exists or not.
-    inquire(file=filename, exist=file_exist)
-    if (.not. file_exist) then
-       call logger%fatal(fname, "Atmosphere file does not exist: " // filename)
-       stop 1
-    else
-       call logger%debug(fname, "File does exist.")
-    end if
-
-    ! First pass: we scan the file to see how many levels our atmosphere has
-    open(newunit=funit, file=filename, iostat=iostat, action='read', status='old')
-    rewind(unit=funit, iostat=iostat)
-
-    line_count = 0
-    level_count = 0
-    nonempty_line_count = 0
-    file_start = -1
-
-    ! Loop through the file until we have reached the end
-    do
-       read(funit, '(A)', iostat=iostat) dummy
-
-       if (iostat == iostat_end) then
-          ! End of file?
-          exit
-       end if
-
-       ! Keep track of how many lines we have traversed
-       line_count = line_count + 1
-
-       if (scan(dummy, "!#;") > 0) then
-          ! Skip this line, as it's commented
-          cycle
-       else if (trim(dummy) == "") then
-          ! Skip empty lines
-          cycle
-       end if
-
-       ! And keep track of now many lines are non-empty
-       nonempty_line_count = nonempty_line_count + 1
-
-       ! First non-empty line should be saved here.
-       ! file_start is where the real file contents begin
-       if (file_start == -1) then
-          file_start = line_count
-       else
-          if (nonempty_line_count > 1) then
-             level_count = level_count + 1
-          end if
-       end if
-
-    end do
-
-    ! Go back to the top of the file.
-    rewind(unit=funit, iostat=iostat)
-
-    idx_p = -1
-    idx_t = -1
-
-    ! Reset the line counter since we're starting from the top again.
-    line_count = 0
-    do
-       ! Read the line
-       read(funit, '(A)', iostat=iostat) dummy
-       line_count = line_count + 1
-
-       ! .. and immediately skip until we are at the
-       ! beginning of the contents of the file.
-       if (line_count < file_start) cycle
-
-       if (line_count == file_start) then
-          ! This is the proper atmosphere header that should contain
-          ! the information about the gases. So first, let's check if
-          ! the numbers match
-
-          ! Read the line into a string object and split it by whitespaces
-          dummy_string = dummy
-          call dummy_string%split(tokens=split_string, sep=' ')
-
-          ! Now that we know both the number of levels and gases, we can allocate the
-          ! arrays in the atmosphere structure.
-          num_gases = 0
-          idx_p = -1
-          idx_t = -1
-          do j=1, size(split_string)
-             ! Skip temp or pressure - this requires the pressure and temperature
-             ! columns to be explicitly labeled p/P and t/T
-             if (split_string(j)%lower() == "p") then
-                idx_p = j
-                cycle
-             end if
-             if (split_string(j)%lower() == "t") then
-                idx_t = j
-                cycle
-             end if
-             num_gases = num_gases + 1
-          end do
-
-          ! Let the user know how many gases and levels we have found
-          write(tmp_str, '(A,G0.1,A,A)') "There seem to be ", num_gases, " gases in ", filename
-          call logger%info(fname, trim(tmp_str))
-          write(tmp_str, '(A, G0.1)') "The number of atmospheric levels is: ", level_count
-          call logger%info(fname, trim(tmp_str))
-
-          ! If the atmosphere structure was already allocated, deallocate it first
-          if (allocated(atm%p)) deallocate(atm%p)
-          if (allocated(atm%T)) deallocate(atm%T)
-          if (allocated(atm%sh)) deallocate(atm%sh)
-          if (allocated(atm%gas_names)) deallocate(atm%gas_names)
-          if (allocated(atm%gas_index)) deallocate(atm%gas_index)
-          if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
-          if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
-          if (allocated(atm%grav)) deallocate(atm%grav)
-          if (allocated(atm%ndry)) deallocate(atm%ndry)
-
-          ! Allocate according to the file structure
-          allocate(atm%T(level_count))
-          allocate(atm%p(level_count))
-          allocate(atm%sh(level_count))
-          allocate(atm%gas_names(num_gases))
-          allocate(atm%gas_vmr(level_count, num_gases))
-          allocate(atm%gas_index(num_gases))
-          allocate(atm%altitude_levels(level_count))
-          allocate(atm%grav(level_count))
-          allocate(atm%ndry(level_count))
-
-          allocate(this_gas_index(size(gas_strings)))
-
-          ! But we also want to know what gas index to use for storage
-          do i=1, size(gas_strings)
-             this_gas_index(i) = -1
-             cnt = 1
-             do j=1, size(split_string)
-                ! Skip temp or pressure
-                if (split_string(j)%lower() == "p") cycle
-                if (split_string(j)%lower() == "t") cycle
-                ! Check if gas description matches gases we know
-                if (split_string(j) == gas_strings(i)) then
-                   this_gas_index(i) = j
-                   write(tmp_str, '(A,A,A,G0.1)') "Index for atmosphere gas ", &
-                        split_string(j)%chars(), ": ", j
-                   call logger%debug(fname, trim(tmp_str))
-                   exit
-                end if
-                cnt = cnt + 1
-             end do
-          end do
-
-          ! And last check - do all required gases have a VMR column in the
-          ! atmosphere file.
-
-          do i=1, size(gas_strings)
-             if (this_gas_index(i) == -1) then
-                ! Uh-oh, gas that was speficied in the "gases" option of the window
-                ! could not be found in the atmosphere! Hard exit.
-                write(tmp_str, "(A,A)") "The following gas was not found in the atmosphere file: " &
-                     // gas_strings(i)%chars()
-                call logger%fatal(fname, trim(tmp_str))
-                stop 1
-             end if
-          end do
-
-       end if
-
-
-       if (line_count > file_start) then
-          ! Right after the header, we should have the data in rows. We
-          ! use the string split option to split the row string into substrings,
-          ! and then convert each into double precision values and feed them into
-          ! the atmosphere structure - at the right position!
-
-          dummy_string = dummy
-          ! Need to deallocate the split_string object first
-          if (allocated(split_string)) deallocate(split_string)
-          call dummy_string%split(tokens=split_string, sep=' ')
-
-          ! Now here we need to check again whether a certain line has more than
-          ! num_gases+1 columns.
-          if (size(split_string) /= (num_gases + 2)) then
-             write(tmp_str, '(A, G0.1)') "Too many values in line ", line_count
-             call logger%fatal(fname, trim(tmp_str))
-             stop 1
-          end if
-
-          ! Get the pressure value
-          tmp_str = split_string(idx_p)%chars()
-          read(tmp_str, *) dummy_dp
-          atm%p(line_count - file_start) = dummy_dp
-
-          ! Get the temperature value
-          tmp_str = split_string(idx_t)%chars()
-          read(tmp_str, *) dummy_dp
-          atm%T(line_count - file_start) = dummy_dp
-
-          ! And the gas value(s) from the other column(s)
-          do i=1, size(gas_strings)
-             tmp_str = split_string(this_gas_index(i))%chars()
-             read(tmp_str, *) dummy_dp
-             atm%gas_vmr(line_count - file_start, i) = dummy_dp
-          end do
-
-       end if
-
-       if (line_count == (file_start + level_count)) exit
-
-    end do
-
-    close(funit)
-
-  end subroutine read_atmosphere_file
 
 end module physical_model_mod

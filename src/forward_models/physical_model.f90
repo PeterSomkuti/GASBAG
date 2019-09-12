@@ -1467,10 +1467,13 @@ contains
           iteration = iteration + 1
        end if
 
+       ! Copy over the initial atmosphere
+       scn%atm = initial_atm
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, num_gases)
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
+
 
        if (iteration == 1) then
 
@@ -1486,7 +1489,7 @@ contains
           scn%op%albedo(:) = albedo_apriori
           ! and the first guess state vector is the prior
           SV%svsv = SV%svap
-          !
+
           results%sv_prior(i_fp, i_fr, :) = SV%svap
           last_successful_sv(:) = SV%svap
           old_sv(:) = SV%svap
@@ -1496,7 +1499,6 @@ contains
              ! microwindow.
              this_psurf = met_psurf(i_fp, i_fr)
              this_atm = initial_atm
-             scn%atm = initial_atm
 
              ! Number of levels in the model atmosphere
              ! AS GIVEN BY THE ATMOSPHERE FILE
@@ -1554,9 +1556,6 @@ contains
                 end if
              end do
 
-             ! Calculate the scene gravity and altitude for levels
-             call scene_altitude(scn)
-
           else
              ! If we don't do gases, just set this variable to zero, mainly to avoid
              ! potential problems .. nasty segfaults etc.
@@ -1581,6 +1580,7 @@ contains
           ! new albedo(:) array for high-resolution grid. Reminder: albedo slope is
           ! defined with respect to the center pixel (and higher orders).
           if (SV%num_albedo > 0) then
+             scn%op%albedo(:) = 0.0d0
              do i=1, SV%num_albedo
                 scn%op%albedo(:) = scn%op%albedo(:) + SV%svsv(SV%idx_albedo(i)) &
                      * ((scn%op%wl(:) - scn%op%wl(center_pixel_hi)) ** (dble(i-1)))
@@ -1616,6 +1616,9 @@ contains
           end if
        endif
 
+       ! Calculate the scene gravity and altitude for levels
+       call scene_altitude(scn)
+
        ! NOTE
        ! SIF and ZLO are (right now) exactly the same, i.e. an additive radiance
        ! contribution that is constant w.r.t. wavelength.
@@ -1644,24 +1647,8 @@ contains
 
        if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
-          !allocate(gas_tau(N_hires, num_levels-1, num_gases))
-          !gas_tau(:,:,:) = 0.0d0
-          !allocate(gas_tau_pert(N_hires, num_levels-1, num_gases, SV%num_gas))
-          !gas_tau_pert(:,:,:,:) = 0.0d0
-          !allocate(gas_tau_dpsurf(N_hires, num_levels-1, num_gases))
-          !gas_tau_dpsurf(:,:,:) = 0.0d0
-          !allocate(gas_tau_dtemp(N_hires, num_levels-1, num_gases))
-          !gas_tau_dtemp(:,:,:) = 0.0d0
-          !allocate(ray_tau(N_hires, num_levels-1))
-          !ray_tau(:,:) = 0.0d0
-          !allocate(omega(N_hires, num_levels-1))
-          !allocate(ray_depolf(N_hires))
-          !ray_depolf(:) = 0.0d0
           allocate(this_vmr_profile(num_levels, num_gases))
           this_vmr_profile(:,:) = 0.0d0
-          !allocate(ndry(num_levels), ndry_tmp(num_levels))
-          !ndry(:) = 0.0d0
-          !ndry_tmp(:) = 0.0d0
 
           ! Allocate these containers only if XRTM is used
           if (RT_model == RT_XRTM) then
@@ -1808,8 +1795,6 @@ contains
           ! profiles here.
           ! ---------------------------------------------------------------
 
-          !omega(:,:) = ray_tau(:,:) / (sum(gas_tau(:,:,:), dim=3) + ray_tau(:,:))
-
 
           ! ---------------------------------------------------------------
           ! Optical depth cleanup
@@ -1932,7 +1917,7 @@ contains
                xrtm_options, & ! XRTM options bitmask
                xrtm_solvers, & ! XRTM solvers combined bitmask
                3, & ! Max coef
-               2, & ! Quadrature points
+               16, & ! Quadrature points
                n_stokes, & ! Number of stokes coeffs
                xrtm_n_derivs, & ! Number of derivatives
                num_active_levels-1, & ! Number of layers
@@ -2698,14 +2683,15 @@ contains
 
           open(file="hires_spectra.dat", newunit=funit)
           do i=1, N_hires
-             write(funit, *) scn%op%wl(i), radiance_calc_work_hi(i), radiance_calc_work_hi_stokes(i, 1), this_solar(i, 2)
+             write(funit, *) scn%op%wl(i), radiance_calc_work_hi(i), &
+                  (radiance_calc_work_hi_stokes(i, q), q=1, n_stokes), this_solar(i, 2)
           end do
           close(funit)
-          call logger%debug(fname, "Written file: hires_spectra.dat (modelled)")
+          call logger%debug(fname, "Written file: hires_spectra.dat (wl, radiance, stokes, solar)")
 
           open(file="total_tau.dat", newunit=funit)
           do i=1, N_hires
-             write(funit, *) total_tau(i)
+             write(funit, *) scn%op%total_tau(i)
           end do
           close(funit)
           call logger%debug(fname, "Written file: total_tau.dat (modelled)")

@@ -129,6 +129,7 @@ contains
        scn%op%ray_depolf(:) = 0.0d0
        allocate(scn%op%total_tau(N_hires))
        scn%op%total_tau(:) = 0.0d0
+       allocate(scn%op%omega(N_hires, scn%atm%num_levels-1))
     end if
 
   end subroutine allocate_optical_properties
@@ -146,6 +147,7 @@ contains
     if (allocated(scn%op%ray_tau)) deallocate(scn%op%ray_tau)
     if (allocated(scn%op%ray_depolf)) deallocate(scn%op%ray_depolf)
     if (allocated(scn%op%total_tau)) deallocate(scn%op%total_tau)
+    if (allocated(scn%op%omega)) deallocate(scn%op%omega)
 
   end subroutine destroy_optical_properties
 

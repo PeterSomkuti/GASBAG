@@ -1,19 +1,19 @@
 !
 !  logging.f90
 !  This file is part of flogging.
-!  
+!
 !  Copyright 2016 Chris MacMackin <cmacmackin@gmail.com>
-!  
+!
 !  This program is free software; you can redistribute it and/or
 !  modify it under the terms of the GNU Lesser General Public License
 !  as published by the Free Software Foundation; either version 3 of
 !  the License, or (at your option) any later version.
-!  
+!
 !  This program is distributed in the hope that it will be useful, but
 !  WITHOUT ANY WARRANTY; without even the implied warranty of
 !  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 !  Lesser General Public License for more details.
-!  
+!
 !  You should have received a copy of the GNU Lesser General Public
 !  License along with this program; if not, write to the Free Software
 !  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
@@ -28,6 +28,7 @@ module logger_mod
   ! Provides routines for printing different types of messages to
   ! standard out, standard error, and/or a log file.
   !
+  use OMP_LIB
   use iso_fortran_env, only: i8 => int64, error_unit, output_unit
   use face, only: colourise => colorize ! Correct the spelling... ;-)
   implicit none
@@ -66,8 +67,7 @@ module logger_mod
   integer, parameter :: closed_unit = -9999
   integer, parameter :: infinity = huge(1)
 
-  character(len=29), parameter :: default_format = "('[',a,']','[',a,']',"// &
-       "*(1x,a))"
+  character(len=48), parameter :: default_format = "('[',a,']','[',a,']','[Thread:',I03,']'," // "*(1x,a))"
 
   type, public :: logger
      !* Author: Chris MacMackinc
@@ -75,7 +75,7 @@ module logger_mod
      !
      ! An object to handle output of information about the executing
      ! program to the terminal and to a log-file.
-     ! 
+     !
      private
      integer                       :: stdout = output_unit
      !! Unit corresponding to STDOUT
@@ -235,7 +235,7 @@ contains
     else if (descriminator < 5) then
        des = '<warning> '
        if (col) des = colourise(des(:len(des)-1),color_fg='yellow',style='bold_on')//' '
-    else if (descriminator < 6) then 
+    else if (descriminator < 6) then
        des = '<error> '
        if (col) des = colourise(des(:len(des)-1),color_fg='red',style='bold_on')//' '
     else
@@ -288,25 +288,33 @@ contains
     character(len=*), intent(in) :: message
     !! The information to be written.
     character(len=:), allocatable :: output
+    integer :: this_thread
+
+#ifdef _OPENMP
+    this_thread = OMP_GET_THREAD_NUM()
+#else
+    this_thread = 0
+#endif
+
     if (priority >= this%stderr_threshold) then
        output = get_designator(priority)//message
        ! Edits Peter Somkuti: This is probably a crude hack, but
        ! if we do not keep these portions CRITICAL, you end up
        ! with random segfaults due to this not being threadsafe.
-       
+
        !$OMP CRITICAL
-       write(this%stderr,default_format) current_time(), source, output
+       write(this%stderr,default_format) current_time(), source, this_thread, output
        !$OMP END CRITICAL
     else if (priority >= this%stdout_threshold) then
        output = get_designator(priority)//message
        !$OMP CRITICAL
-       write(this%stdout,default_format) current_time(), source, output
+       write(this%stdout,default_format) current_time(), source, this_thread, output
        !$OMP END CRITICAL
     end if
     if (priority >= this%logfile_threshold) then
        output = get_designator(priority,.false.)//message
        !$OMP CRITICAL
-       write(this%fileunit,default_format) current_time(), source, output
+       write(this%fileunit,default_format) current_time(), source, this_thread, output
        !$OMP END CRITICAL
     end if
   end subroutine logger_message

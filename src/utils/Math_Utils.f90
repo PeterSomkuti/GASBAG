@@ -300,6 +300,11 @@ contains
 
     double precision, allocatable :: ILS_upsampled(:)
 
+    double precision :: cpu_start, cpu_stop
+    character(len=999) :: tmp_str
+
+    call cpu_time(cpu_start)
+
     N_wl = size(wl_input)
     N_pix = size(wl_output)
     N_ils_pix = size(wl_kernels, 1)
@@ -377,6 +382,11 @@ contains
     end do
 
     success = .true.
+
+    call cpu_time(cpu_stop)
+    write(tmp_str, '(A, F10.7)') "Convolution time (s): ", cpu_stop - cpu_start
+    !call logger%debug(fname, trim(tmp_str))
+
   end subroutine oco_type_convolution
 
   !> @brief Inverts a quadratic matrix using DGETRF/DGETRI

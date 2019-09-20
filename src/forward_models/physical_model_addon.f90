@@ -49,8 +49,10 @@ module physical_model_addon_mod
      double precision, allocatable :: gas_tau(:,:,:)
      !> dtau / dtemp (spectral, layer, gas number)
      double precision, allocatable :: gas_tau_dtemp(:,:,:)
-     !> dtau / dpsurf (spectral, layer, gas_number)
+     !> dtau / dpsurf (spectral, layer, gas number)
      double precision, allocatable :: gas_tau_dpsurf(:,:,:)
+     !> dtau / dvmr (spectral, layer, gas number, level-below-or-above)
+     double precision, allocatable :: gas_tau_dvmr(:,:,:,:)
      !> Perturbed gas optical depth (spectral, layer, gas number)
      double precision, allocatable :: gas_tau_pert(:,:,:,:)
 
@@ -121,6 +123,8 @@ contains
        scn%op%gas_tau(:,:,:) = 0.0d0
        allocate(scn%op%gas_tau_dpsurf(N_hires, scn%atm%num_levels-1, N_gases))
        scn%op%gas_tau_dpsurf(:,:,:) = 0.0d0
+       allocate(scn%op%gas_tau_dvmr(N_hires, scn%atm%num_levels-1, N_gases, 2))
+       scn%op%gas_tau_dvmr(:,:,:,:) = 0.0d0
        allocate(scn%op%gas_tau_dtemp(N_hires, scn%atm%num_levels-1, N_gases))
        scn%op%gas_tau_dtemp(:,:,:) = 0.0d0
        allocate(scn%op%ray_tau(N_hires, scn%atm%num_levels-1))
@@ -143,6 +147,7 @@ contains
 
     if (allocated(scn%op%gas_tau)) deallocate(scn%op%gas_tau)
     if (allocated(scn%op%gas_tau_dpsurf)) deallocate(scn%op%gas_tau_dpsurf)
+    if (allocated(scn%op%gas_tau_dvmr)) deallocate(scn%op%gas_tau_dvmr)
     if (allocated(scn%op%gas_tau_dtemp)) deallocate(scn%op%gas_tau_dtemp)
     if (allocated(scn%op%ray_tau)) deallocate(scn%op%ray_tau)
     if (allocated(scn%op%ray_depolf)) deallocate(scn%op%ray_depolf)

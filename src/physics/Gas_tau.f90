@@ -34,6 +34,7 @@ contains
   !> @param need_psurf_jac Do we want to return surface pressure jacobians?
   !> @param gas_tau Per-layer gas optical depths
   !> @param gas_tau_dpsurf Jacobian: dtau/dpsurf
+  !> @param gas_tau_dvmr Jacobain: dtau/dvmr (level)
   !> @param ndry Number of dry air molecules
   !> @param success Was the calculation successful?
   !>
@@ -45,7 +46,7 @@ contains
   subroutine calculate_gas_tau(pre_gridded, is_H2O, &
        wl, gas_vmr, psurf, p, T, sh, grav, &
        gas, N_sub, need_psurf_jac, &
-       gas_tau, gas_tau_dpsurf, &
+       gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
        success)
 
     implicit none
@@ -64,6 +65,7 @@ contains
 
     double precision, intent(inout) :: gas_tau(:,:)
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
+    double precision, intent(inout) :: gas_tau_dvmr(:,:,:)
     logical, intent(inout) :: success
 
 
@@ -337,6 +339,12 @@ contains
 
           ! Add sublayer contribution to full layer tau
           gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry * this_CS_value(:) * this_VMR)
+          ! Jacobians of tau w.r.t. changes in level VMR
+          gas_tau_dvmr(:,l-1,1) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (1.0d0 - this_p_fac))
+          gas_tau_dvmr(:,l-1,2) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (this_p_fac))
+
+          ! dTau/dVMR_level += (ndry * this_CS_value(:) * (1.0d0 - this_p_fac))
+          ! dTau/dVMR_level+1 += (ndry * this_CS_value(:) * (this_p_fac))
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
@@ -401,7 +409,15 @@ contains
   end subroutine calculate_gas_tau
 
 
-
+  !> @brief Grab cross section value at given wl, p, T, H2O
+  !> @param pre_gridded Is the spectroscopy pre-gridded already?
+  !> @param gas CS_gas object
+  !> @param wl Wavelength array [um]
+  !> @param p Pressure [Pa]
+  !> @param T Temperature [K]
+  !> @param H2O H2O VMR
+  !> @param wl_left_idx Positions of wl in gas%wl array
+  !> @param CS_value Cross section values for wavelengths wl
   function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
     implicit none
@@ -450,8 +466,6 @@ contains
        call logger%error(fname, "idx_l_p out of range.")
        return
     end if
-
-
 
     ! Get the temperature indices, which depend on P - so we have two
     ! indices for the temperature dimension. One set of T indices (idx_l(l,r)_T)

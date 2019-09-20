@@ -45,7 +45,7 @@ module physical_model_mod
 
   ! System modules
   use ISO_FORTRAN_ENV
-  USE OMP_LIB
+  use OMP_LIB
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
@@ -971,27 +971,14 @@ contains
     ! Atmosphere stuff
     ! Number of gases, total levels, and number of active levels (changes with surface pressure)
     integer :: num_gases, num_levels, num_active_levels
-    ! Various arrays for gas optical depths
-    double precision, allocatable :: gas_tau(:,:,:) ! Gas optical depth (spectral, layer, gas number)
-    double precision, allocatable :: gas_tau_dtemp(:,:,:) ! dtau / dvmr (spectral, layer, gas number)
-    double precision, allocatable :: gas_tau_dpsurf(:,:,:) ! dtau / dpsurf (spectral, layer, gas_number)
-    double precision, allocatable :: gas_tau_pert(:,:,:,:) ! Perturbed gas optical depth (spectral, layer, gas number)
 
     ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
     double precision, allocatable :: this_vmr_profile(:,:)
-    ! Rayleigh extinction optical depth (spectral, layer)
-    double precision, allocatable :: ray_tau(:,:)
-    ! Rayleigh depolarization factor (spectral)
-    double precision, allocatable :: ray_depolf(:)
-    ! Total column optical depth (spectral)
-    double precision, allocatable :: total_tau(:)
 
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
     ! Is this gas H2O?
     logical :: is_H2O
-    ! Number of molecules of dry air per m^2
-    double precision, allocatable :: ndry(:), ndry_tmp(:)
 
     ! Albedo
     ! Prior albedo value estimated from the radiances
@@ -1043,8 +1030,9 @@ contains
 
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
-    double precision, allocatable :: tmp_v1(:), tmp_v2(:)
+    double precision, allocatable :: tmp_v1(:), tmp_v2(:), tmp_v3(:)
     double precision, allocatable :: KtSeK(:,:), gain_matrix(:,:), AK(:,:)
+    double precision, allocatable :: AK_profile(:)
     ! Was the matrix inversion operation successful?
     logical :: success_inv_mat
     ! Was the convolution operation successful?
@@ -1106,10 +1094,11 @@ contains
     integer :: i, j, q
     ! File unit for debugging
     integer :: funit
-
+    double precision, allocatable :: tmp_convolved_gas(:,:)
 
     ! DEBUG STUFF
-    ! double precision :: cpu_start, cpu_stop
+    double precision :: cpu_conv_start, cpu_conv_stop
+    double precision :: cpu_gas_start, cpu_gas_stop
 
     ! Grab a copy of the state vector for local use
     SV = global_SV
@@ -1309,7 +1298,7 @@ contains
     allocate(Shat(N_sv, N_sv))
     allocate(Shat_corr(N_sv, N_sv))
     allocate(tmp_m1(N_sv, N_sv), tmp_m2(N_sv, N_sv))
-    allocate(tmp_v1(N_sv), tmp_v2(N_sv))
+    allocate(tmp_v1(N_sv), tmp_v2(N_sv), tmp_v3(N_spec_hi))
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
@@ -1647,6 +1636,8 @@ contains
 
        if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
+          call cpu_time(cpu_gas_start)
+
           allocate(this_vmr_profile(num_levels, num_gases))
           this_vmr_profile(:,:) = 0.0d0
 
@@ -1746,7 +1737,7 @@ contains
                      this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                      this_psurf, & ! Surface pressure
                      scn%atm%p(:), & ! Atmospheric profile pressures
-                     scn%atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric profile temperature plus 1K perturbation
+                     scn%atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric T profile plus 1K perturbation
                      scn%atm%sh(:), & ! Atmospheric profile humidity
                      scn%atm%grav(:), & ! Gravity per level
                      MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
@@ -1754,6 +1745,7 @@ contains
                      do_psurf_jac, & ! Do we require surface pressure jacobians?
                      scn%op%gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
                      scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                     scn%op%gas_tau_dvmr(:,:,j,:), & ! Output: dTau/dVMR
                      success_gas) ! Output: Was the calculation successful?
              end if
 
@@ -1765,7 +1757,7 @@ contains
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   this_psurf, & ! Surface pressure
                   scn%atm%p(:), & ! Atmospheric profile pressures
-                  scn%atm%T(:) + this_temp_offset, & ! Atmospheric profile temperature
+                  scn%atm%T(:) + this_temp_offset, & ! Atmospheric T profile
                   scn%atm%sh(:), & ! Atmospheric profile humidity
                   scn%atm%grav(:), & ! Gravity per level
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
@@ -1773,6 +1765,7 @@ contains
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
                   scn%op%gas_tau(:,:,j), & ! Output: Gas ODs
                   scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
+                  scn%op%gas_tau_dvmr(:,:,j,:), & ! Output: dTau/dVMR
                   success_gas) ! Output: Was the calculation successful?
 
              ! If the calculation goes wrong, we exit as we can't go on
@@ -1811,6 +1804,10 @@ contains
           ! ----------------------------------
           ! END SECTION FOR GASES / ATMOSPHERE
           ! ----------------------------------
+
+          call cpu_time(cpu_gas_stop)
+          write(tmp_str, '(A, F10.7)') "Gas calc. time (s): ", cpu_gas_stop - cpu_gas_start
+          call logger%debug(fname, trim(tmp_str))
        end if
 
 
@@ -2128,7 +2125,10 @@ contains
        end if
 
 
+       ! -------------------------------------------------------------
        ! Apply instrument Stokes coefficients to obtain total radiance
+       ! -------------------------------------------------------------
+
        radiance_calc_work_hi(:) = 0.0d0
        K_hi(:,:) = 0.0d0
 
@@ -2237,6 +2237,9 @@ contains
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
 
+
+       call cpu_time(cpu_conv_start)
+
        select type(my_instrument)
        type is (oco2_instrument)
 
@@ -2299,7 +2302,6 @@ contains
           end do
        end select
 
-
        !---------------------------------------------------------------------
        ! JACOBIAN CALCULATIONS - FOR SPECTRA AFTER CONVOLUTION
        !---------------------------------------------------------------------
@@ -2331,6 +2333,10 @@ contains
                   radiance_calc_work_hi, K(:, SV%idx_ils_stretch(i)))
           end do
        end if
+
+       call cpu_time(cpu_conv_stop)
+       write(tmp_str, '(A, F10.7)') "Total convolution time (s): ", cpu_conv_stop - cpu_conv_start
+       call logger%debug(fname, trim(tmp_str))
 
 
        !---------------------------------------------------------------------
@@ -2629,6 +2635,66 @@ contains
           ! Calculate the Gain matrix
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
+          ! Experimental code for scale averaging kernels
+          j=2
+          allocate(AK_profile(num_active_levels))
+          allocate(pwgts(num_active_levels))
+          allocate(tmp_convolved_gas(N_spec, num_active_levels))
+          tmp_convolved_gas(:,:) = 0.0d0
+
+          do i=1, num_active_levels
+             if (i == 1) then
+                tmp_v3(:) = radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                     * sum(scn%op%gas_tau_dvmr(:,i,:,1), dim=2)
+             else if (i == num_active_levels) then
+                tmp_v3(:) = radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                     * sum(scn%op%gas_tau_dvmr(:,i-1,:,2), dim=2)
+             else
+                tmp_v3(:) = radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                     * sum(scn%op%gas_tau_dvmr(:,i-1,:,2), dim=2) + &
+                     radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                     * sum(scn%op%gas_tau_dvmr(:,i,:,1), dim=2)
+             end if
+
+
+             call oco_type_convolution(scn%op%wl, &
+                  tmp_v3(:), &
+                  this_ILS_delta_lambda(:,:), &
+                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                  tmp_convolved_gas(:,i), &
+                  ILS_success)
+
+          end do
+
+          call pressure_weighting_function( &
+               scn%atm%p(1:num_active_levels), &
+               this_psurf, &
+               scn%atm%gas_vmr(1:num_active_levels, j), &
+               pwgts)
+
+          do i=1, num_active_levels
+
+             tmp_v1 =  -matmul(gain_matrix(:,:), &
+                  tmp_convolved_gas(:,i) &
+                  * sum(pwgts(:) * scn%atm%gas_vmr(1:num_active_levels,j)))
+
+             AK_profile(i) = tmp_v1(6)
+
+             write(*,*) i, AK_profile(i), pwgts(i), tmp_v1(6) - pwgts(i)
+
+             ! Multiply this by Xgas_prior
+
+          end do
+!!$
+
+          write(*,*) "Delta XCO2", 1d6 * dot_product(AK_profile - pwgts, scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(j,1)) - 1.0))
+          write(*,*) "XCO2", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j) * SV%svsv(SV%idx_gas(j,1)))
+
+          deallocate(tmp_convolved_gas)
+          deallocate(pwgts)
+          deallocate(AK_profile)
+
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
 
@@ -2667,8 +2733,8 @@ contains
           call logger%debug(fname, "Written file: ak_matrix.dat (statevector x statevector)")
 
           open(file="gain_matrix.dat", newunit=funit)
-          do i=1, N_spec
-             write(funit,*) (gain_matrix(j, i), j=1, N_sv)
+          do i=1, N_sv
+             write(funit,*) (gain_matrix(i, j), j=1, N_spec)
           end do
           close(funit)
           call logger%debug(fname, "Written file: gain_matrix.dat (spectral x statevector)")
@@ -2759,17 +2825,8 @@ contains
        ! Deallocate scene optical property arrays
        call destroy_optical_properties(scn)
 
-       !if (allocated(gas_tau)) deallocate(gas_tau)
-       !if (allocated(gas_tau_dpsurf)) deallocate(gas_tau_dpsurf)
-       !if (allocated(gas_tau_dtemp)) deallocate(gas_tau_dtemp)
-       !if (allocated(gas_tau_pert)) deallocate(gas_tau_pert)
-       !if (allocated(ray_tau)) deallocate(ray_tau)
-       !if (allocated(omega)) deallocate(omega)
-       !if (allocated(total_tau)) deallocate(total_tau)
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
-       !if (allocated(ndry)) deallocate(ndry)
-       !if (allocated(ndry_tmp)) deallocate(ndry_tmp)
-       !if (allocated(ray_depolf)) deallocate(ray_depolf)
+
        if (allocated(dI_dgas)) deallocate(dI_dgas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
        if (allocated(dI_dTemp)) deallocate(dI_dTemp)

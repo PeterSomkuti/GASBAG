@@ -157,6 +157,7 @@ contains
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
     gas_tau_dpsurf(:,:) = 0.0d0
+    gas_tau_dvmr(:,:,:) = 0.0d0
 
     ! Pre-compute the indicies of the ABSCO wavelength dimension at which
     ! we can find the wavelengths supplied to this function and at which we
@@ -326,6 +327,8 @@ contains
              H2O_corr = (1.0d0 - this_sh)
           end if
 
+          ! Constant value ~ almost the same as Ndry but without GK weights
+          ! and potential factor from log-scale (d(exp(p)) = p * dp)
           C_tmp = 1.0d0 / this_grav * NA * 0.1d0 * H2O_corr / this_M
 
           ! Tau for this sublayer
@@ -337,14 +340,18 @@ contains
              ndry = GK_weights_f(k) * C_tmp
           end if
 
+          ! ----------------------------------------------------------------------------------------------
           ! Add sublayer contribution to full layer tau
+          ! ----------------------------------------------------------------------------------------------
           gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry * this_CS_value(:) * this_VMR)
-          ! Jacobians of tau w.r.t. changes in level VMR
-          gas_tau_dvmr(:,l-1,1) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (1.0d0 - this_p_fac))
-          gas_tau_dvmr(:,l-1,2) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (this_p_fac))
+          ! Jacobians of tau w.r.t. changes in level VMR. Layer gas tau can change in two
+          ! ways: either change the VRM at the level above (index 1, higher), or below (index 2, lower)
 
-          ! dTau/dVMR_level += (ndry * this_CS_value(:) * (1.0d0 - this_p_fac))
-          ! dTau/dVMR_level+1 += (ndry * this_CS_value(:) * (this_p_fac))
+          ! "Higher" (i.e. closer to TOA)
+          gas_tau_dvmr(:,l-1,1) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (this_p_fac))
+          ! "Lower" (i.e. closer to surface)
+          gas_tau_dvmr(:,l-1,2) = gas_tau_dvmr(:,l-1,2) + (ndry * this_CS_value(:) * (1.0d0 - this_p_fac))
+          ! ----------------------------------------------------------------------------------------------
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer

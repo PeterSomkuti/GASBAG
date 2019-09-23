@@ -589,9 +589,10 @@ contains
 #endif
 
              !write(*,*) land_fraction(i_fp, i_fr)
-             !if (land_fraction(i_fp, i_fr) < 100) then
-             !   cycle
-             !end if
+             if (land_fraction(i_fp, i_fr) < 100) then
+                call logger%debug(fname, "Skipping water scene.")
+                cycle
+             end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -1030,7 +1031,7 @@ contains
 
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
-    double precision, allocatable :: tmp_v1(:), tmp_v2(:), tmp_v3(:)
+    double precision, allocatable :: tmp_v1(:), tmp_v2(:), tmp_v3(:), tmp_v4(:)
     double precision, allocatable :: KtSeK(:,:), gain_matrix(:,:), AK(:,:)
     double precision, allocatable :: AK_profile(:)
     ! Was the matrix inversion operation successful?
@@ -1091,7 +1092,7 @@ contains
     ! Function name
     character(len=*), parameter :: fname = "physical_FM"
     ! Loop variables
-    integer :: i, j, q
+    integer :: i, j, q, l
     ! File unit for debugging
     integer :: funit
     double precision, allocatable :: tmp_convolved_gas(:,:)
@@ -1879,8 +1880,8 @@ contains
        case (RT_XRTM)
 
           if (SV%num_gas > 0) then
-              allocate(xrtm_gas_scale_factors(SV%num_gas))
-              xrtm_gas_scale_factors(:) = SV%svsv(SV%idx_gas(1:SV%num_gas,1))
+             allocate(xrtm_gas_scale_factors(SV%num_gas))
+             xrtm_gas_scale_factors(:) = SV%svsv(SV%idx_gas(1:SV%num_gas,1))
           end if
 
           ! This function "translates" our verbose configuration file options
@@ -2636,64 +2637,86 @@ contains
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Experimental code for scale averaging kernels
-          j=2
-          allocate(AK_profile(num_active_levels))
-          allocate(pwgts(num_active_levels))
-          allocate(tmp_convolved_gas(N_spec, num_active_levels))
-          tmp_convolved_gas(:,:) = 0.0d0
+          do j=1, SV%num_gas
 
-          do i=1, num_active_levels
-             if (i == 1) then
-                tmp_v3(:) = radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                     * sum(scn%op%gas_tau_dvmr(:,i,:,1), dim=2)
-             else if (i == num_active_levels) then
-                tmp_v3(:) = radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                     * sum(scn%op%gas_tau_dvmr(:,i-1,:,2), dim=2)
-             else
-                tmp_v3(:) = radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                     * sum(scn%op%gas_tau_dvmr(:,i-1,:,2), dim=2) + &
-                     radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                     * sum(scn%op%gas_tau_dvmr(:,i,:,1), dim=2)
-             end if
+             l = SV%gas_idx_lookup(j)
+
+             allocate(AK_profile(num_active_levels))
+             allocate(pwgts(num_active_levels))
+             allocate(tmp_convolved_gas(N_spec, num_active_levels))
+             tmp_convolved_gas(:,:) = 0.0d0
+
+             ! dI / dVMR_level_i
+             do i=1, num_active_levels
+                if (i == 1) then
+                   ! TOA layer
+                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                        * scn%op%gas_tau_dvmr(:,i,l,1)
+                else if (i == num_active_levels) then
+                   ! BOA layer
+                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                        * scn%op%gas_tau_dvmr(:,i-1,l,2)
+                else
+                   ! everything in between
+                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
+                        (scn%op%gas_tau_dvmr(:,i-1,l,2) + &
+                         scn%op%gas_tau_dvmr(:,i,l,1))
+                end if
 
 
-             call oco_type_convolution(scn%op%wl, &
-                  tmp_v3(:), &
-                  this_ILS_delta_lambda(:,:), &
-                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-                  tmp_convolved_gas(:,i), &
-                  ILS_success)
+                call oco_type_convolution(scn%op%wl, &
+                     tmp_v3(:), &
+                     this_ILS_delta_lambda(:,:), &
+                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+                     this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                     tmp_convolved_gas(:,i), &
+                     ILS_success)
 
+             end do
+
+             call pressure_weighting_function( &
+                  scn%atm%p(1:num_active_levels), &
+                  this_psurf, &
+                  scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1)), &
+                  pwgts)
+
+             do i=1, num_active_levels
+
+                ! This is
+                ! G dot dI/du * XGAS_prior
+                tmp_v1 = matmul(gain_matrix(:,:), &
+                     tmp_convolved_gas(:,i)) &
+                     * sum(pwgts(:) * (scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1))))
+
+                AK_profile(i) = tmp_v1(SV%idx_gas(j,1)) / pwgts(i)
+
+                write(*,*) l, j, SV%idx_gas(j,1), i, AK_profile(i) * pwgts(i), AK_profile(i), pwgts(i), AK_profile(i) - pwgts(i)
+
+             end do
+
+             write(*,*) "GAS: ", MCS%window(i_win)%gases(l)%chars()
+             write(*,*) "XGAS Prior ", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j))
+             write(*,*) "XGAS", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j) * SV%svsv(SV%idx_gas(l,1)))
+             write(*,*) "Delta XGAS", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
+
+             allocate(tmp_v4(num_active_levels))
+             do i=1, num_active_levels
+                tmp_v4(i) = pwgts(i) * (AK_profile(i) - 1.0d0) &
+                     * scn%atm%gas_vmr(i,j) * (SV%svap(SV%idx_gas(l,1)) - SV%svsv(SV%idx_gas(l,1)))
+             end do
+
+             write(*,*) "AK corr XGAS paper Wunch: ", sum(tmp_v4) * 1e6
+             deallocate(tmp_v4)
+
+             write(*,*) "AK corr XGAS Chris      : ", 1d6 * dot_product(AK_profile * pwgts - pwgts, &
+                  scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
+
+
+
+             deallocate(tmp_convolved_gas)
+             deallocate(pwgts)
+             deallocate(AK_profile)
           end do
-
-          call pressure_weighting_function( &
-               scn%atm%p(1:num_active_levels), &
-               this_psurf, &
-               scn%atm%gas_vmr(1:num_active_levels, j), &
-               pwgts)
-
-          do i=1, num_active_levels
-
-             tmp_v1 =  -matmul(gain_matrix(:,:), &
-                  tmp_convolved_gas(:,i) &
-                  * sum(pwgts(:) * scn%atm%gas_vmr(1:num_active_levels,j)))
-
-             AK_profile(i) = tmp_v1(6)
-
-             write(*,*) i, AK_profile(i), pwgts(i), tmp_v1(6) - pwgts(i)
-
-             ! Multiply this by Xgas_prior
-
-          end do
-!!$
-
-          write(*,*) "Delta XCO2", 1d6 * dot_product(AK_profile - pwgts, scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(j,1)) - 1.0))
-          write(*,*) "XCO2", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j) * SV%svsv(SV%idx_gas(j,1)))
-
-          deallocate(tmp_convolved_gas)
-          deallocate(pwgts)
-          deallocate(AK_profile)
 
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?

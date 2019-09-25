@@ -428,6 +428,7 @@ contains
 
           ! Allocate according to the file structure
           atm%num_levels = level_count
+          atm%num_gases = num_gases
           allocate(atm%T(level_count))
           allocate(atm%p(level_count))
           allocate(atm%sh(level_count))

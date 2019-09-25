@@ -30,8 +30,10 @@ module statevector_mod
      double precision, allocatable :: sv_prior(:,:,:)
      !> State vector posterior uncertainty (SV number, footprint, frame)
      double precision, allocatable :: sv_uncertainty(:,:,:)
-     !> Column-average dry air mixing ratio for retrieved gases (gas number, footprint, frame)
+     !> Column-average dry air mixing ratio for retrieved gases (footprint, frame, gas_number)
      double precision, allocatable :: xgas(:,:,:)
+     !> AK corrected column-average dry air mixing ratio for retrieved gases (footprint, frame, gas_number)
+     double precision, allocatable :: xgas_ak_corr(:,:,:)
      !> Final Chi2 (footprint, frame)
      double precision, allocatable :: chi2(:,:)
      !> Final residual RMS (footprint, frame)
@@ -406,6 +408,11 @@ contains
 
                       MCS%window(i_win)%gas_retrieve_scale(k) = .true.
                       call split_gas_string(3)%split(tokens=split_scale_string, sep=':')
+
+                      if (size(split_scale_string) /= 3) then
+                         call logger%fatal(fname, "Error in gas-scale string. Must have exactly 2 colons.")
+                         stop 1
+                      end if
 
                       ! Stick the gas scalar start and end psurf factors into the MCS
                       write(tmp_str, *) split_scale_string(1)%chars()

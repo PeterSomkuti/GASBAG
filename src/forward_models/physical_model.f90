@@ -538,7 +538,7 @@ contains
 
        ! And now set up the result container with the appropriate sizes for arrays
        call create_result_container(results, num_frames, num_fp, &
-            size(global_SV%svap), global_SV%num_gas)
+            size(global_SV%svap), initial_atm%num_gases)
 
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, global_SV, i_win)
@@ -711,17 +711,25 @@ contains
           end if
        end do
 
-
        do i=1,MCS%window(i_win)%num_gases
           if (MCS%window(i_win)%gas_retrieved(i)) then
              ! Save XGAS for each gas
              lower_str = MCS%window(i_win)%gases(i)%lower()
+
              write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
                   lower_str%chars(), "_", MCS%general%code_name
              call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
                   results%xgas(:,:,i), out_dims2d, -9999.99d0)
+
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                  lower_str%chars(), "_ak_corr_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%xgas_AK_corr(:,:,i), out_dims2d, -9999.99d0)
+
           end if
        end do
 
@@ -1748,6 +1756,7 @@ contains
                      scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
                      scn%op%gas_tau_dvmr(:,:,j,:), & ! Output: dTau/dVMR
                      success_gas) ! Output: Was the calculation successful?
+
              end if
 
              ! Call the function that calculates the gas optical depths
@@ -2365,6 +2374,7 @@ contains
 
           ! Update state vector
           SV%svsv = old_sv + tmp_v2
+
        else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
 
           ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
@@ -2456,6 +2466,9 @@ contains
              results%converged(i_fp, i_fr) = 0
           end if
 
+          ! Calculate the Gain matrix
+          gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
+
           ! Calculate the XGAS for every retreived gas only, same as above with the
           ! gas OD calculation, we loop through all gases, apply the gas scaling
           ! factor from the state vector, and calculate the pressure weighting function
@@ -2467,6 +2480,9 @@ contains
              allocate(pwgts(num_active_levels))
 
              do j=1, num_gases
+
+                ! Skip this gas is not retrieved
+                if (.not. MCS%window(i_win)%gas_retrieved(j)) cycle
 
                 ! Here we need to do the same thing as before when calculating
                 ! gas OD's. Take local copy of VMR profile, and re-scale the portions
@@ -2496,21 +2512,28 @@ contains
                      pwgts)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
-                results%xgas(i_fp, i_fr, j) = sum( &
-                     pwgts(:) &
-                     * this_vmr_profile(1:num_active_levels, j) &
+                results%xgas(i_fp, i_fr, j) = dot_product( &
+                     pwgts(:), this_vmr_profile(1:num_active_levels, j) &
                      )
 
              end do
 
              deallocate(pwgts)
+
+             call calculate_BL_scale_AK_corr(&
+                  radiance_calc_work_hi(:), scn, SV, &
+                  gain_matrix(:,:), &
+                  this_ILS_delta_lambda(:,:), &
+                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
+                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                  this_psurf, num_active_levels, N_spec, &
+                  s_start, s_stop, &
+                  results%xgas_AK_corr(i_fp, i_fr, :))
+
           end if
 
           ! Save the final dSigma-squared value (in case anyone needs it)
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
-
-          ! Calculate the Gain matrix
-          gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
@@ -2550,7 +2573,8 @@ contains
              final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
              measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
              noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
-             wavelength_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) =  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max)
+             wavelength_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = &
+                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max)
           end if
 
           ! Write a debug message
@@ -2637,86 +2661,88 @@ contains
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
           ! Experimental code for scale averaging kernels
-          do j=1, SV%num_gas
+!!$          do j=1, SV%num_gas
+!!$
+!!$             l = SV%gas_idx_lookup(j)
+!!$
+!!$             allocate(AK_profile(num_active_levels))
+!!$             allocate(pwgts(num_active_levels))
+!!$             allocate(tmp_convolved_gas(N_spec, num_active_levels))
+!!$             tmp_convolved_gas(:,:) = 0.0d0
+!!$
+!!$             ! dI / dVMR_level_i
+!!$             do i=1, num_active_levels
+!!$                if (i == 1) then
+!!$                   ! TOA layer
+!!$                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+!!$                        * scn%op%gas_tau_dvmr(:,i,l,1)
+!!$                else if (i == num_active_levels) then
+!!$                   ! BOA layer
+!!$                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+!!$                        * scn%op%gas_tau_dvmr(:,i-1,l,2)
+!!$                else
+!!$                   ! everything in between
+!!$                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
+!!$                        (scn%op%gas_tau_dvmr(:,i-1,l,2) + &
+!!$                         scn%op%gas_tau_dvmr(:,i,l,1))
+!!$                end if
+!!$
+!!$
+!!$                call oco_type_convolution(scn%op%wl, &
+!!$                     tmp_v3(:), &
+!!$                     this_ILS_delta_lambda(:,:), &
+!!$                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
+!!$                     this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+!!$                     tmp_convolved_gas(:,i), &
+!!$                     ILS_success)
+!!$
+!!$             end do
+!!$
+!!$             call pressure_weighting_function( &
+!!$                  scn%atm%p(1:num_active_levels), &
+!!$                  this_psurf, &
+!!$                  scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1)), &
+!!$                  pwgts)
+!!$
+!!$             do i=1, num_active_levels
+!!$
+!!$                ! This is
+!!$                ! G dot dI/du * XGAS_prior
+!!$                tmp_v1 = matmul(gain_matrix(:,:), tmp_convolved_gas(:,i)) &
+!!$                     * sum(pwgts(:) * (scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1))))
+!!$
+!!$                AK_profile(i) = tmp_v1(SV%idx_gas(j,1)) / pwgts(i)
+!!$
+!!$                write(*,*) l, j, SV%idx_gas(j,1), i, AK_profile(i) * pwgts(i), AK_profile(i), pwgts(i), &
+!!$                     AK_profile(i) - pwgts(i)
+!!$
+!!$             end do
+!!$
+!!$             write(*,*) "GAS: ", MCS%window(i_win)%gases(l)%chars()
+!!$             write(*,*) "XGAS Prior ", 1d6 * dot_product(pwgts, SV%svap(SV%idx_gas(l,1)) * scn%atm%gas_vmr(1:num_active_levels,j))
+!!$             write(*,*) "XGAS", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(1:num_active_levels,j) * SV%svsv(SV%idx_gas(l,1)))
+!!$             write(*,*) "Delta XGAS", 1d6 * dot_product(pwgts, scn%atm%gas_vmr(1:num_active_levels,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
+!!$
+!!$             allocate(tmp_v4(num_active_levels))
+!!$             do i=1, num_active_levels
+!!$                tmp_v4(i) = pwgts(i) * (AK_profile(i) - 1.0d0) &
+!!$                     * scn%atm%gas_vmr(i,j) * (SV%svap(SV%idx_gas(l,1)) - SV%svsv(SV%idx_gas(l,1)))
+!!$                write(*,*) i, tmp_v4(i)
+!!$             end do
+!!$
+!!$             write(*,*) "AK corr XGAS paper Wunch: ", tmp_v4 * 1e6
+!!$             deallocate(tmp_v4)
+!!$
+!!$             write(*,*) "AK corr XGAS Chris      : ", 1d6 * dot_product(AK_profile * pwgts - pwgts, &
+!!$                  scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
+!!$
+!!$
+!!$
+!!$             deallocate(tmp_convolved_gas)
+!!$             deallocate(pwgts)
+!!$             deallocate(AK_profile)
+!!$          end do
 
-             l = SV%gas_idx_lookup(j)
-
-             allocate(AK_profile(num_active_levels))
-             allocate(pwgts(num_active_levels))
-             allocate(tmp_convolved_gas(N_spec, num_active_levels))
-             tmp_convolved_gas(:,:) = 0.0d0
-
-             ! dI / dVMR_level_i
-             do i=1, num_active_levels
-                if (i == 1) then
-                   ! TOA layer
-                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                        * scn%op%gas_tau_dvmr(:,i,l,1)
-                else if (i == num_active_levels) then
-                   ! BOA layer
-                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                        * scn%op%gas_tau_dvmr(:,i-1,l,2)
-                else
-                   ! everything in between
-                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
-                        (scn%op%gas_tau_dvmr(:,i-1,l,2) + &
-                         scn%op%gas_tau_dvmr(:,i,l,1))
-                end if
-
-
-                call oco_type_convolution(scn%op%wl, &
-                     tmp_v3(:), &
-                     this_ILS_delta_lambda(:,:), &
-                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-                     this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-                     tmp_convolved_gas(:,i), &
-                     ILS_success)
-
-             end do
-
-             call pressure_weighting_function( &
-                  scn%atm%p(1:num_active_levels), &
-                  this_psurf, &
-                  scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1)), &
-                  pwgts)
-
-             do i=1, num_active_levels
-
-                ! This is
-                ! G dot dI/du * XGAS_prior
-                tmp_v1 = matmul(gain_matrix(:,:), &
-                     tmp_convolved_gas(:,i)) &
-                     * sum(pwgts(:) * (scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1))))
-
-                AK_profile(i) = tmp_v1(SV%idx_gas(j,1)) / pwgts(i)
-
-                write(*,*) l, j, SV%idx_gas(j,1), i, AK_profile(i) * pwgts(i), AK_profile(i), pwgts(i), AK_profile(i) - pwgts(i)
-
-             end do
-
-             write(*,*) "GAS: ", MCS%window(i_win)%gases(l)%chars()
-             write(*,*) "XGAS Prior ", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j))
-             write(*,*) "XGAS", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j) * SV%svsv(SV%idx_gas(l,1)))
-             write(*,*) "Delta XGAS", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
-
-             allocate(tmp_v4(num_active_levels))
-             do i=1, num_active_levels
-                tmp_v4(i) = pwgts(i) * (AK_profile(i) - 1.0d0) &
-                     * scn%atm%gas_vmr(i,j) * (SV%svap(SV%idx_gas(l,1)) - SV%svsv(SV%idx_gas(l,1)))
-             end do
-
-             write(*,*) "AK corr XGAS paper Wunch: ", sum(tmp_v4) * 1e6
-             deallocate(tmp_v4)
-
-             write(*,*) "AK corr XGAS Chris      : ", 1d6 * dot_product(AK_profile * pwgts - pwgts, &
-                  scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
-
-
-
-             deallocate(tmp_convolved_gas)
-             deallocate(pwgts)
-             deallocate(AK_profile)
-          end do
 
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
@@ -3007,11 +3033,11 @@ contains
              ! where they would belong to. We also make sure it can't
              ! go below or above the first/last level.
 
-             s_start(i) = searchsorted_dp(log(atm%p), &
-                  SV%gas_retrieve_scale_start(i) * log(psurf), .true.)
+             s_start(i) = searchsorted_dp((atm%p), &
+                  SV%gas_retrieve_scale_start(i) * (psurf), .true.)
              s_start(i) = max(1, s_start(i))
-             s_stop(i) = searchsorted_dp(log(atm%p), &
-                  SV%gas_retrieve_scale_stop(i) * log(psurf), .true.) + 1
+             s_stop(i) = searchsorted_dp((atm%p), &
+                  SV%gas_retrieve_scale_stop(i) * (psurf), .true.) + 1
              s_stop(i) = min(size(atm%p), s_stop(i))
 
           end if
@@ -3133,6 +3159,7 @@ contains
     allocate(results%sv_prior(num_fp, num_frames, num_SV))
     allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
     allocate(results%xgas(num_fp, num_frames, num_gas))
+    allocate(results%xgas_AK_corr(num_fp, num_frames, num_gas))
 
     allocate(results%chi2(num_fp, num_frames))
     allocate(results%residual_rms(num_fp, num_frames))
@@ -3156,6 +3183,7 @@ contains
     results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%sv_uncertainty = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%xgas_AK_corr = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -3182,6 +3210,7 @@ contains
     deallocate(results%sv_prior)
     deallocate(results%sv_uncertainty)
     deallocate(results%xgas)
+    deallocate(results%xgas_AK_corr)
     deallocate(results%chi2)
     deallocate(results%residual_rms)
     deallocate(results%dsigma_sq)

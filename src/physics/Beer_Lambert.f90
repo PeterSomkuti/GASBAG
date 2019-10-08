@@ -130,7 +130,7 @@ contains
          psurf, &
          num_active_levels, N_spec, &
          idx_start, idx_stop, &
-         xgas_AK_corr)
+         col_AK)
 
       implicit none
       double precision, intent(in) :: TOA_radiance(:)
@@ -145,7 +145,7 @@ contains
       integer, intent(in) :: N_spec
       integer, intent(in) :: idx_start(:)
       integer, intent(in) :: idx_stop(:)
-      double precision, intent(inout) :: xgas_AK_corr(:)
+      double precision, intent(inout) :: col_AK(:,:)
 
       integer :: N_gas
       integer :: i_gas, i_SV
@@ -161,17 +161,14 @@ contains
 
       double precision, allocatable :: AK_profile(:,:), AK_profile_total(:)
       double precision, allocatable :: tmp_v1(:), tmp_v2(:)
-      double precision, allocatable :: delta_xgas(:)
 
       N_gas = size(scn%op%gas_tau, 3)
-      xgas_AK_corr(:) = 0.0d0
 
       allocate(dI_dVMR(size(TOA_radiance)))
       allocate(tmp_v1(size(SV%svap)))
       allocate(tmp_v2(num_active_levels))
       allocate(AK_profile(SV%num_gas, num_active_levels))
       allocate(AK_profile_total(num_active_levels))
-      allocate(delta_xgas(N_gas))
 
       ! Calculate this for every retrieved gas
       do i_gas=1, N_gas
@@ -185,7 +182,6 @@ contains
          pwgts(:) = 0.0d0
          prior_VMR(:) = 0.0d0
          this_VMR(:) = 0.0d0
-         delta_xgas(:) = 0.0d0
 
          ! Partial derivatives w.r.t. a change in a level
          ! VMR can be computed outside of the SV-gas loop, since
@@ -214,7 +210,6 @@ contains
                  dispersion(:), &
                  dI_dVMR_conv(:,i), &
                  ILS_success)
-
          end do
 
 
@@ -254,9 +249,9 @@ contains
                !tmp_v1(:) = tmp_v1(:)
 
                AK_profile(i_SV, i) = tmp_v1(SV%idx_gas(i_SV, 1)) * dot_product(pwgts, prior_VMR * s_bar)
-               tmp_v2(i) = (AK_profile(i_SV, i) - pwgts(i)) * (prior_VMR(i) - this_VMR(i))
+               !tmp_v2(i) = (AK_profile(i_SV, i) - pwgts(i)) * (prior_VMR(i) - this_VMR(i))
                !write(*,*) i_SV, i, AK_profile(i_SV, i), AK_profile(i_SV, i) - pwgts(i), prior_VMR(i), this_VMR(i), prior_VMR(i) - this_VMR(i)
-               AK_profile_total(i) =  AK_profile_total(i) + AK_profile(i_SV, i)
+               AK_profile_total(i) = AK_profile_total(i) + AK_profile(i_SV, i)
 
             end do
 
@@ -265,6 +260,7 @@ contains
             !write(*,*) i_gas, i_SV, SV%svsv(SV%idx_gas(i_SV, 1)), dot_product(prior_VMR, pwgts)*1d6, delta_xgas(i_gas)*1d6
             !write(*,*) "RESULT ---------------------------"
          end do
+         col_AK(i_gas, 1:num_active_levels) = AK_profile_total(:)
 
 !!$         do i=1, num_active_levels
 !!$            write(*,*) i, AK_profile_total(i), pwgts(i), AK_profile_total(i) - pwgts(i),  prior_VMR(i) - this_VMR(i)
@@ -274,8 +270,6 @@ contains
 !!$         write(*,*) dot_product(pwgts, this_VMR)*1e6, dot_product(pwgts, prior_VMR-this_VMR)*1d6, dot_product(AK_profile_total(:) - pwgts(:),  prior_VMR(:) - this_VMR(:)) * 1e6, sum(tmp_v2)*1e6
 !!$         write(*,*) "RESULT ---------------------------"
 
-
-         xgas_AK_corr(i_gas) = dot_product(AK_profile_total - pwgts, prior_VMR - this_VMR)
       end do
 
 

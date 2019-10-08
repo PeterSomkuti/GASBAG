@@ -23,8 +23,12 @@ for i, band in enumerate(['757', '771']):
     sif_corr = np.zeros_like(sif)
     sif_corr[:] = np.nan
 
-    valid = (cont >= calib_curve.x[0]) & (cont <= calib_curve.x[-1])
-    sif_corr[valid] = sif[valid] - calib_curve(cont)[valid]
+    for fp in range(8):
+
+        valid = (cont[:,fp] >= calib_curve[fp].x[0]) & (cont[:,fp] <= calib_curve[fp].x[-1])
+        sif_corr[valid,fp] = sif[valid,fp] - calib_curve[fp](cont[:,fp])[valid]
+
+
 
     if not 'Fluorescence' in l2['HighLevelResults']:
         l2.create_group('/HighLevelResults/Fluorescence')

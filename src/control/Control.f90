@@ -113,6 +113,10 @@ module control_mod
      double precision, allocatable :: ils_stretch_cov(:)
      !> Names of gases which are present in the window
      type(string), allocatable :: gases(:)
+     !> GAS prior string
+     type(string) :: gas_prior_type_string
+     !> Which type of priors are we using
+     type(string), allocatable :: gas_prior_type(:)
      !> This gas_index variable holds the information about which gas-section (CS_gas)
      !> index corresponds to the gas that is stored in 'gases'
      integer, allocatable :: gas_index(:)
@@ -191,6 +195,10 @@ module control_mod
      logical :: save_radiances
      !> Do we want to override the output file?
      logical :: overwrite_output
+     !> Do we want to store pressure weights?
+     logical :: pressure_weights
+     !> Do we want to store gas averaging kernels?
+     logical :: gas_averaging_kernels
   end type CS_output
 
   type :: CS_gas
@@ -550,6 +558,24 @@ contains
        MCS%output%overwrite_output = string_to_bool(fini_string)
     end if
 
+    call fini_extract(fini, 'output', 'pressure_weights', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%output%pressure_weights = .false.
+    else
+       MCS%output%pressure_weights = string_to_bool(fini_string)
+    end if
+
+    call fini_extract(fini, 'output', 'gas_averaging_kernels', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string == "") then
+       ! If not supplied, default state is "no"
+       MCS%output%gas_averaging_kernels = .false.
+    else
+       MCS%output%gas_averaging_kernels = string_to_bool(fini_string)
+    end if
+
     ! ----------------------------------------------------------------------
 
     ! Instrument section ---------------------------------------------------
@@ -650,6 +676,11 @@ contains
           ! required for a given retrieval setting, will be checked later
           ! on in the code, usually when it's needed the first time
 
+
+          call fini_extract(fini, tmp_str, 'gas_prior_type', &
+               .false., fini_char)
+          fini_string = fini_char
+          MCS%window(window_nr)%gas_prior_type_string = fini_string
 
 
           ! Arrays that are used for our super-duper smart first guess for the
@@ -793,7 +824,10 @@ contains
           call fini_extract(fini, tmp_str, 'gases', .false., fini_string_array)
           if (allocated(fini_string_array)) then
 
+             ! Depending on the number of gases supplied via the "gases" option, we
+             ! allocate that number of fields for the various gas-related variables.
              allocate(MCS%window(window_nr)%gases(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%gas_prior_type(size(fini_string_array)))
              allocate(MCS%window(window_nr)%gas_retrieved(size(fini_string_array)))
              allocate(MCS%window(window_nr)%gas_retrieve_profile(size(fini_string_array)))
              allocate(MCS%window(window_nr)%gas_retrieve_scale(size(fini_string_array)))
@@ -801,7 +835,6 @@ contains
              allocate(MCS%window(window_nr)%gas_retrieve_scale_stop(size(fini_string_array), 99))
              allocate(MCS%window(window_nr)%gas_retrieve_scale_cov(size(fini_string_array), 99))
              allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
-
 
              do i=1, size(fini_string_array)
                 MCS%window(window_nr)%gases(i) = fini_string_array(i)
@@ -947,6 +980,72 @@ contains
 
   end subroutine MCS_find_gases
 
+
+  subroutine MCS_find_gas_priors(window, gas, i_win)
+
+    implicit none
+
+    type(CS_window), intent(inout) :: window(:)
+    type(CS_gas), intent(in) :: gas(:)
+    integer, intent(in) :: i_win
+
+    ! Function name
+    character(len=*), parameter :: fname = "MCS_find_gas_priors"
+    character(len=999) :: tmp_str
+    type(string), allocatable :: split_string(:), prior_strings(:)
+    integer :: i, j
+    integer :: gas_idx, MCS_gas_pos
+    logical :: found_gas
+
+    call window(i_win)%gas_prior_type_string%split(&
+         tokens=split_string, sep=' ', &
+         max_tokens=MAX_GASES)
+
+    ! Split the gas_prior_type string into substrings, separated by spaces
+    do i=1, size(split_string)
+
+       ! And now separate them at the colon ':'
+       call split_string(i)%split(tokens=prior_strings, sep=':', &
+            max_tokens=2)
+
+       write(tmp_str, '(A,A)') "Matching up gas prior for requested gas ", prior_strings(1)%chars()
+       call logger%debug(fname, trim(tmp_str))
+
+       ! Going through the gases, we have to find which one matches the gas
+       ! specified in this prior type
+       found_gas = .false.
+       do j=1, window(i_win)%num_gases
+          ! Skip unused
+          if (.not. gas(j)%used) cycle
+
+          ! Found the gas!
+          if (gas(j)%name == prior_strings(1)) then
+             write(tmp_str, '(A, G0.1, A, A)') "Gas matching gas prior type found at index ", &
+                  j, " with name ", gas(j)%name%chars()
+             call logger%debug(fname, trim(tmp_str))
+             found_gas = .true.
+             gas_idx = j
+             exit
+          end if
+       end do
+
+       ! If gas wasn't found - end it here. We don't want the default behavior to
+       ! be a fallback solution. The user did something wrong, so flag it up here!!
+       if (.not. found_gas) then
+          write(tmp_str, '(A,A)') "No gas matching gas prior type found for requested gas: ", &
+               prior_strings(1)%chars()
+          call logger%fatal(fname, trim(tmp_str))
+          stop 1
+       end if
+
+       ! Write the gas prior type string into the corresponding position in
+       ! MCS%window
+       MCS_gas_pos = MCS%window(i_win)%gas_index(gas_idx)
+       MCS%window(i_win)%gas_prior_type(MCS_gas_pos) = prior_strings(2)%chars()
+
+    end do
+
+  end subroutine MCS_find_gas_priors
 
 
 end module control_mod

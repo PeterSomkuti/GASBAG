@@ -18,7 +18,8 @@ module physical_model_mod
 
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
-  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, MCS_find_gases
+  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, &
+       MCS_find_gases, MCS_find_gas_priors
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use solar_model_mod
@@ -350,6 +351,9 @@ contains
        ! and see if a gas with the corresponding name has been defined.
        call MCS_find_gases(MCS%window, MCS%gas, i_win)
 
+       ! We also check what type of gas priors the user wants to have
+       call MCS_find_gas_priors(MCS%window, MCS%gas, i_win)
+
        ! If we have gases, we want to read in the corresponding spectroscopy data
        ! We have to do this for every microwindow since the cross sections are being
        ! re-gridded for every microwindow.
@@ -401,6 +405,7 @@ contains
                altitude, relative_velocity, relative_solar_velocity)
           ! Grab the L1B stokes coefficients
           call my_instrument%read_stokes_coef(l1b_file_id, band, stokes_coef)
+          stokes_coef(:,:,:) = 1.0d0
           ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
           if (spike_exists) then
@@ -538,7 +543,7 @@ contains
 
        ! And now set up the result container with the appropriate sizes for arrays
        call create_result_container(results, num_frames, num_fp, &
-            size(global_SV%svap), initial_atm%num_gases)
+            size(global_SV%svap), initial_atm%num_gases, initial_atm%num_levels)
 
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, global_SV, i_win)
@@ -574,6 +579,7 @@ contains
        ! As you can see, it does not require much, whereas MPI would be more effort.
        ! Note that other modules in GASBAG have some OMP directives to make sure that
        ! only one thread at a time is accessing and reading from the HDF5 file.
+       ! (notably: reading spectra, writing to a logfile)
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
@@ -589,10 +595,10 @@ contains
 #endif
 
              !write(*,*) land_fraction(i_fp, i_fr)
-             if (land_fraction(i_fp, i_fr) < 100) then
-                call logger%debug(fname, "Skipping water scene.")
-                cycle
-             end if
+             !if (land_fraction(i_fp, i_fr) == 0) then
+             !   call logger%debug(fname, "Skipping water scene.")
+             !   cycle
+             !end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -615,11 +621,11 @@ contains
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
              if (mod(retr_count, 1) == 0) then
-                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
+                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
                      (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', &
-                     this_converged, ", Thread #: ", this_thread
+                     this_converged
                 call logger%info(fname, trim(tmp_str))
              end if
 
@@ -723,12 +729,28 @@ contains
                   trim(tmp_str), &
                   results%xgas(:,:,i), out_dims2d, -9999.99d0)
 
-             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-                  lower_str%chars(), "_ak_corr_", MCS%general%code_name
-             call logger%info(fname, "Writing out: " // trim(tmp_str))
-             call write_DP_hdf_dataset(output_file_id, &
-                  trim(tmp_str), &
-                  results%xgas_AK_corr(:,:,i), out_dims2d, -9999.99d0)
+             out_dims3d(1) = num_fp
+             out_dims3d(2) = num_frames
+             out_dims3d(3) = size(results%col_AK, 4)
+
+             if (MCS%output%gas_averaging_kernels) then
+                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                     lower_str%chars(), "_column_ak_", MCS%general%code_name
+                call logger%info(fname, "Writing out: " // trim(tmp_str))
+                call write_DP_hdf_dataset(output_file_id, &
+                     trim(tmp_str), &
+                     results%col_AK(:,:,i,:), out_dims3d, -9999.99d0)
+             end if
+
+             if (MCS%output%pressure_weights) then
+                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                     lower_str%chars(), "_pressure_weights_", MCS%general%code_name
+                call logger%info(fname, "Writing out: " // trim(tmp_str))
+                call write_DP_hdf_dataset(output_file_id, &
+                     trim(tmp_str), &
+                     results%pwgts(:,:,i,:), out_dims3d, -9999.99d0)
+             end if
+
 
           end if
        end do
@@ -791,6 +813,8 @@ contains
        if (MCS%output%save_radiances) then
 
           out_dims3d = shape(final_radiance)
+
+
           call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
                // MCS%general%code_name)
           write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", MCS%general%code_name
@@ -1472,6 +1496,95 @@ contains
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
 
+       num_active_levels = -1
+       num_levels = -1
+
+       if (num_gases > 0) then
+          ! An atmosphere is only required if there are gases present in the
+          ! microwindow.
+          this_psurf = met_psurf(i_fp, i_fr)
+
+          ! After we've taken a copy of the initial atmosphere,
+          ! we might want to replace some of the prior gases with
+          ! some specialized function. This is done in a two-step
+          ! process: first this "wrapper-type" function is called,
+          ! which contains the more intricate calls to the subroutines
+          ! that actually replace the VMR profiles. These prior gases
+          ! tend to be functions of the scene (lon, lat, time etc.),
+          call replace_prior_VMR(scn, MCS%window(i_win)%gas_prior_type)
+
+          ! Number of levels in the model atmosphere
+          ! AS GIVEN BY THE ATMOSPHERE FILE
+          ! After accounging for surface pressure - refer to num_active_levels
+          num_levels = scn%atm%num_levels
+
+          if (this_psurf < 1.0d-10) then
+             call logger%error(fname, "MET surface pressure is almost 0.")
+             return
+          end if
+
+          ! And get the T and SH MET profiles onto our new atmosphere grid. We are
+          ! sampling it on a log(p) grid.
+
+          call pwl_value_1d( &
+               size(met_P_levels, 1), &
+               log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
+               size(scn%atm%p), &
+               log(scn%atm%p), scn%atm%T)
+
+          call pwl_value_1d( &
+               size(met_P_levels, 1), &
+               log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
+               size(scn%atm%p), &
+               log(scn%atm%p), scn%atm%sh)
+
+          ! Obtain the number of active levels. Loop from the TOA down to the bottom,
+          ! and see where the surface pressure falls into.
+          do j=1, num_levels
+             if (this_psurf > scn%atm%p(j)) then
+                num_active_levels = j+1
+             end if
+
+             ! Should SH drop below 0 for whatever reason, shift it back
+             ! some tiny value.
+             if (scn%atm%sh(j) < 0.0d0) scn%atm%sh(j) = 1.0d-10
+          end do
+
+          ! If psurf > BOA p level, we have a problem and thus can't go on.
+          if (num_active_levels > num_levels) then
+             write(tmp_str, '(A, F10.3, A, F10.3)') "Psurf at ", this_psurf, &
+                  " is larger than p(BOA) at ", scn%atm%p(size(scn%atm%p))
+             call logger%error(fname, trim(tmp_str))
+             return
+          end if
+
+          do i=1, num_gases
+
+             if (MCS%window(i_win)%gases(i) == "H2O") then
+                ! If H2O needs to be retrieved, take it from the MET atmosphere
+                ! specific humidty directly, rather than the H2O column of the
+                ! atmosphere text file.
+                scn%atm%gas_vmr(:,i) = scn%atm%sh / (1.0d0 - scn%atm%sh) * SH_H2O_CONV
+
+             end if
+          end do
+
+       else
+          ! If we don't do gases, just set this variable to zero, mainly to avoid
+          ! potential problems .. nasty segfaults etc.
+          num_active_levels = 0
+       end if
+
+       if (num_levels < 0) then
+          call logger%error(fname, "Error in calculating the total number of atmospheric levels.")
+          return
+       end if
+
+       if (num_active_levels < 0) then
+          call logger%error(fname, "Error in calculating the active number of atmospheric levels.")
+          return
+       end if
+
 
        if (iteration == 1) then
 
@@ -1479,10 +1592,11 @@ contains
           ! for the very first iteration.
 
           divergent_step = .false.
-          ! Initialise Chi2 with an insanely large value
+          ! Initialise Chi2 and related vars with an insanely large value
           this_chi2 = 9.9d9
           old_chi2 = 9.9d10
           linear_prediction_chi2 = 9.9d9
+
           ! For the first iteration, we want to use the prior albedo
           scn%op%albedo(:) = albedo_apriori
           ! and the first guess state vector is the prior
@@ -1491,74 +1605,6 @@ contains
           results%sv_prior(i_fp, i_fr, :) = SV%svap
           last_successful_sv(:) = SV%svap
           old_sv(:) = SV%svap
-
-          if (num_gases > 0) then
-             ! An atmosphere is only required if there are gases present in the
-             ! microwindow.
-             this_psurf = met_psurf(i_fp, i_fr)
-             this_atm = initial_atm
-
-             ! Number of levels in the model atmosphere
-             ! AS GIVEN BY THE ATMOSPHERE FILE
-             ! After accounging for surface pressure - refer to num_active_levels
-             num_levels = scn%atm%num_levels
-
-             if (this_psurf < 1.0d-10) then
-                call logger%error(fname, "MET surface pressure is almost 0.")
-                return
-             end if
-
-             ! And get the T and SH MET profiles onto our new atmosphere grid. We are
-             ! sampling it on a log(p) grid.
-
-             call pwl_value_1d( &
-                  size(met_P_levels, 1), &
-                  log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
-                  size(scn%atm%p), &
-                  log(scn%atm%p), scn%atm%T)
-
-             call pwl_value_1d( &
-                  size(met_P_levels, 1), &
-                  log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
-                  size(scn%atm%p), &
-                  log(scn%atm%p), scn%atm%sh)
-
-             ! Obtain the number of active levels. Loop from the TOA down to the bottom,
-             ! and see where the surface pressure falls into.
-             do j=1, num_levels
-                if (this_psurf > scn%atm%p(j)) then
-                   num_active_levels = j+1
-                end if
-
-                ! Should SH drop below 0 for whatever reason, shift it back
-                ! some tiny value.
-                if (scn%atm%sh(j) < 0.0d0) scn%atm%sh(j) = 1.0d-10
-             end do
-
-             ! If psurf > BOA p level, we have a problem and thus can't go on.
-             if (num_active_levels > num_levels) then
-                write(tmp_str, '(A, F10.3, A, F10.3)') "Psurf at ", this_psurf, &
-                     " is larger than p(BOA) at ", scn%atm%p(size(this_atm%p))
-                call logger%error(fname, trim(tmp_str))
-                return
-             end if
-
-             do i=1, num_gases
-
-                if (MCS%window(i_win)%gases(i) == "H2O") then
-                   ! If H2O needs to be retrieved, take it from the MET atmosphere
-                   ! specific humidty directly, rather than the H2O column of the
-                   ! atmosphere text file.
-                   scn%atm%gas_vmr(:,i) = scn%atm%sh / (1.0d0 - scn%atm%sh) * SH_H2O_CONV
-
-                end if
-             end do
-
-          else
-             ! If we don't do gases, just set this variable to zero, mainly to avoid
-             ! potential problems .. nasty segfaults etc.
-             Num_active_levels = 0
-          end if
 
        else
           ! This is not the very first iteration!
@@ -1598,7 +1644,7 @@ contains
              ! The number of active levels has to be inferred for every
              ! iteration if we are retrieving surface pressure
              do j=1, num_levels
-                if (this_psurf > this_atm%p(j)) then
+                if (this_psurf > scn%atm%p(j)) then
                    num_active_levels = j+1
                 end if
              end do
@@ -1687,6 +1733,7 @@ contains
              ! segment, and applies the retrieved scale factor to it.
 
              ! Copy over this gases' VMR profile
+
              this_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
              do_gas_jac = .false.
 
@@ -1713,6 +1760,7 @@ contains
                       this_vmr_profile(s_start(i):s_stop(i), j) = &
                            this_vmr_profile(s_start(i):s_stop(i), j) &
                            * SV%svsv(SV%idx_gas(i,1))
+
                    end if
                 end do
 
@@ -1769,7 +1817,7 @@ contains
                   scn%atm%p(:), & ! Atmospheric profile pressures
                   scn%atm%T(:) + this_temp_offset, & ! Atmospheric T profile
                   scn%atm%sh(:), & ! Atmospheric profile humidity
-                  scn%atm%grav(:), & ! Gravity per level
+                  scn%atm%grav(:)*0.0d0 + 9.81d0, & ! Gravity per level
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                   MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
@@ -1807,6 +1855,7 @@ contains
           ! do not like gas OD = 0
           where(scn%op%gas_tau < 1d-10) scn%op%gas_tau = 1d-10
           where(scn%op%ray_tau < 1d-10) scn%op%ray_tau = 1d-10
+
           ! Total optical depth is calculated as sum of all gas ODs
           scn%op%total_tau(:) = sum(sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau, dim=2)
           scn%op%omega(:,:) = scn%op%ray_tau / (sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau)
@@ -2247,7 +2296,6 @@ contains
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
 
-
        call cpu_time(cpu_conv_start)
 
        select type(my_instrument)
@@ -2487,7 +2535,7 @@ contains
                 ! Here we need to do the same thing as before when calculating
                 ! gas OD's. Take local copy of VMR profile, and re-scale the portions
                 ! of the profile which, according to the retrieval, have changed.
-                this_vmr_profile(:,j) = this_atm%gas_vmr(:,j)
+                this_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
 
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
@@ -2500,7 +2548,7 @@ contains
 
                       ! We also want to have the corresponding number of molecules of dry air
                       ! for the various sections of the atmopshere.
-                      results%ndry(i_fp, i_fr, i) = sum(this_atm%ndry(s_start(i):s_stop(i)-1))
+                      results%ndry(i_fp, i_fr, i) = sum(scn%atm%ndry(s_start(i):s_stop(i)-1))
                    end if
                 end do
 
@@ -2511,6 +2559,8 @@ contains
                      this_vmr_profile(1:num_active_levels,j), &
                      pwgts)
 
+                results%pwgts(i_fp, i_fr, j, 1:num_active_levels) = pwgts(:)
+
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) = dot_product( &
                      pwgts(:), this_vmr_profile(1:num_active_levels, j) &
@@ -2520,15 +2570,20 @@ contains
 
              deallocate(pwgts)
 
-             call calculate_BL_scale_AK_corr(&
-                  radiance_calc_work_hi(:), scn, SV, &
-                  gain_matrix(:,:), &
-                  this_ILS_delta_lambda(:,:), &
-                  ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
-                  this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-                  this_psurf, num_active_levels, N_spec, &
-                  s_start, s_stop, &
-                  results%xgas_AK_corr(i_fp, i_fr, :))
+             if (MCS%output%gas_averaging_kernels) then
+                ! Averaging kernels for gases are computationally slightly costly,
+                ! thus we skip this part if not requested.
+
+                call calculate_BL_scale_AK_corr(&
+                     radiance_calc_work_hi(:), scn, SV, &
+                     gain_matrix(:,:), &
+                     this_ILS_delta_lambda(:,:), &
+                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
+                     this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                     this_psurf, num_active_levels, N_spec, &
+                     s_start, s_stop, &
+                     results%col_ak(i_fp, i_fr, :, :))
+             end if
 
           end if
 
@@ -2660,90 +2715,6 @@ contains
           ! Calculate the Gain matrix
           gain_matrix(:,:) = matmul(matmul(Shat(:,:), transpose(K)), Se_inv)
 
-          ! Experimental code for scale averaging kernels
-!!$          do j=1, SV%num_gas
-!!$
-!!$             l = SV%gas_idx_lookup(j)
-!!$
-!!$             allocate(AK_profile(num_active_levels))
-!!$             allocate(pwgts(num_active_levels))
-!!$             allocate(tmp_convolved_gas(N_spec, num_active_levels))
-!!$             tmp_convolved_gas(:,:) = 0.0d0
-!!$
-!!$             ! dI / dVMR_level_i
-!!$             do i=1, num_active_levels
-!!$                if (i == 1) then
-!!$                   ! TOA layer
-!!$                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-!!$                        * scn%op%gas_tau_dvmr(:,i,l,1)
-!!$                else if (i == num_active_levels) then
-!!$                   ! BOA layer
-!!$                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-!!$                        * scn%op%gas_tau_dvmr(:,i-1,l,2)
-!!$                else
-!!$                   ! everything in between
-!!$                   tmp_v3(:) = -radiance_calc_work_hi(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
-!!$                        (scn%op%gas_tau_dvmr(:,i-1,l,2) + &
-!!$                         scn%op%gas_tau_dvmr(:,i,l,1))
-!!$                end if
-!!$
-!!$
-!!$                call oco_type_convolution(scn%op%wl, &
-!!$                     tmp_v3(:), &
-!!$                     this_ILS_delta_lambda(:,:), &
-!!$                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
-!!$                     this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-!!$                     tmp_convolved_gas(:,i), &
-!!$                     ILS_success)
-!!$
-!!$             end do
-!!$
-!!$             call pressure_weighting_function( &
-!!$                  scn%atm%p(1:num_active_levels), &
-!!$                  this_psurf, &
-!!$                  scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1)), &
-!!$                  pwgts)
-!!$
-!!$             do i=1, num_active_levels
-!!$
-!!$                ! This is
-!!$                ! G dot dI/du * XGAS_prior
-!!$                tmp_v1 = matmul(gain_matrix(:,:), tmp_convolved_gas(:,i)) &
-!!$                     * sum(pwgts(:) * (scn%atm%gas_vmr(1:num_active_levels, l) * SV%svap(SV%idx_gas(j,1))))
-!!$
-!!$                AK_profile(i) = tmp_v1(SV%idx_gas(j,1)) / pwgts(i)
-!!$
-!!$                write(*,*) l, j, SV%idx_gas(j,1), i, AK_profile(i) * pwgts(i), AK_profile(i), pwgts(i), &
-!!$                     AK_profile(i) - pwgts(i)
-!!$
-!!$             end do
-!!$
-!!$             write(*,*) "GAS: ", MCS%window(i_win)%gases(l)%chars()
-!!$             write(*,*) "XGAS Prior ", 1d6 * dot_product(pwgts, SV%svap(SV%idx_gas(l,1)) * scn%atm%gas_vmr(1:num_active_levels,j))
-!!$             write(*,*) "XGAS", 1d6 * dot_product(pwgts,  scn%atm%gas_vmr(1:num_active_levels,j) * SV%svsv(SV%idx_gas(l,1)))
-!!$             write(*,*) "Delta XGAS", 1d6 * dot_product(pwgts, scn%atm%gas_vmr(1:num_active_levels,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
-!!$
-!!$             allocate(tmp_v4(num_active_levels))
-!!$             do i=1, num_active_levels
-!!$                tmp_v4(i) = pwgts(i) * (AK_profile(i) - 1.0d0) &
-!!$                     * scn%atm%gas_vmr(i,j) * (SV%svap(SV%idx_gas(l,1)) - SV%svsv(SV%idx_gas(l,1)))
-!!$                write(*,*) i, tmp_v4(i)
-!!$             end do
-!!$
-!!$             write(*,*) "AK corr XGAS paper Wunch: ", tmp_v4 * 1e6
-!!$             deallocate(tmp_v4)
-!!$
-!!$             write(*,*) "AK corr XGAS Chris      : ", 1d6 * dot_product(AK_profile * pwgts - pwgts, &
-!!$                  scn%atm%gas_vmr(:,j) * (SV%svsv(SV%idx_gas(l,1)) - SV%svap(SV%idx_gas(l,1))))
-!!$
-!!$
-!!$
-!!$             deallocate(tmp_convolved_gas)
-!!$             deallocate(pwgts)
-!!$             deallocate(AK_profile)
-!!$          end do
-
-
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
 
@@ -2773,6 +2744,13 @@ contains
           end do
           close(funit)
           call logger%debug(fname, "Written file: jacobian.dat (spectral x statevector)")
+
+          open(file="jacobian_hi.dat", newunit=funit)
+          do i=1, N_hires
+             write(funit,*) (K_hi(i, j), j=1, N_sv)
+          end do
+          close(funit)
+          call logger%debug(fname, "Written file: jacobian_hi.dat (spectral hi-res x statevector)")
 
           open(file="ak_matrix.dat", newunit=funit)
           do i=1, N_sv
@@ -3148,10 +3126,10 @@ contains
   !> @param num_fp Number of footprints
   !> @param num_SV Number of state vector elements
   !> @param num_gas Number of retrieved (!) gases
-  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas)
+  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas, num_level)
     implicit none
     type(result_container), intent(inout) :: results
-    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas
+    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas, num_level
 
     allocate(results%sv_names(num_SV))
 
@@ -3159,7 +3137,8 @@ contains
     allocate(results%sv_prior(num_fp, num_frames, num_SV))
     allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
     allocate(results%xgas(num_fp, num_frames, num_gas))
-    allocate(results%xgas_AK_corr(num_fp, num_frames, num_gas))
+    allocate(results%pwgts(num_fp, num_frames, num_gas, num_level))
+    allocate(results%col_ak(num_fp, num_frames, num_gas, num_level))
 
     allocate(results%chi2(num_fp, num_frames))
     allocate(results%residual_rms(num_fp, num_frames))
@@ -3183,7 +3162,8 @@ contains
     results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%sv_uncertainty = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%xgas_AK_corr = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%pwgts = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%col_ak = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -3210,7 +3190,8 @@ contains
     deallocate(results%sv_prior)
     deallocate(results%sv_uncertainty)
     deallocate(results%xgas)
-    deallocate(results%xgas_AK_corr)
+    deallocate(results%pwgts)
+    deallocate(results%col_ak)
     deallocate(results%chi2)
     deallocate(results%residual_rms)
     deallocate(results%dsigma_sq)

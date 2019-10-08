@@ -171,6 +171,7 @@ contains
     ! Set altitudes to zero, and the lowest level to the altitude
     scn%atm%altitude_levels(:) = 0.0d0
     scn%atm%altitude_levels(scn%atm%num_levels) = scn%alt
+    scn%atm%grav(scn%atm%num_levels) = jpl_gravity(scn%lat, scn%alt)
     scn%atm%ndry(:) = 0.0d0
 
     ! Loop through layers, starting with the bottom-most (surface) one
@@ -188,12 +189,12 @@ contains
        dz = logratio * Tv * Rd / g_layer
        constant = dP / (DRY_AIR_MASS * g_layer)
 
-       ! Write the important stuff back into the
-       !----------------------------------------------
-       scn%atm%grav(i) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i))
+       ! Write the important stuff back into the scene object
+       !-----------------------------------------------------
        scn%atm%ndry(i) = constant * (1.0d0 - SH_layer)
        scn%atm%altitude_levels(i) = scn%atm%altitude_levels(i+1) + dz
-       !----------------------------------------------
+       scn%atm%grav(i) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i))
+       !-----------------------------------------------------
 
     end do
 
@@ -452,6 +453,9 @@ contains
                 ! Check if gas description matches gases we know
                 if (split_string(j) == gas_strings(i)) then
                    this_gas_index(i) = j
+                   atm%gas_index(i) = j
+                   atm%gas_names(i) = split_string(j)%lower()
+
                    write(tmp_str, '(A,A,A,G0.1)') "Index for atmosphere gas ", &
                         split_string(j)%chars(), ": ", j
                    call logger%debug(fname, trim(tmp_str))
@@ -523,6 +527,51 @@ contains
     close(funit)
 
   end subroutine read_atmosphere_file
+
+  !> @begin Wrapper to replace prior VMRs with special functions
+  subroutine replace_prior_VMR(scn, prior_types)
+
+    type(scene), intent(inout) :: scn
+    type(string), intent(in) :: prior_types(:)
+
+    ! Function name
+    character(len=*), parameter :: fname = "replace_prior_VMR"
+    character(len=999) :: tmp_str
+
+    integer :: i
+
+    ! The prior_types are in order of scn%atm%gas_vmr, so
+    ! we can calculate a new prior using prior_type(i) and stick
+    ! it into scn%atm%gas_vmr(:,i).
+
+    do i=1, size(prior_types)
+
+
+
+       ! Nothing to do if this string is empty
+       if (prior_types(i) == "") cycle
+
+
+       if (prior_types(i) == "SC4C2018") then
+          ! Max Reuter / Oliver Schneising
+          ! CH4 profiles as derived from a climatology file
+
+
+       else
+          ! If the prior type is not implemented, the user has made a mistake.
+          ! Again, we are terminating here immediately, since falling back to
+          ! some default behavior is not a good option..
+
+          write(tmp_str, '(A,A)') "Sorry, the following prior VMR function " &
+              // "is not implemented: ", prior_types(i)%chars()
+          call logger%fatal(fname, trim(tmp_str))
+          stop 1
+       end if
+
+    end do
+
+  end subroutine replace_prior_VMR
+
 
 
 end module physical_model_addon_mod

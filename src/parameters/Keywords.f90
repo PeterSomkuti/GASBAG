@@ -94,6 +94,8 @@ contains
     valid_options(5,1) = "output_file"
     valid_options(5,2) = "save_radiances"
     valid_options(5,3) = "overwrite_output"
+    valid_options(5,4) = "pressure_weights"
+    valid_options(5,5) = "gas_averaging_kernels"
 
     ! Solar model type and file path
     valid_sections(6)  = "solar"
@@ -144,6 +146,7 @@ contains
        valid_options(this_idx,34) = "xrtm_options"
        valid_options(this_idx,35) = "xrtm_solvers"
        valid_options(this_idx,36) = "polarization"
+       valid_options(this_idx,37) = "gas_prior_type"
     end do
 
     ! Section for gases

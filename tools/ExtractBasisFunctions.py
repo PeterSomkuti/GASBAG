@@ -47,6 +47,7 @@ import sys
 import os.path
 import logging
 import h5py
+from pyhdf.SD import SD, SDC
 import palettable
 from matplotlib import pyplot as plt
 
@@ -114,7 +115,7 @@ def filter_radiances_by_similarity(rad_array, percentile=80):
     return rad_array[good]
 
 def normalize_radiances(rad_array, num_iter=5, max_filter=1.10,
-                        fname=''):
+                        fname=None):
     """Here, we normalize an array of radiances (samples, spectral index) by
 dividing through a best-fit slope that characterises the continuum
 
@@ -149,14 +150,15 @@ dividing through a best-fit slope that characterises the continuum
 
 
     ## temporary - save a nice plot of all considered spectra
-    fig = plt.figure()
-    plt.plot(rad_norm[good_spectra, :].T, alpha=0.01, c='k', lw=1.0)
-    plt.plot(np.max(rad_norm[good_spectra, :], axis=0), lw=1.0, c='blue')
-    plt.plot(np.min(rad_norm[good_spectra, :], axis=0), lw=1.0, c='red')
-    plt.plot(np.median(rad_norm[good_spectra, :], axis=0), lw=1.0, c='green')
-    plt.title(f'N={len(good_spectra)}')
-    plt.savefig(fname)
-    plt.close()
+    if fname is not None:
+        fig = plt.figure()
+        plt.plot(rad_norm[good_spectra, :].T, alpha=0.01, c='k', lw=1.0)
+        plt.plot(np.max(rad_norm[good_spectra, :], axis=0), lw=1.0, c='blue')
+        plt.plot(np.min(rad_norm[good_spectra, :], axis=0), lw=1.0, c='red')
+        plt.plot(np.median(rad_norm[good_spectra, :], axis=0), lw=1.0, c='green')
+        plt.title(f'N={len(good_spectra)}')
+        plt.savefig(fname)
+        plt.close()
 
     return rad_norm[good_spectra, :]
 
@@ -469,6 +471,8 @@ if __name__ == '__main__':
                         help="Path to output file (will be overwritten)")
     parser.add_argument('-lc', dest='lc', required=True,
                         help="Path to land cover file")
+    parser.add_argument('-lctype', dest='lctype', required=True,
+                        help="Type of LC map (modis/esa)")
     args = parser.parse_args()
 
     # First, check if the command-line arguments are sensible
@@ -502,22 +506,31 @@ if __name__ == '__main__':
     ###########################################################################
     ######### LC file section #################################################
 
-    # Read the LC data
-    nc = Dataset(args.lc, 'r')
-    logger.info(f"Succesfully opened LC data at {args.lc}")
+    if (args.lctype == "esa"):
+        # Read the LC data
+        nc = Dataset(args.lc, 'r')
+        logger.info(f"Succesfully opened LC data at {args.lc}")
 
-    # And read all necessary data into memory (lon, lat, LC classes).
-    logger.info(f"Reading LC data into memory..")
+        # And read all necessary data into memory (lon, lat, LC classes).
+        logger.info(f"Reading LC data into memory..")
 
-    LC_lon = nc.variables['lon'][:]
-    LC_lat = nc.variables['lat'][:]
-    #LC = nc.variables['lccs_class']
-    # Or do this if you want to read the whole dataset into memory at once
-    LC = nc.variables['lccs_class'][:]
-    # What are the possible LC codes?
-    LC_codes = nc.variables['lccs_class'].flag_values.astype('uint8')
+        LC_lon = nc.variables['lon'][:]
+        LC_lat = nc.variables['lat'][:]
+        #LC = nc.variables['lccs_class']
+        # Or do this if you want to read the whole dataset into memory at once
+        LC = nc.variables['lccs_class'][:]
+        # What are the possible LC codes?
+        LC_codes = nc.variables['lccs_class'].flag_values.astype('uint8')
 
-    logger.info(f"Reading done.")
+        logger.info(f"Reading done.")
+
+    elif (args.lctype == "modis"):
+        modis_lc = SD(args.lc, SDC.READ)
+        LC = modis_lc.select('Majority_Land_Cover_Type_1')[:]
+        LC_lon = np.linspace(-180, 180, 7201)
+        LC_lat = np.linspace(-90, 90, 3601)
+
+        logger.info(f"Finished reading MODIS LC from {args.lc}.")
 
     ###########################################################################
     # Loop through all L1B files supplied by the user and perform the
@@ -552,19 +565,31 @@ if __name__ == '__main__':
             logger.critical(f"{instrument} is not implemented here!")
             sys.exit(1)
 
-        # Now onto grabbing the LC information
-        LC_data = grab_LC_data(lon, lat, LC, LC_lon, LC_lat, LC_codes)
+        if (args.lctype == "esa"):
+            # Now onto grabbing the LC information
+            LC_data = grab_LC_data(lon, lat, LC, LC_lon, LC_lat, LC_codes)
 
-        # And masking those soundings, which are eligible for
-        # vegetation-free basis function extraction.
-        bare_soundings = identify_bare_soundings(LC_data, LC_codes,
-                                                 [190,  # Urban
-                                                  200,  # Bare
-                                                  201,  # Other bare
-                                                  202,  # Also bare
-                                                  210,  # Water bodies
-                                                  220], # Permanent snow/ice
-                                                 cf_threshold=0.95)
+            # And masking those soundings, which are eligible for
+            # vegetation-free basis function extraction.
+            bare_soundings = identify_bare_soundings(LC_data, LC_codes,
+                                                     [190,  # Urban
+                                                      200,  # Bare
+                                                      201,  # Other bare
+                                                      202,  # Also bare
+                                                      210,  # Water bodies
+                                                      220], # Permanent snow/ice
+                                                     cf_threshold=0.95)
+        elif (args.lctype == "modis"):
+
+            modis_lon_idx = np.searchsorted(LC_lon, lon) - 1
+            modis_lat_idx = len(LC_lat) - np.searchsorted(LC_lat, lat) - 1
+            LC_data =  LC[modis_lat_idx, modis_lon_idx]
+            bare_soundings = np.where(
+                (LC_data == 0) |
+                (LC_data == 16) |
+                (LC_data == 15) |
+                (LC_data == 13)
+            )
 
         # Grab the radiances that we need, along with pixel indices
         radiances, idx_min, idx_max = \
@@ -577,7 +602,8 @@ if __name__ == '__main__':
             # But we also want to filter them afterwards
             temp = normalize_radiances(radiances[fp], num_iter=3,
                                        max_filter=max_filter,
-                                       fname=f'{l1b_filename}_FP{fp+1}_allspectra.png')
+                                       fname=None)
+                                       #fname=f'{l1b_filename}_FP{fp+1}_allspectra.png')
             norm_radiances[fp] = filter_radiances_by_similarity(
                 temp, percentile=similarity_percentile)
 
@@ -671,5 +697,9 @@ if __name__ == '__main__':
                                      data=outarr)
 
     # Close the LC file
-    nc.close()
+    if (args.lctype == "esa"):
+        nc.close()
+    elif (args.lctype == "modis"):
+        SD.end()
+
     logger.info("All done. Have a good day.")

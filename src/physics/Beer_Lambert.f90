@@ -246,29 +246,13 @@ contains
                ! G dot dI/dVMR is a vector of length(SV)
                tmp_v1(:) = matmul(gain_matrix, dI_dVMR_conv(:, i))
                ! Now multiply by (h^T dot [prior_VMR * s_bar])
-               !tmp_v1(:) = tmp_v1(:)
-
                AK_profile(i_SV, i) = tmp_v1(SV%idx_gas(i_SV, 1)) * dot_product(pwgts, prior_VMR * s_bar)
-               !tmp_v2(i) = (AK_profile(i_SV, i) - pwgts(i)) * (prior_VMR(i) - this_VMR(i))
-               !write(*,*) i_SV, i, AK_profile(i_SV, i), AK_profile(i_SV, i) - pwgts(i), prior_VMR(i), this_VMR(i), prior_VMR(i) - this_VMR(i)
                AK_profile_total(i) = AK_profile_total(i) + AK_profile(i_SV, i)
 
             end do
 
-            !delta_xgas(i_gas) = delta_xgas(i_gas) + dot_product(tmp_v2, pwgts)
-            !write(*,*) "RESULT ---------------------------"
-            !write(*,*) i_gas, i_SV, SV%svsv(SV%idx_gas(i_SV, 1)), dot_product(prior_VMR, pwgts)*1d6, delta_xgas(i_gas)*1d6
-            !write(*,*) "RESULT ---------------------------"
          end do
          col_AK(i_gas, 1:num_active_levels) = AK_profile_total(:)
-
-!!$         do i=1, num_active_levels
-!!$            write(*,*) i, AK_profile_total(i), pwgts(i), AK_profile_total(i) - pwgts(i),  prior_VMR(i) - this_VMR(i)
-!!$         end do
-!!$
-!!$         write(*,*) "RESULT ---------------------------"
-!!$         write(*,*) dot_product(pwgts, this_VMR)*1e6, dot_product(pwgts, prior_VMR-this_VMR)*1d6, dot_product(AK_profile_total(:) - pwgts(:),  prior_VMR(:) - this_VMR(:)) * 1e6, sum(tmp_v2)*1e6
-!!$         write(*,*) "RESULT ---------------------------"
 
       end do
 

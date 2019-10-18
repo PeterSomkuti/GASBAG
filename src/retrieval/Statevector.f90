@@ -20,49 +20,9 @@ module statevector_mod
         double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
     end type
 
-  !> This structure contains the result data that will be stored in the output HDF file.
-  type result_container
-     !> State vector names (SV number)
-     type(string), allocatable :: sv_names(:)
-     !> Retrieved state vector (SV number, footprint, frame)
-     double precision, allocatable :: sv_retrieved(:,:,:)
-     !> State vector prior (SV number, footprint, frame)
-     double precision, allocatable :: sv_prior(:,:,:)
-     !> State vector posterior uncertainty (SV number, footprint, frame)
-     double precision, allocatable :: sv_uncertainty(:,:,:)
-     !> Column-average dry air mixing ratio for retrieved gases (footprint, frame, gas_number)
-     double precision, allocatable :: xgas(:,:,:)
-     !> Pressure weighting functions (footprint, frame, gas_number, pressure level)
-     double precision, allocatable :: pwgts(:,:,:,:)
-     !> Column averaging kernels (footprint, frame, gas_number, pressure level)
-     double precision, allocatable :: col_ak(:,:,:,:)
-     !> Final Chi2 (footprint, frame)
-     double precision, allocatable :: chi2(:,:)
-     !> Final residual RMS (footprint, frame)
-     double precision, allocatable :: residual_rms(:,:)
-     !> Final dsigma-squared
-     double precision, allocatable :: dsigma_sq(:,:)
-     !> Final number of iterations
-     integer, allocatable :: num_iterations(:,:)
-     !> Converged or not? (1=converged, 0=not converged, -1=not properly run)
-     integer, allocatable :: converged(:,:)
-     !> SNR estimate (mean of per-pixel SNR)
-     double precision, allocatable :: SNR(:,:)
-     !> SNR standard deviation (std of per-pixel SNR)
-     double precision, allocatable :: SNR_std(:,:)
-     !> Continuum level radiance estimate
-     double precision, allocatable :: continuum(:,:)
-     !> Single-sounding retrieval processing time
-     double precision, allocatable :: processing_time(:,:)
-     !> Number of moles of dry air per m2 for various sections
-     !> of the model atmosphere - corresponding to retrieved
-     !> gas scale factors.
-     double precision, allocatable :: ndry(:,:,:)
-
-  end type result_container
 
     public initialize_statevector, parse_and_initialize_SV, &
-         clear_SV, assign_SV_names_to_result
+         clear_SV
 
 contains
 
@@ -655,12 +615,6 @@ contains
     ! Simply just count the number of gases and add either 1
     ! or the number of levels, depending on retrieval type.
 
-    !count_gas = 0 ! This gives us the number of retrieved gases
-    !do i=1, MCS%window(i_win)%num_gases
-    !   if (.not. MCS%window(i_win)%gas_retrieved(i)) cycle
-    !   count_gas = count_gas + count(MCS%window(i_win)%gas_retrieve_scale_start(i, :) /= -1)
-    !end do
-
     count_gas = sum(gas_retr_count)
 
     sv%num_gas = count_gas
@@ -709,9 +663,12 @@ contains
                    sv%idx_gas(cnt, 1) = sv_count
                    sv%gas_idx_lookup(cnt) = i
 
-                   sv%gas_retrieve_scale_start(cnt) = MCS%window(i_win)%gas_retrieve_scale_start(i, j)
-                   sv%gas_retrieve_scale_stop(cnt) = MCS%window(i_win)%gas_retrieve_scale_stop(i, j)
-                   sv%gas_retrieve_scale_cov(cnt) = MCS%window(i_win)%gas_retrieve_scale_cov(i, j)
+                   sv%gas_retrieve_scale_start(cnt) = &
+                        MCS%window(i_win)%gas_retrieve_scale_start(i, j)
+                   sv%gas_retrieve_scale_stop(cnt) = &
+                        MCS%window(i_win)%gas_retrieve_scale_stop(i, j)
+                   sv%gas_retrieve_scale_cov(cnt) = &
+                        MCS%window(i_win)%gas_retrieve_scale_cov(i, j)
                    cnt = cnt + 1
                 end do
              end if
@@ -738,120 +695,7 @@ contains
 
   end subroutine initialize_statevector
 
-  !> @brief Creates human-readable names for state vector elements
-  !>
-  !> The idea is faily simple: we loop through all the state vector elements,
-  !> and then check for each one if there is a corresponding SV\%idx_* associated with
-  !> that element position. Based on that, we create a name for the state vector
-  !> element, which usually has the parameter number (e.g. albedo order) baked in.
-  !> @param results Result container
-  !> @param SV State vector object
-  !> @param i_win Retrieval window index for MCS
-  subroutine assign_SV_names_to_result(results, SV, i_win)
-    implicit none
-    type(result_container), intent(inout) :: results
-    type(statevector), intent(in) :: SV
-    integer, intent(in) :: i_win
 
-    type(string) :: lower_str
-    character(len=999) :: tmp_str
-    integer :: i,j,k
-
-    i = 1
-    do while (i <= size(SV%svsv))
-
-       ! Albedo names
-       do j=1, SV%num_albedo
-          if (SV%idx_albedo(j) == i) then
-             write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! SIF name (really only one at this point)
-       do j=1, SV%num_sif
-          if (SV%idx_sif(j) == i) then
-             write(tmp_str, '(A)') "sif_radiance"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! ZLO name
-       do j=1, SV%num_zlo
-          if (SV%idx_zlo(j) == i) then
-             write(tmp_str, '(A)') "zero_level_offset"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       do j=1, SV%num_temp
-          if (SV%idx_temp(j) == i) then
-             write(tmp_str, '(A)') "temperature_offset"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! Solar shift name
-       if (SV%idx_solar_shift(1) == i) then
-          write(tmp_str, '(A,A)') "solar_shift"
-          results%sv_names(i) = trim(tmp_str)
-       end if
-
-       ! Solar stretch name
-       if (SV%idx_solar_stretch(1) == i) then
-          write(tmp_str, '(A)') "solar_stretch"
-          results%sv_names(i) = trim(tmp_str)
-       end if
-
-       ! Surface pressure name
-       do j=1, SV%num_psurf
-          if (SV%idx_psurf(j) == i) then
-             write(tmp_str, '(A)') "surface_pressure"
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! Dispersion parameter names
-       do j=1, SV%num_dispersion
-          if (SV%idx_dispersion(j) == i) then
-             write(tmp_str, '(A,G0.1)') "dispersion_order_", j-1
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! ILS parameter names
-       do j=1, SV%num_ils_stretch
-          if (SV%idx_ils_stretch(j) == i) then
-             write(tmp_str, '(A,G0.1)') "ils_stretch_order_", j-1
-             results%sv_names(i) = trim(tmp_str)
-          end if
-       end do
-
-       ! Retrieved gas names (scalar retrieval only so far)
-       k = 1
-       do j=1, SV%num_gas
-          ! Check if this SV element is a scalar retrieval
-          if (SV%idx_gas(j,1) == i) then
-             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
-                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
-
-                lower_str = MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%lower()
-                write(tmp_str, '(A)') trim(lower_str%chars() // "_scale_")
-                write(tmp_str, '(A, F4.2)') trim(tmp_str), &
-                     SV%gas_retrieve_scale_start(j)
-                write(tmp_str, '(A,A,F4.2)') trim(tmp_str), "_" , &
-                     SV%gas_retrieve_scale_stop(j)
-                results%sv_names(i) = trim(tmp_str)
-
-                k = k + 1
-             end if
-          end if
-       end do
-
-       i = i+1
-    end do
-
-  end subroutine assign_SV_names_to_result
 
 
 end module

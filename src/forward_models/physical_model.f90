@@ -639,6 +639,16 @@ contains
        ! HDF OUTPUT
        ! Here, we write out the various arrays into HDF datasets
        !---------------------------------------------------------------------
+       !
+       ! The general idea is to
+       ! a) Create a string that corresponds to the output HDF dataset, like
+       !    RetrievalResults/physical/ch4/reduced_chi_squared_gbg
+       ! b) (optional) re-assign the dataset dimensions needed to write the
+       !    arrays into the HDF file using write_*_hdf_dataset
+       ! c) Call the write_*_hdf_dataset, usually using the results%** array
+       !    to store those values into the HDF file
+       !
+       !---------------------------------------------------------------------
 
        ! Create an HDF group for all windows separately
        group_name = "RetrievalResults/physical/" // trim(MCS%window(i_win)%name%chars())
@@ -662,7 +672,8 @@ contains
        if (allocated(met_psurf)) then
           call logger%info(fname, "Writing out: " // trim(group_name) // &
                "/surface_pressure_apriori_" // MCS%general%code_name)
-          write(tmp_str, '(A,A,A)') trim(group_name), "/surface_pressure_apriori_", MCS%general%code_name
+          write(tmp_str, '(A,A,A)') trim(group_name), "/surface_pressure_apriori_", &
+               MCS%general%code_name
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
        end if
@@ -717,8 +728,21 @@ contains
           end if
        end do
 
+       out_dims3d(1) = num_fp
+       out_dims3d(2) = num_frames
+       out_dims3d(3) = size(results%col_AK, 4)
+
+       write(tmp_str, '(A,A,A,A)') trim(group_name), "/pressure_levels", &
+            "_", MCS%general%code_name
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%pressure_levels(:,:,:), out_dims3d, -9999.99d0)
+
+
        do i=1,MCS%window(i_win)%num_gases
           if (MCS%window(i_win)%gas_retrieved(i)) then
+
              ! Save XGAS for each gas
              lower_str = MCS%window(i_win)%gases(i)%lower()
 
@@ -729,9 +753,15 @@ contains
                   trim(tmp_str), &
                   results%xgas(:,:,i), out_dims2d, -9999.99d0)
 
-             out_dims3d(1) = num_fp
-             out_dims3d(2) = num_frames
-             out_dims3d(3) = size(results%col_AK, 4)
+             ! Save XGAS for each gas
+             lower_str = MCS%window(i_win)%gases(i)%lower()
+
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                  lower_str%chars(), "_apriori_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%xgas_prior(:,:,i), out_dims2d, -9999.99d0)
 
              if (MCS%output%gas_averaging_kernels) then
                 write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
@@ -751,6 +781,19 @@ contains
                      results%pwgts(:,:,i,:), out_dims3d, -9999.99d0)
              end if
 
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+                  lower_str%chars(), "_profile_apriori_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%vmr_prior(:,:,i,:), out_dims3d, -9999.99d0)
+
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+                  lower_str%chars(), "_profile_retrieved_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%vmr_retrieved(:,:,i,:), out_dims3d, -9999.99d0)
 
           end if
        end do
@@ -796,12 +839,6 @@ contains
        write(tmp_str, '(A,A,A)') trim(group_name), "/snr_", MCS%general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), results%SNR, out_dims2d)
-
-       !call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_std_" &
-       !     // MCS%general%code_name)
-       !write(tmp_str, '(A,A,A)') trim(group_name), "/snr_std_", MCS%general%code_name
-       !call write_DP_hdf_dataset(output_file_id, &
-       !     trim(tmp_str), results%SNR_std, out_dims2d)
 
        call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum_level_radiance_" &
             // MCS%general%code_name)
@@ -944,11 +981,6 @@ contains
     ! Radiative transfer models - which one are we using?
     integer :: RT_model
 
-    ! The current atmosphere. This will be a copy from the initial_atm
-    ! constructed in the physical_retrieval subroutine, but T and SH
-    ! profiles are taken on a scene-by-scene basis.
-    type(atmosphere) :: this_atm
-
     ! Dispersion/wavelength indices - these tell us, where in the L1B radiance array
     ! we can extract the spectra to match the user-defined wavelength ranges.
     integer :: l1b_wl_idx_min, l1b_wl_idx_max
@@ -1002,11 +1034,12 @@ contains
     type(scene) :: scn
 
     ! Atmosphere stuff
-    ! Number of gases, total levels, and number of active levels (changes with surface pressure)
+    ! Number of gases, total levels, and number of active levels
+    ! (changes with surface pressure)
     integer :: num_gases, num_levels, num_active_levels
 
     ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
-    double precision, allocatable :: this_vmr_profile(:,:)
+    double precision, allocatable :: this_vmr_profile(:,:), prior_vmr_profile(:,:)
 
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
@@ -1065,7 +1098,6 @@ contains
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
     double precision, allocatable :: tmp_v1(:), tmp_v2(:), tmp_v3(:), tmp_v4(:)
     double precision, allocatable :: KtSeK(:,:), gain_matrix(:,:), AK(:,:)
-    double precision, allocatable :: AK_profile(:)
     ! Was the matrix inversion operation successful?
     logical :: success_inv_mat
     ! Was the convolution operation successful?
@@ -1132,6 +1164,9 @@ contains
     ! DEBUG STUFF
     double precision :: cpu_conv_start, cpu_conv_stop
     double precision :: cpu_gas_start, cpu_gas_stop
+
+    ! Initialize
+    converged = .false.
 
     ! Grab a copy of the state vector for local use
     SV = global_SV
@@ -1481,7 +1516,6 @@ contains
     allocate(old_sv(size(SV%svsv)))
     allocate(last_successful_sv(size(SV%svsv)))
 
-    converged = .false.
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
 
@@ -1694,7 +1728,10 @@ contains
           call cpu_time(cpu_gas_start)
 
           allocate(this_vmr_profile(num_levels, num_gases))
+          allocate(prior_vmr_profile(num_levels, num_gases))
+
           this_vmr_profile(:,:) = 0.0d0
+          prior_vmr_profile(:,:) = 0.0d0
 
           ! Allocate these containers only if XRTM is used
           if (RT_model == RT_XRTM) then
@@ -1817,7 +1854,7 @@ contains
                   scn%atm%p(:), & ! Atmospheric profile pressures
                   scn%atm%T(:) + this_temp_offset, & ! Atmospheric T profile
                   scn%atm%sh(:), & ! Atmospheric profile humidity
-                  scn%atm%grav(:)*0.0d0 + 9.81d0, & ! Gravity per level
+                  scn%atm%grav(:), & ! Gravity per level
                   MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
                   MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
@@ -1831,6 +1868,7 @@ contains
                 call logger%error(fname, "Error calculating gas optical depths.")
                 return
              end if
+
           end do
 
           ! ----------------------------------------------------------
@@ -1967,6 +2005,7 @@ contains
           ! Gas sub-column scaling factors
           ! Temperature (at the moment up to 1)
           ! Surface (at the moment only 1, always)
+
           xrtm_n_derivs = SV%num_gas + SV%num_temp + 1
 
           call create_XRTM(xrtm, & ! XRTM handler
@@ -2076,9 +2115,11 @@ contains
        do q=1, n_stokes
           radiance_tmp_hi_nosif_nozlo(:,q) = this_solar(:,2) * radiance_calc_work_hi_stokes(:,q)
           if (q == 1) then
-             radiance_calc_work_hi_stokes(:,q) = radiance_tmp_hi_nosif_nozlo(:,q) + this_sif_radiance + this_zlo_radiance
+             radiance_calc_work_hi_stokes(:,q) = radiance_tmp_hi_nosif_nozlo(:,q) &
+                  + this_sif_radiance + this_zlo_radiance
           else
-             radiance_calc_work_hi_stokes(:,q) = radiance_calc_work_hi_stokes(:,q) * radiance_calc_work_hi_stokes(:,1)
+             radiance_calc_work_hi_stokes(:,q) = radiance_calc_work_hi_stokes(:,q) &
+                  * radiance_calc_work_hi_stokes(:,1)
           end if
        end do
 
@@ -2202,6 +2243,7 @@ contains
 
        ! These are the 'trivial' Jacobians that don't really need their own functions
        ! We add the SIF jacobian AFTER the K matrix is allocated.
+
        ! NOTE: Remember that these Jacobians ALSO need to to be multiplied by the
        ! Stokes coefficients in order to match the rest.
 
@@ -2264,7 +2306,6 @@ contains
        do i=1, N_spec
           Se_inv(i,i) = 1.0d0 / (noise_work(i) ** 2)
        end do
-
 
        ! Allocate ILS stretch factor (pixel dependent)
        allocate(this_ILS_stretch(N_spec))
@@ -2535,7 +2576,11 @@ contains
                 ! Here we need to do the same thing as before when calculating
                 ! gas OD's. Take local copy of VMR profile, and re-scale the portions
                 ! of the profile which, according to the retrieval, have changed.
+                !
+                ! Even though this is calculated just before the GAS OD portion, we
+                ! need to have the final SV update to work into the final XGAS.
                 this_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
+                prior_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
 
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
@@ -2546,24 +2591,52 @@ contains
                            this_vmr_profile(s_start(i):s_stop(i),j) &
                            * SV%svsv(SV%idx_gas(i,1))
 
+                      prior_vmr_profile(s_start(i):s_stop(i),j) = &
+                           prior_vmr_profile(s_start(i):s_stop(i),j) &
+                           * SV%svap(SV%idx_gas(i,1))
+
                       ! We also want to have the corresponding number of molecules of dry air
                       ! for the various sections of the atmopshere.
                       results%ndry(i_fp, i_fr, i) = sum(scn%atm%ndry(s_start(i):s_stop(i)-1))
                    end if
                 end do
 
-                ! Based on this 'current' VMR profile
+                ! Store the gas profile VMRs (prior and retrieved)
+                results%vmr_prior(i_fp, i_fr, j, 1:num_active_levels) = &
+                     prior_vmr_profile(1:num_active_levels, j)
+                results%vmr_retrieved(i_fp, i_fr, j, 1:num_active_levels) = &
+                     this_vmr_profile(1:num_active_levels, j)
+                ! Store the corresponding pressure levels
+                results%pressure_levels(i_fp, i_fr, 1:num_active_levels) = &
+                     scn%atm%p(1:num_active_levels)
+
+                ! Based on this 'current' retrieved VMR profile
                 call pressure_weighting_function( &
                      scn%atm%p(1:num_active_levels), &
                      this_psurf, &
                      this_vmr_profile(1:num_active_levels,j), &
                      pwgts)
 
+                ! Save the associated pressure weights for the retrieved gas
                 results%pwgts(i_fp, i_fr, j, 1:num_active_levels) = pwgts(:)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) = dot_product( &
                      pwgts(:), this_vmr_profile(1:num_active_levels, j) &
+                     )
+
+                ! Repeat this section again for the prior gas
+                ! ------
+                ! Based on the prior VMR profile
+                call pressure_weighting_function( &
+                     scn%atm%p(1:num_active_levels), &
+                     this_psurf, &
+                     prior_vmr_profile(1:num_active_levels,j), &
+                     pwgts)
+
+                ! Compute XGAS as the sum of pgwts times GAS VMRs.
+                results%xgas_prior(i_fp, i_fr, j) = dot_product( &
+                     pwgts(:), prior_vmr_profile(1:num_active_levels, j) &
                      )
 
              end do
@@ -2591,7 +2664,7 @@ contains
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
 
           ! Calculate the averaging kernel
-          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
+          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! These should be the same
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
@@ -2818,8 +2891,12 @@ contains
 
           write(tmp_str, '(A,F10.3)') "Chi2 (linear prediction): ", linear_prediction_chi2
           call logger%debug(fname, trim(tmp_str))
+
+          call logger%debug(fname, " ----- ")
           write(tmp_str, '(A,F10.3)') "Chi2 (this iteration):    ", this_chi2
           call logger%debug(fname, trim(tmp_str))
+          call logger%debug(fname, " ----- ")
+
           write(tmp_str, '(A,F10.3)') "Chi2 (last iteration):    ", old_chi2
           call logger%debug(fname, trim(tmp_str))
           write(tmp_str, '(A,F10.3)') "Chi2 (relative change):   ", abs(this_chi2 - old_chi2) / old_chi2
@@ -2853,6 +2930,7 @@ contains
        call destroy_optical_properties(scn)
 
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
+       if (allocated(prior_vmr_profile)) deallocate(prior_vmr_profile)
 
        if (allocated(dI_dgas)) deallocate(dI_dgas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
@@ -3117,93 +3195,6 @@ contains
 
   end subroutine calculate_dispersion_limits
 
-
-
-  !> @brief Creates / allocates the "results" container to hold all retrieval results
-  !>
-  !> @param results Result container
-  !> @param num_frames Number of frames
-  !> @param num_fp Number of footprints
-  !> @param num_SV Number of state vector elements
-  !> @param num_gas Number of retrieved (!) gases
-  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas, num_level)
-    implicit none
-    type(result_container), intent(inout) :: results
-    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas, num_level
-
-    allocate(results%sv_names(num_SV))
-
-    allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
-    allocate(results%sv_prior(num_fp, num_frames, num_SV))
-    allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
-    allocate(results%xgas(num_fp, num_frames, num_gas))
-    allocate(results%pwgts(num_fp, num_frames, num_gas, num_level))
-    allocate(results%col_ak(num_fp, num_frames, num_gas, num_level))
-
-    allocate(results%chi2(num_fp, num_frames))
-    allocate(results%residual_rms(num_fp, num_frames))
-    allocate(results%dsigma_sq(num_fp, num_frames))
-    allocate(results%SNR(num_fp, num_frames))
-    allocate(results%SNR_std(num_fp, num_frames))
-    allocate(results%continuum(num_fp, num_frames))
-    allocate(results%processing_time(num_fp, num_frames))
-
-    allocate(results%num_iterations(num_fp, num_frames))
-    allocate(results%converged(num_fp, num_frames))
-
-    allocate(results%ndry(num_fp, num_frames, num_gas))
-
-    results%sv_names = "NONE"
-
-    ! This might cause problems for some, but I find it convenient
-    ! to set 'unused' fields to NaNs. Remember this only works for
-    ! reals/double precision, but not for integers.
-    results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%sv_uncertainty = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%pwgts = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%col_ak = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%SNR = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%SNR_std = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%continuum = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-    results%processing_time = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
-
-    results%num_iterations = -1
-    results%converged = -1
-
-  end subroutine create_result_container
-
-
-  !> @brief Destroys the "results" container allocated in "create_result_container"
-  !>
-  !> @param results Result container
-  subroutine destroy_result_container(results)
-    implicit none
-    type(result_container), intent(inout) :: results
-
-    deallocate(results%sv_names)
-    deallocate(results%sv_retrieved)
-    deallocate(results%sv_prior)
-    deallocate(results%sv_uncertainty)
-    deallocate(results%xgas)
-    deallocate(results%pwgts)
-    deallocate(results%col_ak)
-    deallocate(results%chi2)
-    deallocate(results%residual_rms)
-    deallocate(results%dsigma_sq)
-    deallocate(results%SNR)
-    deallocate(results%SNR_std)
-    deallocate(results%continuum)
-    deallocate(results%num_iterations)
-    deallocate(results%converged)
-    deallocate(results%ndry)
-    deallocate(results%processing_time)
-
-  end subroutine destroy_result_container
 
 
 

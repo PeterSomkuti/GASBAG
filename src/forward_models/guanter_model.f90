@@ -721,7 +721,7 @@ contains
   !> @param Shat Posterior convariance matrix
   !> @param chi2 Retrieved CHI2 (no prior)
   !> @param BIC Bayesian information content of this retrieval
-  !> @param used_basisfunctions Whicih basisfunctions to use in the retrieval?
+  !> @param used_basisfunctions Which basisfunctions to use in the retrieval?
   subroutine calculate_xhat(basisfunctions, radiance_work, noise_work, Se_inv, &
        xhat, rad_conv, Shat, chi2, BIC, used_basisfunctions)
 
@@ -896,7 +896,7 @@ contains
     !! Now we need to perform a linear regression y = ax + b.
     !! Use the handy LAPACK routine DGELS here.
 
-    call DGELS('N', &          ! TRANS
+    call DGELS('N', &    ! TRANS
          num_used, &     ! M
          2, &            ! N
          1, &            ! NRHS

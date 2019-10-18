@@ -3,6 +3,7 @@
 module physical_model_addon_mod
 
   use math_utils_mod
+  use statevector_mod
 
   ! Third-party modules
   use stringifor
@@ -11,6 +12,7 @@ module physical_model_addon_mod
 
   ! System modules
   use ISO_FORTRAN_ENV
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
   implicit none
 
@@ -99,6 +101,56 @@ module physical_model_addon_mod
      !> Viewing azimuth angle
      double precision :: VAA
   end type scene
+
+  !> This structure contains the result data that will be stored in the output HDF file.
+  type result_container
+     !> State vector names (SV number)
+     type(string), allocatable :: sv_names(:)
+     !> Retrieved state vector (SV number, footprint, frame)
+     double precision, allocatable :: sv_retrieved(:,:,:)
+     !> State vector prior (SV number, footprint, frame)
+     double precision, allocatable :: sv_prior(:,:,:)
+     !> State vector posterior uncertainty (SV number, footprint, frame)
+     double precision, allocatable :: sv_uncertainty(:,:,:)
+     !> Column-average dry air mixing ratio for retrieved gases (footprint, frame, gas_number)
+     double precision, allocatable :: xgas(:,:,:)
+     !> Column-average dry air mixing ratio for prior gases! (footprint, frame, gas_number)
+     double precision, allocatable :: xgas_prior(:,:,:)
+     !> Pressure levels (footprint, frame, pressure level)
+     double precision, allocatable :: pressure_levels(:,:,:)
+     !> Prior gas VMRs per level (footprint, frame, gas_number, pressure level)
+     double precision, allocatable :: vmr_prior(:,:,:,:)
+     !> Retrieved gas VMRs per level (footprint, frame, gas_number, pressure level)
+     double precision, allocatable :: vmr_retrieved(:,:,:,:)
+     !> Pressure weighting functions (footprint, frame, gas_number, pressure level)
+     double precision, allocatable :: pwgts(:,:,:,:)
+     !> Column averaging kernels (footprint, frame, gas_number, pressure level)
+     double precision, allocatable :: col_ak(:,:,:,:)
+     !> Final Chi2 (footprint, frame)
+     double precision, allocatable :: chi2(:,:)
+     !> Final residual RMS (footprint, frame)
+     double precision, allocatable :: residual_rms(:,:)
+     !> Final dsigma-squared
+     double precision, allocatable :: dsigma_sq(:,:)
+     !> Final number of iterations
+     integer, allocatable :: num_iterations(:,:)
+     !> Converged or not? (1=converged, 0=not converged, -1=not properly run)
+     integer, allocatable :: converged(:,:)
+     !> SNR estimate (mean of per-pixel SNR)
+     double precision, allocatable :: SNR(:,:)
+     !> SNR standard deviation (std of per-pixel SNR)
+     double precision, allocatable :: SNR_std(:,:)
+     !> Continuum level radiance estimate
+     double precision, allocatable :: continuum(:,:)
+     !> Single-sounding retrieval processing time
+     double precision, allocatable :: processing_time(:,:)
+     !> Number of moles of dry air per m2 for various sections
+     !> of the model atmosphere - corresponding to retrieved
+     !> gas scale factors.
+     double precision, allocatable :: ndry(:,:,:)
+
+  end type result_container
+
 
   public scene_altitude
 
@@ -527,6 +579,220 @@ contains
     close(funit)
 
   end subroutine read_atmosphere_file
+
+  !> @brief Creates / allocates the "results" container to hold all retrieval results
+  !>
+  !> @param results Result container
+  !> @param num_frames Number of frames
+  !> @param num_fp Number of footprints
+  !> @param num_SV Number of state vector elements
+  !> @param num_gas Number of retrieved (!) gases
+  subroutine create_result_container(results, num_frames, num_fp, num_SV, num_gas, num_level)
+    implicit none
+    type(result_container), intent(inout) :: results
+    integer, intent(in) :: num_frames, num_fp, num_SV, num_gas, num_level
+
+    allocate(results%sv_names(num_SV))
+
+    allocate(results%sv_retrieved(num_fp, num_frames, num_SV))
+    allocate(results%sv_prior(num_fp, num_frames, num_SV))
+    allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
+    allocate(results%xgas(num_fp, num_frames, num_gas))
+    allocate(results%xgas_prior(num_fp, num_frames, num_gas))
+    allocate(results%pwgts(num_fp, num_frames, num_gas, num_level))
+    allocate(results%col_ak(num_fp, num_frames, num_gas, num_level))
+    allocate(results%pressure_levels(num_fp, num_frames, num_level))
+    allocate(results%vmr_prior(num_fp, num_frames, num_gas, num_level))
+    allocate(results%vmr_retrieved(num_fp, num_frames, num_gas, num_level))
+    allocate(results%chi2(num_fp, num_frames))
+    allocate(results%residual_rms(num_fp, num_frames))
+    allocate(results%dsigma_sq(num_fp, num_frames))
+    allocate(results%SNR(num_fp, num_frames))
+    allocate(results%SNR_std(num_fp, num_frames))
+    allocate(results%continuum(num_fp, num_frames))
+    allocate(results%processing_time(num_fp, num_frames))
+
+    allocate(results%num_iterations(num_fp, num_frames))
+    allocate(results%converged(num_fp, num_frames))
+
+    allocate(results%ndry(num_fp, num_frames, num_gas))
+
+    results%sv_names = "NONE"
+
+    ! This might cause problems for some, but I find it convenient
+    ! to set 'unused' fields to NaNs. Remember this only works for
+    ! reals/double precision, but not for integers.
+    results%sv_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%sv_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%sv_uncertainty = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%xgas = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%xgas_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%pwgts = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%vmr_prior = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%vmr_retrieved = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%pressure_levels = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%col_ak = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%chi2 = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%residual_rms = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%dsigma_sq = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%SNR = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%SNR_std = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%continuum = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%processing_time = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
+    results%num_iterations = -1
+    results%converged = -1
+
+  end subroutine create_result_container
+
+
+  !> @brief Destroys the "results" container allocated in "create_result_container"
+  !>
+  !> @param results Result container
+  subroutine destroy_result_container(results)
+    implicit none
+    type(result_container), intent(inout) :: results
+
+    deallocate(results%sv_names)
+    deallocate(results%sv_retrieved)
+    deallocate(results%sv_prior)
+    deallocate(results%sv_uncertainty)
+    deallocate(results%xgas)
+    deallocate(results%xgas_prior)
+    deallocate(results%pwgts)
+    deallocate(results%vmr_prior)
+    deallocate(results%vmr_retrieved)
+    deallocate(results%pressure_levels)
+    deallocate(results%col_ak)
+    deallocate(results%chi2)
+    deallocate(results%residual_rms)
+    deallocate(results%dsigma_sq)
+    deallocate(results%SNR)
+    deallocate(results%SNR_std)
+    deallocate(results%continuum)
+    deallocate(results%num_iterations)
+    deallocate(results%converged)
+    deallocate(results%ndry)
+    deallocate(results%processing_time)
+
+  end subroutine destroy_result_container
+
+
+  !> @brief Creates human-readable names for state vector elements
+  !>
+  !> The idea is faily simple: we loop through all the state vector elements,
+  !> and then check for each one if there is a corresponding SV\%idx_* associated with
+  !> that element position. Based on that, we create a name for the state vector
+  !> element, which usually has the parameter number (e.g. albedo order) baked in.
+  !> @param results Result container
+  !> @param SV State vector object
+  !> @param i_win Retrieval window index for MCS
+  subroutine assign_SV_names_to_result(results, SV, i_win)
+    implicit none
+
+    type(result_container), intent(inout) :: results
+    type(statevector), intent(in) :: SV
+    integer, intent(in) :: i_win
+
+    type(string) :: lower_str
+    character(len=999) :: tmp_str
+    integer :: i,j,k
+
+    i = 1
+    do while (i <= size(SV%svsv))
+
+       ! Albedo names
+       do j=1, SV%num_albedo
+          if (SV%idx_albedo(j) == i) then
+             write(tmp_str, '(A,G0.1)') "albedo_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! SIF name (really only one at this point)
+       do j=1, SV%num_sif
+          if (SV%idx_sif(j) == i) then
+             write(tmp_str, '(A)') "sif_radiance"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! ZLO name
+       do j=1, SV%num_zlo
+          if (SV%idx_zlo(j) == i) then
+             write(tmp_str, '(A)') "zero_level_offset"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       do j=1, SV%num_temp
+          if (SV%idx_temp(j) == i) then
+             write(tmp_str, '(A)') "temperature_offset"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Solar shift name
+       if (SV%idx_solar_shift(1) == i) then
+          write(tmp_str, '(A,A)') "solar_shift"
+          results%sv_names(i) = trim(tmp_str)
+       end if
+
+       ! Solar stretch name
+       if (SV%idx_solar_stretch(1) == i) then
+          write(tmp_str, '(A)') "solar_stretch"
+          results%sv_names(i) = trim(tmp_str)
+       end if
+
+       ! Surface pressure name
+       do j=1, SV%num_psurf
+          if (SV%idx_psurf(j) == i) then
+             write(tmp_str, '(A)') "surface_pressure"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Dispersion parameter names
+       do j=1, SV%num_dispersion
+          if (SV%idx_dispersion(j) == i) then
+             write(tmp_str, '(A,G0.1)') "dispersion_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! ILS parameter names
+       do j=1, SV%num_ils_stretch
+          if (SV%idx_ils_stretch(j) == i) then
+             write(tmp_str, '(A,G0.1)') "ils_stretch_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Retrieved gas names (scalar retrieval only so far)
+       k = 1
+       do j=1, SV%num_gas
+          ! Check if this SV element is a scalar retrieval
+          if (SV%idx_gas(j,1) == i) then
+             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
+                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
+
+                lower_str = MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%lower()
+                write(tmp_str, '(A)') trim(lower_str%chars() // "_scale_")
+                write(tmp_str, '(A, F4.2)') trim(tmp_str), &
+                     SV%gas_retrieve_scale_start(j)
+                write(tmp_str, '(A,A,F4.2)') trim(tmp_str), "_" , &
+                     SV%gas_retrieve_scale_stop(j)
+                results%sv_names(i) = trim(tmp_str)
+
+                k = k + 1
+             end if
+          end if
+       end do
+
+       i = i+1
+    end do
+
+  end subroutine assign_SV_names_to_result
 
   !> @begin Wrapper to replace prior VMRs with special functions
   subroutine replace_prior_VMR(scn, prior_types)

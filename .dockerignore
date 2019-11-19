@@ -1,0 +1,6 @@
+build
+cmake
+work
+doc
+*.h5
+*.log

@@ -28,7 +28,15 @@ RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selectio
     apt-get -y install h5utils && \
     apt-get -y install cmake && \
     apt-get -y install make && \
-    apt-get -y install libopenblas-dev
+    apt-get -y install libopenblas-dev && \
+    apt-get -y install wget
+
+# Install python and associated dependencies
+RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
+RUN bash ~/miniconda.sh -b -p $HOME/miniconda
+RUN eval "$($HOME/miniconda/bin/conda shell.bash hook)" && \
+    conda install -y -c anaconda jinja2 && \
+    conda install -y -c conda-forge numpy h5py
 
 # Copy over GASBAG
 WORKDIR /GASBAG
@@ -45,3 +53,4 @@ RUN mkdir /GASBAG/build && \
     FC=gfortran CC=gcc CXX=g++ cmake -DUSE_OPENMP=True .. -DCMAKE_BUILD_TYPE=Release && \
     make -j 4 && \
     /GASBAG/build/GASBAG -v
+

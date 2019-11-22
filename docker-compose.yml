@@ -1,0 +1,13 @@
+version: "2"
+
+services:
+    gasbag:
+        build: .
+        image: gasbag
+        container_name: gasbag
+        volumes:
+        - /data10/psomkuti/GEOCARB_DAY_IN_LIFE/chunked_files:/data10/psomkuti/GEOCARB_DAY_IN_LIFE/chunked_files
+        - /data10/psomkuti/GASBAG_QTS_B10_v42/code:/data10/psomkuti/GASBAG_QTS_B10_v42/code
+        - /home/psomkuti/geocarbsif/work:/home/psomkuti/geocarbsif/work
+        tty: true
+        network_mode: bridge

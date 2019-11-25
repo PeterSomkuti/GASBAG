@@ -31,6 +31,10 @@ RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selectio
     apt-get -y install libopenblas-dev && \
     apt-get -y install wget
 
+RUN groupadd -g 10006 oco && \
+    useradd --create-home -r -u 20033 -g oco hcronk
+USER hcronk
+
 # Install python and associated dependencies
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
 RUN bash ~/miniconda.sh -b -p $HOME/miniconda
@@ -39,8 +43,8 @@ RUN eval "$($HOME/miniconda/bin/conda shell.bash hook)" && \
     conda install -y -c conda-forge numpy h5py
 
 # Copy over GASBAG
+COPY --chown=hcronk:oco . /GASBAG
 WORKDIR /GASBAG
-COPY . /GASBAG
 
 # TODO: mount/copy ABSCO directories
 # TODO: mount L1B/L2Met directories

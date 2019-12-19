@@ -18,7 +18,9 @@ module physical_model_addon_mod
 
   !> A simple structure to keep the atmosphere data nice and tidy
   type atmosphere
+     !> Number of levels in the model atmosphere
      integer :: num_levels
+     !> Number of gases in the model atmosphere
      integer :: num_gases
      !> The name(s) of the gas(es), (gas number)
      type(string), allocatable :: gas_names(:)
@@ -26,6 +28,8 @@ module physical_model_addon_mod
      double precision, allocatable :: gas_vmr(:,:)
      !> To which spectroscopy data does this gas correspond to? (gas number)
      integer, allocatable :: gas_index(:)
+     !> Surface pressure
+     double precision :: psurf
      !> Model atmosphere temperature
      double precision, allocatable :: T(:)
      !> Model atmosphere pressure
@@ -68,12 +72,39 @@ module physical_model_addon_mod
      !> Total single scatter albedo (spectral, layer)
      double precision, allocatable :: omega(:,:)
 
+     !> Aerosol extinction cross section (spectral, aerosol)
+     double precision, allocatable :: aer_ext_q(:,:)
+     !> Aerosol scattering cross section (spectral, aerosol)
+     double precision, allocatable :: aer_sca_q(:,:)
+     !> Aerosol single scatter albedo (spectral, aerosol)
+     double precision, allocatable :: aer_ssa(:,:)
+
+     ! These here are calculated AFTER inferring the
+     ! aerosol distribution (which layers?)
+
+     !> Aerosol extinction optical depth (spectral, layer, aerosol)
+     double precision, allocatable :: aer_ext_tau(:,:,:)
+     !> Aerosol scattering optical depth (spectral, layer, aerosol)
+     double precision, allocatable :: aer_sca_tau(:,:,:)
+
   end type optical_properties
 
 
   ! The "biggest" custom type that contains most per-scene
   ! information you'll ever need to run a physical retrieval.
   type, public :: scene
+
+     !> Number of levels in the model atmosphere
+     integer :: num_levels
+     !> Number of active levels currently used
+     integer :: num_active_levels
+     !> Number of gases in the model atmosphere
+     integer :: num_gases
+     !> Number of aerosols in the scene
+     integer :: num_aerosols
+     !> Largest number of phase function moments, needed for allocation
+     integer :: max_pfmom
+
      !> The atmosphere of the scene
      type(atmosphere) :: atm
      !> Optical properties needed for RT
@@ -168,24 +199,29 @@ contains
     allocate(scn%op%albedo(N_hires))
     scn%op%albedo(:) = 0.0d0
 
+
+    ! NOTE
+    ! This explicitly does NOT include aerosols, as those are handled
+    ! in the aerosol initialization routine.
+
     ! These arrays are only allocated if we have an atmosphere with at
     ! least one gas in it.
     if (N_gases > 0) then
-       allocate(scn%op%gas_tau(N_hires, scn%atm%num_levels-1, N_gases))
+       allocate(scn%op%gas_tau(N_hires, scn%num_levels-1, N_gases))
        scn%op%gas_tau(:,:,:) = 0.0d0
-       allocate(scn%op%gas_tau_dpsurf(N_hires, scn%atm%num_levels-1, N_gases))
+       allocate(scn%op%gas_tau_dpsurf(N_hires, scn%num_levels-1, N_gases))
        scn%op%gas_tau_dpsurf(:,:,:) = 0.0d0
-       allocate(scn%op%gas_tau_dvmr(N_hires, scn%atm%num_levels-1, N_gases, 2))
+       allocate(scn%op%gas_tau_dvmr(N_hires, scn%num_levels-1, N_gases, 2))
        scn%op%gas_tau_dvmr(:,:,:,:) = 0.0d0
-       allocate(scn%op%gas_tau_dtemp(N_hires, scn%atm%num_levels-1, N_gases))
+       allocate(scn%op%gas_tau_dtemp(N_hires, scn%num_levels-1, N_gases))
        scn%op%gas_tau_dtemp(:,:,:) = 0.0d0
-       allocate(scn%op%ray_tau(N_hires, scn%atm%num_levels-1))
+       allocate(scn%op%ray_tau(N_hires, scn%num_levels-1))
        scn%op%ray_tau(:,:) = 0.0d0
        allocate(scn%op%ray_depolf(N_hires))
        scn%op%ray_depolf(:) = 0.0d0
        allocate(scn%op%total_tau(N_hires))
        scn%op%total_tau(:) = 0.0d0
-       allocate(scn%op%omega(N_hires, scn%atm%num_levels-1))
+       allocate(scn%op%omega(N_hires, scn%num_levels-1))
     end if
 
   end subroutine allocate_optical_properties
@@ -208,6 +244,53 @@ contains
 
   end subroutine destroy_optical_properties
 
+
+  subroutine calculate_active_levels(scn)
+
+    type(scene), intent(inout) :: scn
+
+    ! Value to reduce surface pressure if too close to layer boundary
+    double precision, parameter :: psurf_bump = 1e-2
+    character(len=99) :: tmp_str
+    integer :: i
+
+    ! Counting from TOA down to BOA, the layer for which
+    ! psurf is located in, is the last layer - hence the
+    ! lower boundary of that layer is considered the last
+    ! level and thus sets the number of active levels.
+
+    do i = 1, scn%num_levels - 1
+       if ((scn%atm%psurf > scn%atm%p(i)) .and. &
+            (scn%atm%psurf < scn%atm%p(i+1))) then
+
+          scn%num_active_levels = i + 1
+          exit
+       end if
+
+       ! Fringe case:
+       ! In the event that the surface pressure is too close to the
+       ! as a certain pressure level, it will cause problems later on.
+       ! So if we find the surface pressure is too close to a pressure
+       ! level, we reduce the surface pressure by a small amount to
+       ! avoid the problem.
+
+       if (abs(scn%atm%psurf - scn%atm%p(i+1)) < 1d-5) then
+
+          write(tmp_str, '(A, F14.4, A, F14.4)') "Surface pressure bumped up: ", &
+          scn%atm%psurf, " -> ", scn%atm%psurf - psurf_bump
+
+          call logger%debug("calculate_active_levels", trim(tmp_str))
+
+          scn%atm%psurf = scn%atm%psurf - psurf_bump
+          scn%num_active_levels = i + 1
+
+          exit
+       end if
+
+    end do
+
+  end subroutine calculate_active_levels
+
   !> @brief Calculate altitude levels, gravity levels and ndry
   !> @detail This code is borrowed from MS3 (O'Brien, O'Dell et al.)
   !> @param scn Scene object
@@ -222,12 +305,12 @@ contains
 
     ! Set altitudes to zero, and the lowest level to the altitude
     scn%atm%altitude_levels(:) = 0.0d0
-    scn%atm%altitude_levels(scn%atm%num_levels) = scn%alt
-    scn%atm%grav(scn%atm%num_levels) = jpl_gravity(scn%lat, scn%alt)
+    scn%atm%altitude_levels(scn%num_levels) = scn%alt
+    scn%atm%grav(scn%num_levels) = jpl_gravity(scn%lat, scn%alt)
     scn%atm%ndry(:) = 0.0d0
 
     ! Loop through layers, starting with the bottom-most (surface) one
-    do i = scn%atm%num_levels - 1, 1, -1
+    do i = scn%num_levels - 1, 1, -1
 
        SH_layer = (scn%atm%sh(i) + scn%atm%sh(i+1)) * 0.5d0
        g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1))
@@ -271,11 +354,11 @@ contains
     ! toward the center of mass.
     !
     ! Input Parameters:
-    ! gdlat       GeoDetric Latitude (degrees)
-    !	altit       Geometric Altitude (meters) ! CHANGED CWO 6/22/2009
+    !   gdlat       GeoDetric Latitude (degrees)
+    !   altit       Geometric Altitude (meters) ! CHANGED CWO 6/22/2009
     !
     ! Output Parameter:
-    !	gravity     Effective Gravitational Acceleration (m/s2)
+    !   gravity     Effective Gravitational Acceleration (m/s2)
     !
     ! Interestingly, since the centripital effect of the Earth's rotation
     ! (-ve at equator, 0 at poles) has almost the opposite shape to the
@@ -482,6 +565,7 @@ contains
           ! Allocate according to the file structure
           atm%num_levels = level_count
           atm%num_gases = num_gases
+
           allocate(atm%T(level_count))
           allocate(atm%p(level_count))
           allocate(atm%sh(level_count))

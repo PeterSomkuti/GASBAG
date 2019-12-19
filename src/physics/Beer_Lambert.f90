@@ -72,8 +72,7 @@ contains
       double precision, intent(inout) :: temp_jacobian(:)
 
       temp_jacobian(:) =  -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-           * (sum(sum(scn%op%gas_tau_dtemp, dim=2), dim=2) &
-           - sum(sum(scn%op%gas_tau, dim=2), dim=2))
+           * (sum(sum(scn%op%gas_tau_dtemp, dim=2), dim=2))
 
     end subroutine calculate_BL_temp_jacobian
 

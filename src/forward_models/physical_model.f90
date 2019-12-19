@@ -336,9 +336,16 @@ contains
     call check_hdf_error(hdferr, fname, "Error. Could not create group: RetrievalResults/physical")
 
 
-
     !---------------------------------------------------------------------
+    !---------------------------------------------------------------------
+    !
+    !
+    !
     ! MAIN RETRIEVAL WINDOW LOOP
+    !
+    !
+    !
+    !---------------------------------------------------------------------
     !---------------------------------------------------------------------
 
     ! Loop over all potential user-defined retrieval windows.
@@ -551,18 +558,9 @@ contains
 
        call logger%info(fname, "Starting main retrieval loop!")
 
-       ! If we use averaging for solar spectra, we really only have to retrieve
-       ! one frame.
-       if ((MCS%algorithm%solar_footprint_averaging) .and. &
-            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
-          frame_start = 1
-          frame_skip = 1
-          frame_stop = 1
-       else
-          frame_start = 1
-          frame_skip = MCS%window(i_win)%frame_skip
-          frame_stop = num_frames
-       end if
+       frame_start = 1
+       frame_skip = MCS%window(i_win)%frame_skip
+       frame_stop = num_frames
 
        ! retr_count keeps track of the number of retrievals processed
        ! so far, and the mean_duration keeps track of the average
@@ -572,6 +570,25 @@ contains
             (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
 
+
+       ! If the user wants to run in step-through mode, then that decision takes
+       ! higher priority than OpenMP threads. So we force the number of threads
+       ! to be one. Step-Through mode would crash GASBAG because it tries to
+       ! write to the same file from different threads, and is thus NOT thread-safe!
+
+#ifdef _OPENMP
+       if (MCS%algorithm%step_through) then
+
+          if (OMP_GET_MAX_THREADS() > 1) then
+             call logger%warning(fname, "User requested STEP-THROUGH mode.")
+             write(tmp_str, '(A, G0.1, A)') "Setting OpenMP threads to 1 (from ", &
+                  OMP_GET_MAX_THREADS(), ")."
+             call logger%warning(fname, trim(tmp_str))
+             call OMP_SET_NUM_THREADS(1)
+          end if
+
+       end if
+#endif
        ! At the moment, OpenMP is implemented to spread the loop over many threads,
        ! and should be maxed out at the number of available cores on the same machine.
        ! This could be further expanded to use MPI, but at the moment, this seems fast
@@ -728,6 +745,9 @@ contains
           end if
        end do
 
+       ! Here we re-set the output dimensions for 3D fields, needed
+       ! for column AKs
+
        out_dims3d(1) = num_fp
        out_dims3d(2) = num_frames
        out_dims3d(3) = size(results%col_AK, 4)
@@ -764,36 +784,42 @@ contains
                   results%xgas_prior(:,:,i), out_dims2d, -9999.99d0)
 
              if (MCS%output%gas_averaging_kernels) then
-                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-                     lower_str%chars(), "_column_ak_", MCS%general%code_name
+                ! These variables only need to be saved if the user requested
+                ! column averaging kernels
+
+                if (MCS%output%gas_averaging_kernels) then
+                   write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                        lower_str%chars(), "_column_ak_", MCS%general%code_name
+                   call logger%info(fname, "Writing out: " // trim(tmp_str))
+                   call write_DP_hdf_dataset(output_file_id, &
+                        trim(tmp_str), &
+                        results%col_AK(:,:,i,:), out_dims3d, -9999.99d0)
+                end if
+
+                if (MCS%output%pressure_weights) then
+                   write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                        lower_str%chars(), "_pressure_weights_", MCS%general%code_name
+                   call logger%info(fname, "Writing out: " // trim(tmp_str))
+                   call write_DP_hdf_dataset(output_file_id, &
+                        trim(tmp_str), &
+                        results%pwgts(:,:,i,:), out_dims3d, -9999.99d0)
+                end if
+
+                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+                     lower_str%chars(), "_profile_apriori_", MCS%general%code_name
                 call logger%info(fname, "Writing out: " // trim(tmp_str))
                 call write_DP_hdf_dataset(output_file_id, &
                      trim(tmp_str), &
-                     results%col_AK(:,:,i,:), out_dims3d, -9999.99d0)
-             end if
+                     results%vmr_prior(:,:,i,:), out_dims3d, -9999.99d0)
 
-             if (MCS%output%pressure_weights) then
-                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-                     lower_str%chars(), "_pressure_weights_", MCS%general%code_name
+                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+                     lower_str%chars(), "_profile_retrieved_", MCS%general%code_name
                 call logger%info(fname, "Writing out: " // trim(tmp_str))
                 call write_DP_hdf_dataset(output_file_id, &
                      trim(tmp_str), &
-                     results%pwgts(:,:,i,:), out_dims3d, -9999.99d0)
+                     results%vmr_retrieved(:,:,i,:), out_dims3d, -9999.99d0)
+
              end if
-
-             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
-                  lower_str%chars(), "_profile_apriori_", MCS%general%code_name
-             call logger%info(fname, "Writing out: " // trim(tmp_str))
-             call write_DP_hdf_dataset(output_file_id, &
-                  trim(tmp_str), &
-                  results%vmr_prior(:,:,i,:), out_dims3d, -9999.99d0)
-
-             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
-                  lower_str%chars(), "_profile_retrieved_", MCS%general%code_name
-             call logger%info(fname, "Writing out: " // trim(tmp_str))
-             call write_DP_hdf_dataset(output_file_id, &
-                  trim(tmp_str), &
-                  results%vmr_retrieved(:,:,i,:), out_dims3d, -9999.99d0)
 
           end if
        end do
@@ -851,7 +877,6 @@ contains
 
           out_dims3d = shape(final_radiance)
 
-
           call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
                // MCS%general%code_name)
           write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", MCS%general%code_name
@@ -888,7 +913,10 @@ contains
        end if
 
        !---------------------------------------------------------------------
+       !
        ! CLEAN UP PHASE
+       !
+       !
        ! We need to deallocate / destroy a few arrays here, so
        ! they can be freshly reallocated for the next retrieval microwindow.
        !---------------------------------------------------------------------
@@ -1052,9 +1080,6 @@ contains
     ! Per-wavelength albedo for hires and low-res spectra
     double precision, allocatable :: albedo(:)
 
-    ! Surface pressure
-    ! The surface pressure per-iteration
-    double precision :: this_psurf
     ! Do we need/want to calculate surface pressure Jacobians?
     logical :: do_psurf_jac
 
@@ -1144,11 +1169,10 @@ contains
     integer :: xrtm_kernels(1)
     ! Was the call to XRTM successful?
     logical :: xrtm_success
+    ! XRTM error variable
     integer :: xrtm_error
     ! How many derivatives does XRTM need to calculate?
     integer :: xrtm_n_derivs
-    ! To pass gas scale factors to XRTM, we need a separate container here
-    double precision, allocatable :: xrtm_gas_scale_factors(:)
 
     ! Miscellaneous stuff
     ! String to hold various names etc.
@@ -1229,19 +1253,11 @@ contains
 
     select type(my_instrument)
     type is (oco2_instrument)
-       ! READ THE MEASUREMENT
 
-       if ((MCS%algorithm%solar_footprint_averaging) .and. &
-            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
-          ! If the user chooses to, we can average all frames of a certain footprint
-          ! To one single measurement.
-          call my_instrument%read_spectra_and_average_by_fp(l1b_file_id, i_fp, band, &
-               MCS%general%N_spec(band), radiance_l1b)
-       else
-          ! Read the L1B spectrum for this one measurement in normal mode!
-          call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
-               MCS%general%N_spec(band), radiance_l1b)
-       end if
+       ! Read the L1B spectrum for this one measurement in normal mode!
+       call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+            MCS%general%N_spec(band), radiance_l1b)
+       
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
             scn%date, success_time_convert)
@@ -1263,9 +1279,9 @@ contains
 
        call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
             radiance_l1b, &
-            MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &!expected_wavelengths_in, &
-            MCS%window(i_win)%smart_scale_first_guess_wl_out(:), &!expected_wavelengths_out, &
-            MCS%window(i_win)%smart_scale_first_guess_delta_tau(:), &!expected_delta_tau, &
+            MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &
+            MCS%window(i_win)%smart_scale_first_guess_wl_out(:), &
+            MCS%window(i_win)%smart_scale_first_guess_delta_tau(:), &
             scn%SZA, scn%VZA, scale_first_guess)
     else
        ! Otherwise just start with 1.0
@@ -1525,18 +1541,20 @@ contains
 
        ! Copy over the initial atmosphere
        scn%atm = initial_atm
+       scn%num_levels = scn%atm%num_levels
+       scn%num_gases = scn%atm%num_gases
+       
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, num_gases)
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
 
-       num_active_levels = -1
-       num_levels = -1
+       scn%num_active_levels = -1
 
        if (num_gases > 0) then
           ! An atmosphere is only required if there are gases present in the
           ! microwindow.
-          this_psurf = met_psurf(i_fp, i_fr)
+          scn%atm%psurf = met_psurf(i_fp, i_fr)
 
           ! After we've taken a copy of the initial atmosphere,
           ! we might want to replace some of the prior gases with
@@ -1549,10 +1567,10 @@ contains
 
           ! Number of levels in the model atmosphere
           ! AS GIVEN BY THE ATMOSPHERE FILE
-          ! After accounging for surface pressure - refer to num_active_levels
-          num_levels = scn%atm%num_levels
+          ! After accounting for surface pressure - refer to num_active_levels
+          num_levels = scn%num_levels
 
-          if (this_psurf < 1.0d-10) then
+          if (scn%atm%psurf < 1.0d-10) then
              call logger%error(fname, "MET surface pressure is almost 0.")
              return
           end if
@@ -1572,21 +1590,17 @@ contains
                size(scn%atm%p), &
                log(scn%atm%p), scn%atm%sh)
 
-          ! Obtain the number of active levels. Loop from the TOA down to the bottom,
-          ! and see where the surface pressure falls into.
-          do j=1, num_levels
-             if (this_psurf > scn%atm%p(j)) then
-                num_active_levels = j+1
-             end if
+          ! Obtain the number of active levels.
+          call calculate_active_levels(scn)
+          num_active_levels = scn%num_active_levels
 
-             ! Should SH drop below 0 for whatever reason, shift it back
-             ! some tiny value.
-             if (scn%atm%sh(j) < 0.0d0) scn%atm%sh(j) = 1.0d-10
-          end do
+          ! Should SH drop below 0 for whatever reason, shift it back
+          ! some tiny value.
+          where (scn%atm%sh < 0.0d0) scn%atm%sh = 1.0d-10
 
           ! If psurf > BOA p level, we have a problem and thus can't go on.
           if (num_active_levels > num_levels) then
-             write(tmp_str, '(A, F10.3, A, F10.3)') "Psurf at ", this_psurf, &
+             write(tmp_str, '(A, F10.3, A, F10.3)') "Psurf at ", scn%atm%psurf, &
                   " is larger than p(BOA) at ", scn%atm%p(size(scn%atm%p))
              call logger%error(fname, trim(tmp_str))
              return
@@ -1604,9 +1618,12 @@ contains
           end do
 
        else
+
           ! If we don't do gases, just set this variable to zero, mainly to avoid
           ! potential problems .. nasty segfaults etc.
+          scn%num_active_levels = 0
           num_active_levels = 0
+          
        end if
 
        if (num_levels < 0) then
@@ -1673,19 +1690,16 @@ contains
           ! If we are retrieving surface pressure, we need to re-calculate the
           ! "last" layer if the surface pressure jumps to the next layer.
           if (SV%num_psurf == 1) then
-             this_psurf = SV%svsv(SV%idx_psurf(1))
+             scn%atm%psurf = SV%svsv(SV%idx_psurf(1))
 
              ! The number of active levels has to be inferred for every
              ! iteration if we are retrieving surface pressure
-             do j=1, num_levels
-                if (this_psurf > scn%atm%p(j)) then
-                   num_active_levels = j+1
-                end if
-             end do
+             call calculate_active_levels(scn)
+             num_active_levels = scn%num_active_levels
 
              ! If psurf > BOA p level, we have a problem and thus can't go on.
              if (num_active_levels > num_levels) then
-                write(tmp_str, '(A, F12.3, A, F12.3)') "Psurf at ", this_psurf, &
+                write(tmp_str, '(A, F12.3, A, F12.3)') "Psurf at ", scn%atm%psurf, &
                      " is larger than p(BOA) at ", scn%atm%p(scn%atm%num_levels)
                 call logger%error(fname, trim(tmp_str))
                 return
@@ -1751,14 +1765,14 @@ contains
           ! otherwise, grab it from the MET data.
 
           if (SV%num_psurf == 1) then
-             this_psurf = SV%svsv(SV%idx_psurf(1))
+             scn%atm%psurf = SV%svsv(SV%idx_psurf(1))
              do_psurf_jac = .true.
           else
-             this_psurf = met_psurf(i_fp, i_fr)
+             scn%atm%psurf = met_psurf(i_fp, i_fr)
              do_psurf_jac = .false.
           end if
 
-          if (this_psurf < 0) then
+          if (scn%atm%psurf < 0) then
              call logger%error(fname, "Psurf negative!")
              return
           end if
@@ -1781,7 +1795,7 @@ contains
 
                    ! From the user SV input, determine which levels belong to the
                    ! gas subcolumn retrieval.
-                   call set_gas_scale_levels(SV, j, i_win, scn%atm, this_psurf, &
+                   call set_gas_scale_levels(SV, j, i_win, scn%atm, scn%atm%psurf, &
                         s_start, s_stop, do_gas_jac, success_scale_levels)
 
                    if (.not. success_scale_levels) then
@@ -1820,6 +1834,11 @@ contains
                 this_temp_offset = 0.0d0
              end if
 
+             ! TODO:
+             ! It would be nice if the temperature jacobians could efficiently
+             ! be calculated within the calculate_gas_tau function, rather than
+             ! having to do it via finite differencing.
+
              if (SV%num_temp == 1) then
                 ! First, we calculate gas OD's with a 1K temperature perturbation, but we only need
                 ! to do this if we retrieve the T offset.
@@ -1829,7 +1848,7 @@ contains
                      is_H2O, & ! Is this gas H2O?
                      scn%op%wl, & ! The high-resolution wavelength grid
                      this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
-                     this_psurf, & ! Surface pressure
+                     scn%atm%psurf, & ! Surface pressure
                      scn%atm%p(:), & ! Atmospheric profile pressures
                      scn%atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric T profile plus 1K perturbation
                      scn%atm%sh(:), & ! Atmospheric profile humidity
@@ -1850,7 +1869,7 @@ contains
                   is_H2O, & ! Is this gas H2O?
                   scn%op%wl, & ! The high-resolution wavelength grid
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
-                  this_psurf, & ! Surface pressure
+                  scn%atm%psurf, & ! Surface pressure
                   scn%atm%p(:), & ! Atmospheric profile pressures
                   scn%atm%T(:) + this_temp_offset, & ! Atmospheric T profile
                   scn%atm%sh(:), & ! Atmospheric profile humidity
@@ -1862,6 +1881,14 @@ contains
                   scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
                   scn%op%gas_tau_dvmr(:,:,j,:), & ! Output: dTau/dVMR
                   success_gas) ! Output: Was the calculation successful?
+
+
+             if (SV%num_temp == 1) then
+                ! Calculate dTau/dTemp as finite difference
+                scn%op%gas_tau_dtemp(:,:,j) = &
+                     scn%op%gas_tau_dtemp(:,:,j) - scn%op%gas_tau(:,:,j)
+
+             end if
 
              ! If the calculation goes wrong, we exit as we can't go on
              if (.not. success_gas) then
@@ -1884,6 +1911,15 @@ contains
           ! profiles here.
           ! ---------------------------------------------------------------
 
+          ! Initialize first (calculate layer-independent quantities)
+          call aerosol_init(scn)
+
+          ! Calculate vertical distribution and optical depths that
+          ! enter the RT calculations
+
+          call aerosol_gauss_shape(scn)
+
+
 
           ! ---------------------------------------------------------------
           ! Optical depth cleanup
@@ -1896,14 +1932,34 @@ contains
 
           ! Total optical depth is calculated as sum of all gas ODs
           scn%op%total_tau(:) = sum(sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau, dim=2)
-          scn%op%omega(:,:) = scn%op%ray_tau / (sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau)
+
+          ! If there are aerosols in the scene, add them to the total OD
+          if (allocated(scn%op%aer_ext_tau)) then
+             scn%op%total_tau(:) = scn%op%total_tau(:) &
+                  + sum(sum(scn%op%aer_ext_tau(:,:,:), dim=3), dim=2)
+          end if
+
+          ! The layer-resolved single scatter albedo is (Rayleigh + Aerosol) / (Total)
+          ! extinctions.
+          if (allocated(scn%op%aer_ext_tau)) then
+             scn%op%omega(:,:) = ( &
+                  (scn%op%ray_tau + sum(scn%op%aer_ext_tau(:,:,:), dim=3)) &
+                  / (sum(scn%op%gas_tau, dim=3) + sum(scn%op%aer_ext_tau(:,:,:), dim=3) + scn%op%ray_tau) )
+          else
+
+             scn%op%omega(:,:) = ( &
+                  (scn%op%ray_tau) &
+                  / (sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau) )
+
+          end if
+
 
           ! ----------------------------------
           ! END SECTION FOR GASES / ATMOSPHERE
           ! ----------------------------------
 
           call cpu_time(cpu_gas_stop)
-          write(tmp_str, '(A, F10.7)') "Gas calc. time (s): ", cpu_gas_stop - cpu_gas_start
+          write(tmp_str, '(A, F10.7)') "Gas and aerosol calc. time (s): ", cpu_gas_stop - cpu_gas_start
           call logger%debug(fname, trim(tmp_str))
        end if
 
@@ -1975,92 +2031,20 @@ contains
 
        case (RT_XRTM)
 
-          if (SV%num_gas > 0) then
-             allocate(xrtm_gas_scale_factors(SV%num_gas))
-             xrtm_gas_scale_factors(:) = SV%svsv(SV%idx_gas(1:SV%num_gas,1))
-          end if
+          ! This function produces the full radiances and Jacobians, any fancy
+          ! fast RT methods are done within.
 
-          ! This function "translates" our verbose configuration file options
-          ! into proper XRTM language and sets the corresponding options.
-
-          call setup_XRTM( &
-               MCS%window(i_win)%xrtm_options, &
-               MCS%window(i_win)%xrtm_solvers, &
-               xrtm_options, &
-               xrtm_solvers, &
-               xrtm_separate_solvers, &
-               xrtm_kernels, &
-               xrtm_success)
-
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to setup_XRTM unsuccessful.")
-             return
-          end if
-
-          ! Number of XRTM derivatives
-          ! These are the number of derivatives that need to be plugged
-          ! into XRTM. Not all derivatives need to be taken into account by
-          ! the RT model. The order is as follows:
-          !
-          ! Gas sub-column scaling factors
-          ! Temperature (at the moment up to 1)
-          ! Surface (at the moment only 1, always)
-
-          xrtm_n_derivs = SV%num_gas + SV%num_temp + 1
-
-          call create_XRTM(xrtm, & ! XRTM handler
-               xrtm_options, & ! XRTM options bitmask
-               xrtm_solvers, & ! XRTM solvers combined bitmask
-               3, & ! Max coef
-               16, & ! Quadrature points
-               n_stokes, & ! Number of stokes coeffs
-               xrtm_n_derivs, & ! Number of derivatives
-               num_active_levels-1, & ! Number of layers
-               1, & ! Number of surface kernels
-               50, & ! Number of kernel quadrature points
-               xrtm_kernels, & ! XRTM surface kernels
-               xrtm_success) ! Call successful?
-
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to create_XRTM unsuccessful.")
-             call xrtm_destroy_f90(xrtm, xrtm_error)
-             return
-          end if
-
-
-          call calculate_XRTM_radiance(xrtm, & ! XRTM handler
-               xrtm_separate_solvers, & ! separate XRTM solvers
-               SV, & ! State vector structure - useful for decoding SV positions
-               scn%op%wl, & ! per pixel wavelength
-               scn%SZA, & ! solar zenith angle
-               scn%VZA, & ! viewing zenith angle
-               scn%SAA, & ! solar azimuth angle
-               scn%VAA, & ! viewing azimuth angle
-               scn%atm%altitude_levels, & ! per-level altitude
-               scn%op%albedo, & ! Surface albedo
-               scn%op%gas_tau(:,1:num_active_levels-1,:), & ! per-wl per-layer per gas optical depths
-               sum(scn%op%gas_tau_dtemp(:,1:num_active_levels-1,:) - scn%op%gas_tau(:,1:num_active_levels-1,:), dim=3), & ! dTau/dTemp
-               scn%op%ray_tau(:,1:num_active_levels-1), & ! & per-wl per-layer Rayleigh extinction
-               scn%op%ray_depolf, & ! & per-wl Rayleigh depolarization factor
-               xrtm_gas_scale_factors, & ! Gas scale factors (current)
+          call solve_RT_problem_XRTM( &
+               MCS%window(i_win), & ! The microwindow structure
+               SV, & ! The statevector
+               scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate
-               xrtm_n_derivs, & ! Number of derivatives to be calculated
-               num_active_levels-1, & ! Number of atmospheric layers
                s_start, & ! sub-column start indices
                s_stop, & ! sub_column stop indices
-               SV%gas_idx_lookup, & ! gas lookup array to match retrieved gases to atmosphere gases
-               radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, &
-               xrtm_success)
+               radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, & ! Results
+               xrtm_success &
+               )
 
-          ! XRTM must be destroyed at some point, otherwise it will just keep
-          ! creating arrays and filling up memory (quickly!). Why not destroy
-          ! it right here - all the results are transferred to various arrays
-          ! so we do not really need the XRTM instance anymore.
-          ! If the calculation of radiances failed for whatever reason, the program
-          ! returns here anyway such that XRTM is destroyed as well.
-          call xrtm_destroy_f90(xrtm, xrtm_error)
-
-          if (allocated(xrtm_gas_scale_factors)) deallocate(xrtm_gas_scale_factors)
           ! If XRTM failed, no need to continue and move on to next retrieval.
           if (.not. xrtm_success) return
 
@@ -2290,15 +2274,6 @@ contains
           end if
 
        end select
-
-       ! If we are doing solar measurements and average spectra,
-       ! we also need to re-scale the noise to get adjusted CHI2
-       if ((MCS%algorithm%solar_footprint_averaging) .and. &
-            (MCS%algorithm%observation_mode%lower() == "space_solar")) then
-
-          noise_work(:) = noise_work(:) / sqrt(dble(MCS%general%N_frame))
-
-       end if
 
        allocate(Se_inv(N_spec, N_spec))
        ! Inverse noise covariance, we keep it diagonal, as usual
@@ -2613,7 +2588,7 @@ contains
                 ! Based on this 'current' retrieved VMR profile
                 call pressure_weighting_function( &
                      scn%atm%p(1:num_active_levels), &
-                     this_psurf, &
+                     scn%atm%psurf, &
                      this_vmr_profile(1:num_active_levels,j), &
                      pwgts)
 
@@ -2630,7 +2605,7 @@ contains
                 ! Based on the prior VMR profile
                 call pressure_weighting_function( &
                      scn%atm%p(1:num_active_levels), &
-                     this_psurf, &
+                     scn%atm%psurf, &
                      prior_vmr_profile(1:num_active_levels,j), &
                      pwgts)
 
@@ -2653,7 +2628,7 @@ contains
                      this_ILS_delta_lambda(:,:), &
                      ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
                      this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-                     this_psurf, num_active_levels, N_spec, &
+                     scn%atm%psurf, num_active_levels, N_spec, &
                      s_start, s_stop, &
                      results%col_ak(i_fp, i_fr, :, :))
              end if
@@ -2709,7 +2684,7 @@ contains
           write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration , &
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
-               ", Psurf: ", this_psurf, &
+               ", Psurf: ", scn%atm%psurf, &
                ", LM-Gamma: ", lm_gamma, &
                ", SNR: ", results%SNR(i_fp, i_fr)
           call logger%debug(fname, trim(tmp_str))

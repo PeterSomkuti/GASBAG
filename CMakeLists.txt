@@ -72,7 +72,7 @@ set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g ${bounds} -fcheck=all -fbacktrace -fno-omi
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
-set(CMAKE_CXX_FLAGS "-O3")
+set(CMAKE_CXX_FLAGS "-O3 -mtune=native -ftree-vectorize")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.

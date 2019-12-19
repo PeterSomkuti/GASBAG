@@ -76,8 +76,7 @@ contains
     valid_options(2,1) = "sif_algorithm"
     valid_options(2,2) = "n_basisfunctions"
     valid_options(2,3) = "observation_mode"
-    valid_options(2,4) = "solar_footprint_averaging"
-    valid_options(2,5) = "step_through"
+    valid_options(2,4) = "step_through"
 
     ! Related to the instrument in question
     valid_sections(3) = "instrument"
@@ -124,7 +123,7 @@ contains
        valid_options(this_idx,12) = "atmosphere"
        valid_options(this_idx,13) = "algorithms"
        valid_options(this_idx,14) = "dsigma_scale"
-       valid_options(this_idx,15) = "fft_convolution"
+       valid_options(this_idx,15) = "rt_strategy"
        valid_options(this_idx,16) = "wl_spacing"
        valid_options(this_idx,17) = "band"
        valid_options(this_idx,18) = "sublayers"
@@ -147,6 +146,8 @@ contains
        valid_options(this_idx,35) = "xrtm_solvers"
        valid_options(this_idx,36) = "polarization"
        valid_options(this_idx,37) = "gas_prior_type"
+       valid_options(this_idx,38) = "rt_streams"
+
     end do
 
     ! Section for gases

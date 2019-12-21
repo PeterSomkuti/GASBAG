@@ -598,6 +598,8 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
+       frame_start = 3500
+
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
        do i_fr=frame_start, frame_stop, frame_skip
@@ -1911,15 +1913,15 @@ contains
           ! profiles here.
           ! ---------------------------------------------------------------
 
+
           ! Initialize first (calculate layer-independent quantities)
           call aerosol_init(scn)
 
           ! Calculate vertical distribution and optical depths that
           ! enter the RT calculations
-
-          call aerosol_gauss_shape(scn)
-
-
+          if (scn%num_aerosols > 0) then
+             call aerosol_gauss_shape(scn)
+          end if
 
           ! ---------------------------------------------------------------
           ! Optical depth cleanup
@@ -1935,6 +1937,7 @@ contains
 
           ! If there are aerosols in the scene, add them to the total OD
           if (allocated(scn%op%aer_ext_tau)) then
+             call logger%debug(fname, "Adding aerosol extinction")
              scn%op%total_tau(:) = scn%op%total_tau(:) &
                   + sum(sum(scn%op%aer_ext_tau(:,:,:), dim=3), dim=2)
           end if
@@ -1942,6 +1945,7 @@ contains
           ! The layer-resolved single scatter albedo is (Rayleigh + Aerosol) / (Total)
           ! extinctions.
           if (allocated(scn%op%aer_ext_tau)) then
+             call logger%debug(fname, "Calculating SSA including aerosols")
              scn%op%omega(:,:) = ( &
                   (scn%op%ray_tau + sum(scn%op%aer_ext_tau(:,:,:), dim=3)) &
                   / (sum(scn%op%gas_tau, dim=3) + sum(scn%op%aer_ext_tau(:,:,:), dim=3) + scn%op%ray_tau) )

@@ -34,6 +34,7 @@ module logger_mod
   implicit none
   private
 
+
   integer, parameter, public :: debug   = 10
   !! Priority level for output only useful for debugging
   integer, parameter, public :: trivia  = 20

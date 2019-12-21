@@ -245,6 +245,8 @@ module control_mod
      logical :: used
      !> Name of the aerosol / identifier
      type(string) :: name
+     !> Type of aerosol
+     type(string) :: aer_type
      !> Name of the mom file
      type(string) :: mom_filename
      !> Name of the mie file
@@ -265,6 +267,7 @@ module control_mod
      double precision, allocatable :: sigma_ext(:)
      !> Effective radius (wavelength)
      double precision, allocatable :: reff(:)
+
   end type CS_aerosol
 
 
@@ -343,7 +346,6 @@ contains
 
 
     call logger%debug(fname, "Populating main program control structure..")
-
 
     ! ----------------------------------------------------------------------
     ! First, we set all those fields to -1 values, that are added/populated
@@ -919,8 +921,11 @@ contains
 
           MCS%aerosol(aerosol_nr)%used = .true.
 
-          call fini_extract(fini, tmp_str, 'name', .true., fini_char)
+          call fini_extract(fini, tmp_str, 'aerosol_name', .true., fini_char)
           MCS%aerosol(aerosol_nr)%name = trim(fini_char)
+
+          call fini_extract(fini, tmp_str, 'aerosol_type', .true., fini_char)
+          MCS%aerosol(aerosol_nr)%aer_type = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'mom_file', .true., fini_char)
           MCS%aerosol(aerosol_nr)%mom_filename = trim(fini_char)

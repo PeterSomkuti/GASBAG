@@ -15,7 +15,7 @@ module aerosols_mod
   use stringifor
   use logger_mod, only: logger => master_logger
 
-  public :: ingest_aerosol_files
+  public :: ingest_aerosol_files, aerosol_init
 
 contains
 
@@ -49,7 +49,7 @@ contains
     ! Attempt at read-in of mom file
     call logger%debug(fname, "Reading in mom file: " // aerosol%mom_filename%chars())
     call read_mom_file(aerosol%mom_filename%chars(), &
-         aerosol%wavelengths, aerosol%coef, success)
+         aerosol%wavelengths, aerosol%coef, aerosol%max_n_coef, success)
 
     ! Attempt at read-in of mie file
     call logger%debug(fname, "Reading in mie file: " // aerosol%mie_filename%chars())
@@ -114,8 +114,13 @@ contains
     end do
 
     scn%num_aerosols = count_aer
-    scn%max_pfmom = 0
+    ! Set this as 3 for Rayleigh scattering, will be overwritten
+    ! if aerosols are found and used
+    scn%max_pfmom = 3
 
+    allocate(scn%op%aer_wl_idx_l(scn%num_aerosols))
+    allocate(scn%op%aer_wl_idx_r(scn%num_aerosols))
+    allocate(scn%op%aer_mcs_map(scn%num_aerosols))
     allocate(scn%op%aer_ext_q(size(scn%op%wl), scn%num_aerosols))
     allocate(scn%op%aer_sca_q(size(scn%op%wl), scn%num_aerosols))
     allocate(scn%op%aer_ssa(size(scn%op%wl), scn%num_aerosols))
@@ -123,6 +128,11 @@ contains
     allocate(scn%op%aer_ext_tau(size(scn%op%wl), &
          scn%num_levels-1, scn%num_aerosols))
     allocate(scn%op%aer_sca_tau(size(scn%op%wl), &
+         scn%num_levels-1, scn%num_aerosols))
+
+    allocate(scn%op%aer_ext_tau_edge(2, &
+         scn%num_levels-1, scn%num_aerosols))
+    allocate(scn%op%aer_sca_tau_edge(2, &
          scn%num_levels-1, scn%num_aerosols))
 
     ! -------------------------------
@@ -139,6 +149,10 @@ contains
           idx_l = minloc(abs(MCS%aerosol(i)%wavelengths(:) - scn%op%wl(1)), 1)
           idx_r = idx_l + 1
 
+          ! Store these wavelength indices for later use
+          scn%op%aer_wl_idx_l(j) = idx_l
+          scn%op%aer_wl_idx_r(j) = idx_r
+
           ! Now check the values against the available data
           if (idx_r > size(MCS%aerosol(i)%wavelengths)) then
              call logger%fatal(fname, "Problem initializing aerosols!")
@@ -150,9 +164,12 @@ contains
              stop 1
           end if
 
-          if (scn%max_pfmom < MCS%aerosol(i)%max_n_coef ) then
+          if (scn%max_pfmom < MCS%aerosol(i)%max_n_coef) then
              scn%max_pfmom = MCS%aerosol(i)%max_n_coef
           end if
+
+          ! Store the relevant index that allows us to access the aerosol
+          scn%op%aer_mcs_map(j) = i
 
           ! -------------------------------------------------
           !
@@ -191,9 +208,9 @@ contains
 
     type(scene), intent(inout) :: scn
 
-    double precision, parameter :: aero_height = 4000.0
-    double precision, parameter :: aero_aod = 1.0
-    double precision, parameter :: aero_width = 1000.0
+    double precision, parameter :: aero_height = 10000.0
+    double precision, parameter :: aero_aod = 2.0
+    double precision, parameter :: aero_width = 3000.0
 
 
     double precision, allocatable :: layer_height(:)
@@ -209,72 +226,64 @@ contains
     end do
 
     do aer = 1, scn%num_aerosols
-       do wl = 1, size(scn%op%wl)
+
+       ! First calculate ext/sca for the wavelenghts for which the aerosols are
+       ! actually specified / calculated.
+
+       do wl = 1, 2
+
           do lay = 1, scn%num_levels - 1
-
-             scn%op%aer_ext_tau(wl,lay,aer) = exp(-((layer_height(lay) - aero_height)**2) &
+             scn%op%aer_ext_tau_edge(wl,lay,aer) = exp(-((layer_height(lay) - aero_height)**2) &
                   / (2 * aero_width * aero_width))
-
           end do
 
+          ! The normalization factor is ONLY computed for a reference wavelength, which
+          ! is the first (lower) wavelength for this particular band.
           if (wl == 1) then
-             aod_norm = sum(scn%op%aer_ext_tau(wl,:,aer)) / aero_aod
+             aod_norm = sum(scn%op%aer_ext_tau_edge(wl,:,aer)) / aero_aod
           end if
+
+          scn%op%aer_ext_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) / aod_norm
+
+          ! We are grabbing the left and right hand side SSAs from the file to compute
+          ! the scattering contribution to the extinction.
+          if (wl == 1) then
+             scn%op%aer_sca_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) &
+                  * MCS%aerosol(scn%op%aer_mcs_map(aer))%ssa(scn%op%aer_wl_idx_l(aer))
+          else if (wl == 2) then
+             scn%op%aer_sca_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) &
+                  * MCS%aerosol(scn%op%aer_mcs_map(aer))%ssa(scn%op%aer_wl_idx_r(aer))
+          end if
+
+          where(scn%op%aer_ext_tau_edge(wl,:,aer) < 1.0d-10) scn%op%aer_ext_tau_edge(wl,:,aer) = 1d-10
+          where(scn%op%aer_sca_tau_edge(wl,:,aer) < 1.0d-10) scn%op%aer_sca_tau_edge(wl,:,aer) = 1d-10
+
+       end do
+
+       ! Now do it for all wavelengths in our hires grid, but use the AOD normalization
+       ! factor given by the left-edge wavelength.
+
+       do wl = 1, size(scn%op%wl)
+
+          do lay = 1, scn%num_levels - 1
+             scn%op%aer_ext_tau(wl,lay,aer) = exp(-((layer_height(lay) - aero_height)**2) &
+                  / (2 * aero_width * aero_width))
+          end do
 
           scn%op%aer_ext_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) / aod_norm
           scn%op%aer_sca_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) * scn%op%aer_ssa(wl, aer)
 
           ! Bump up tiny values to some lower threshold
-          ! For these very small values, it doesn't matter if the aerosol SSA
-          ! ends up being 1.0
+          ! For these very small values, it doesn't
+          ! matter if the aerosol SSA ends up being 1.0
           where(scn%op%aer_ext_tau(wl,:,aer) < 1.0d-10) scn%op%aer_ext_tau(wl,:,aer) = 1d-10
           where(scn%op%aer_sca_tau(wl,:,aer) < 1.0d-10) scn%op%aer_sca_tau(wl,:,aer) = 1d-10
-
-          if (wl == 1) then
-             do lay = 1, scn%num_levels - 1
-                write(*,*) lay, layer_height(lay), scn%op%aer_ext_tau(wl,lay,aer), scn%op%aer_sca_tau(wl,lay,aer)
-             end do
-          end if
 
        end do
 
     end do
     
-
-
   end subroutine aerosol_gauss_shape
-
-
-  subroutine precompute_all_coef(scn, n_stokes, coef, lcoef)
-
-    type(scene), intent(in) :: scn
-    integer, intent(in) :: n_stokes
-    double precision, allocatable, intent(inout) :: coef(:,:,:,:)
-    double precision, allocatable, intent(inout) :: lcoef(:,:,:,:,:)
-
-    integer :: nmom
-    integer :: n_layers
-
-    n_layers = scn%num_active_levels - 1
-
-    ! Depending on whether we use polarization or not,
-    ! we only need to do a certain number of phase matrix
-    ! elements.
-
-    if (n_stokes == 1) then
-       nmom = 1
-    else if (n_stokes == 3) then
-       nmom = 6
-    end if
-
-    allocate(coef(size(scn%op%wl), scn%max_pfmom, nmom, n_layers))
-    allocate(lcoef(size(scn%op%wl), scn%max_pfmom, nmom, 1, n_layers))
-
-    coef(:,:,:,:) = 0.0d0
-    lcoef(:,:,:,:,:) = 0.0d0
-
-
-  end subroutine precompute_all_coef
 
 
 end module aerosols_mod

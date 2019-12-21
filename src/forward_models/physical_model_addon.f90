@@ -2,8 +2,10 @@
 
 module physical_model_addon_mod
 
+  ! User modules
   use math_utils_mod
   use statevector_mod
+  use Rayleigh_mod
 
   ! Third-party modules
   use stringifor
@@ -72,6 +74,14 @@ module physical_model_addon_mod
      !> Total single scatter albedo (spectral, layer)
      double precision, allocatable :: omega(:,:)
 
+     !> Map the aerosol "number" to the MCS entry (aerosol)
+     ! aer_mcs_map(1) = 2 e.g. means that [aerosol-2] is the first
+     ! aerosol we have in this configuration.
+     integer, allocatable :: aer_mcs_map(:)
+     !> Which left-wavelength index of the aerosol file are we using? (aerosol)
+     integer, allocatable :: aer_wl_idx_l(:)
+     !> Which right-wavelength index of the aerosol file are we using? (aerosol)
+     integer, allocatable :: aer_wl_idx_r(:)
      !> Aerosol extinction cross section (spectral, aerosol)
      double precision, allocatable :: aer_ext_q(:,:)
      !> Aerosol scattering cross section (spectral, aerosol)
@@ -86,6 +96,17 @@ module physical_model_addon_mod
      double precision, allocatable :: aer_ext_tau(:,:,:)
      !> Aerosol scattering optical depth (spectral, layer, aerosol)
      double precision, allocatable :: aer_sca_tau(:,:,:)
+
+     ! These here are the same as the two above, but contain the
+     ! extinction and scattering profiles at the wavelengths at
+     ! which the miemom-type aerosol is actually calculated. This
+     ! is needed for a quicker calculation of the phase function moments
+     ! across the entire band
+
+     !> Aerosol extinction optical depth (edge, layer, aerosol)
+     double precision, allocatable :: aer_ext_tau_edge(:,:,:)
+     !> Aerosol scattering optical depth (edge, layer, aerosol)
+     double precision, allocatable :: aer_sca_tau_edge(:,:,:)
 
   end type optical_properties
 
@@ -243,6 +264,189 @@ contains
     if (allocated(scn%op%omega)) deallocate(scn%op%omega)
 
   end subroutine destroy_optical_properties
+
+
+  subroutine precompute_all_coef(scn, n_stokes, coef, lcoef)
+
+    type(scene), intent(in) :: scn
+    integer, intent(in) :: n_stokes
+    double precision, allocatable, intent(inout) :: coef(:,:,:,:)
+    double precision, allocatable, intent(inout) :: lcoef(:,:,:,:,:)
+
+
+    character(len=*), parameter :: fname = "precompute_all_coef"
+    double precision, allocatable :: ray_coef(:,:,:)
+
+    double precision, allocatable :: coef_left(:,:,:)
+    double precision, allocatable :: coef_right(:,:,:)
+    double precision, allocatable :: lcoef_left(:,:,:,:)
+    double precision, allocatable :: lcoef_right(:,:,:,:)
+
+    integer :: aer_idx
+
+    double precision, allocatable :: aer_sca_left(:,:), aer_sca_right(:,:)
+    double precision :: denom
+    double precision :: left_wl, right_wl
+    double precision :: wl
+    double precision :: fac
+    integer :: nmom
+    integer :: i, l, p, a
+    integer :: n_layers
+
+    n_layers = scn%num_active_levels - 1
+
+    ! Depending on whether we use polarization or not,
+    ! we only need to do a certain number of phase matrix
+    ! elements.
+
+    nmom = -1
+    if (n_stokes == 1) then
+       nmom = 1
+    else if (n_stokes == 3) then
+       nmom = 6
+    else
+       call logger%fatal(fname, "Number of stokes elements is neither 1 or 3!")
+       stop 1
+    end if
+
+    allocate(coef(size(scn%op%wl), scn%max_pfmom, nmom, n_layers))
+    allocate(lcoef(size(scn%op%wl), scn%max_pfmom, nmom, 1, n_layers))
+    allocate(ray_coef(size(scn%op%wl), 3, nmom))
+
+
+    coef(:,:,:,:) = 0.0d0
+    lcoef(:,:,:,:,:) = 0.0d0
+
+    if (scn%num_aerosols > 0) then
+       left_wl = MCS%aerosol(1)%wavelengths(scn%op%aer_wl_idx_l(1))
+       right_wl = MCS%aerosol(1)%wavelengths(scn%op%aer_wl_idx_r(1))
+
+       allocate(aer_sca_left(n_layers, scn%num_aerosols))
+       allocate(aer_sca_right(n_layers, scn%num_aerosols))
+
+       aer_sca_left(:,:) = scn%op%aer_sca_tau(1,:,:)
+       aer_sca_right(:,:) = scn%op%aer_sca_tau(size(scn%op%wl),:,:)
+    else
+       left_wl = scn%op%wl(1)
+       right_wl = scn%op%wl(size(scn%op%wl))
+
+       allocate(aer_sca_left(n_layers, 1))
+       allocate(aer_sca_right(n_layers, 1))
+
+       aer_sca_left(:,:) = 0.0d0
+       aer_sca_right(:,:) = 0.0d0
+    end if
+
+
+    call compute_coef_at_wl(scn, left_wl, nmom, &
+         scn%op%ray_tau(1,:), aer_sca_left, coef_left, lcoef_left)
+
+    call compute_coef_at_wl(scn, right_wl, nmom, &
+         scn%op%ray_tau(size(scn%op%wl),:), aer_sca_right, coef_right, lcoef_right)
+
+    ! NOTE !!!
+    ! This here is a heinously slow operation
+    do i = 1, size(scn%op%wl)
+       wl = scn%op%wl(i)
+
+       fac = (wl - left_wl)  / (right_wl - left_wl)
+
+       coef(i,:,:,:) = (1.0d0 - fac) * coef_left(:,:,:) + fac * coef_right(:,:,:)
+       lcoef(i,:,:,:,:) = (1.0d0 - fac) * lcoef_left(:,:,:,:) + fac * lcoef_right(:,:,:,:)
+
+    end do
+
+
+  end subroutine precompute_all_coef
+
+
+  subroutine compute_coef_at_wl(scn, wl, n_mom, ray_tau, aer_sca_tau, coef, lcoef)
+
+    type(scene), intent(in) :: scn
+    double precision, intent(in) :: wl
+    integer, intent(in) :: n_mom
+    double precision, intent(in) :: ray_tau(:)
+    double precision, intent(in) :: aer_sca_tau(:,:)
+    double precision, allocatable, intent(inout) :: coef(:,:,:)
+    double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
+
+    integer :: n_layer
+    integer :: n_aer
+    integer :: a, l, p
+    integer :: aer_idx
+
+    double precision :: fac
+    double precision :: denom
+    double precision, allocatable :: numer(:)
+    double precision, allocatable :: ray_coef(:,:)
+    double precision, allocatable :: aerpmom(:,:,:)
+
+
+    n_layer = size(ray_tau)
+    n_aer = size(aer_sca_tau, 2)
+
+    allocate(ray_coef(3, n_mom))
+    allocate(aerpmom(scn%max_pfmom, n_mom, n_layer))
+    allocate(coef(scn%max_pfmom, n_mom, n_layer))
+    allocate(lcoef(scn%max_pfmom, n_mom, 1, n_layer))
+
+    coef(:,:,:) = 0.0d0
+    lcoef(:,:,:,:) = 0.0d0
+
+    call calculate_rayleigh_scatt_matrix(&
+         calculate_rayleigh_depolf(wl), ray_coef(:,:))
+
+
+    ! Remember, the total phasefunction coefficients are calculated as follows
+    ! beta = (beta_aer * tau_aer_sca + beta_ray * tau_ray) / (tau_aer_sca + tau_ray)
+
+
+
+    ! Loop over every type of aerosol used
+    do l = 1, n_layer
+
+       ! The denominator is the sum of aerosol and Rayleigh scattering optical depth
+       denom = sum(aer_sca_tau(l, :)) + ray_tau(l)
+
+       do a = 1, scn%num_aerosols
+
+          aer_idx = scn%op%aer_mcs_map(a)
+
+          ! Calculate the "interpolation" factor needed for coef interpolation
+          ! Using this here makes the subroutine a bit more general and useful
+          fac = (wl - MCS%aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_l(a))) &
+               / (MCS%aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_r(a)) &
+               - MCS%aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_l(a)) )
+
+          ! This gives us the phase function moments from the mom file, but interpolated
+          ! AT the wavelength requested by the user. If this is used to calculate the
+          ! total moments at the wavelengths that are given by the mom file itself, "fac"
+          ! should be either 0 or 1, and essentially just use the numbers as they are
+          ! stored in the file.
+
+          aerpmom(1:MCS%aerosol(aer_idx)%max_n_coef,:,l) = &
+               (1.0d0 - fac) * MCS%aerosol(aer_idx)%coef(:,1:n_mom,scn%op%aer_wl_idx_l(a)) &
+               + fac * MCS%aerosol(aer_idx)%coef(:,1:n_mom,scn%op%aer_wl_idx_r(a))
+
+          do p = 1, n_mom
+             ! Add aerosol contributions here
+             coef(:, p, l) = aerpmom(:, p, l) * aer_sca_tau(l, a)
+          end do
+
+       end do
+
+       ! And add Rayleigh contributions here (after partial aerosol sum)
+       coef(1:3, :, l) = coef(1:3, :, l) + ray_coef(:, :) * ray_tau(l)
+       ! and divide the entire layer-moments by the denominator
+       coef(:, :, l) = coef(:, :, l) / denom
+
+    end do
+
+
+
+
+  end subroutine compute_coef_at_wl
+
 
 
   subroutine calculate_active_levels(scn)

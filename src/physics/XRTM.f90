@@ -7,8 +7,9 @@ module XRTM_mod
   ! User modules
   use control_mod, only: CS_window
   use math_utils_mod
-  use Rayleigh_mod, only : calculate_rayleigh_scatt_matrix
+  use Rayleigh_mod, only : calculate_rayleigh_scatt_matrix, calculate_rayleigh_depolf
   use statevector_mod
+  use aerosols_mod
   use physical_model_addon_mod, only : scene
   
   ! Third-party modules
@@ -230,9 +231,14 @@ contains
     integer :: xrtm_error
     ! How many derivatives does XRTM need to calculate?
     integer :: xrtm_n_derivs
+    !
+    integer :: xrtm_streams
 
     double precision, allocatable :: coef(:,:,:,:)
     double precision, allocatable :: lcoef(:,:,:,:,:)
+
+    !
+    double precision :: cpu_start, cpu_stop
 
     ! Initialize success variable
     xrtm_success = .false.
@@ -329,21 +335,30 @@ contains
                 call logger%fatal(fname, trim(tmp_str))
                 stop 1
              end if
+
+             xrtm_streams = window%RT_streams(1) / 2
+
+          else
+
+             xrtm_streams = 1
              
           end if
 
 
-          ! Precompute all phase function coefficients
+          ! Precompute all  phase function coefficients
           ! (and derivatives at some point)
+          call cpu_time(cpu_start)
           call precompute_all_coef(scn, n_stokes, coef, lcoef)
-
+          call cpu_time(cpu_stop)
+          write(*,*) "Coef calcs: ", cpu_stop - cpu_start, " sec."
+          write(*,*) "max_pfmom: ", scn%max_pfmom
 
           call create_XRTM( &
                xrtm, & ! XRTM handler
                xrtm_options, & ! XRTM options bitmask
                xrtm_solvers, & ! XRTM solvers combined bitmask
                scn%max_pfmom, & ! Max coef
-               window%RT_streams(1) / 2, & ! Quadrature points
+               xrtm_streams, & ! Quadrature points
                n_stokes, & ! Number of stokes coeffs
                xrtm_n_derivs, & ! Number of derivatives
                num_lay, & ! Number of layers
@@ -358,9 +373,10 @@ contains
              return
           end if
 
-          ! ----------------------------
-          ! Run the radiance calculation
-          ! ----------------------------
+          ! ------------------------------------------
+          ! Run the monochromatic radiance calculation
+          ! ------------------------------------------
+
 
           call calculate_XRTM_radiance( &
                xrtm, & ! XRTM handler
@@ -374,9 +390,10 @@ contains
                scn%atm%altitude_levels, & ! per-level altitude
                scn%op%albedo, & ! Surface albedo
                scn%op%gas_tau(:,1:num_lay,:), & ! per-wl per-layer per gas optical depths
+               scn%op%aer_ext_tau(:,1:num_lay,:), & ! per-wl per-layer per aerosol optical depths
+               scn%op%ray_tau(:,1:num_lay), & ! per-wl per-layer per aerosol optical depths
                sum(scn%op%gas_tau_dtemp(:,1:num_lay,:), dim=3), & ! dTau/dTemp
-               scn%op%ray_tau(:,1:num_lay), & ! & per-wl per-layer Rayleigh extinction
-               scn%op%ray_depolf, & ! & per-wl Rayleigh depolarization factor
+               coef, lcoef, &
                SV%svsv(SV%idx_gas(1:SV%num_gas,1)), & ! Gas scale factors (current)
                n_stokes, & ! Number of Stokes parameters to calculate
                xrtm_n_derivs, & ! Number of derivatives to be calculated
@@ -426,10 +443,13 @@ contains
   subroutine calculate_XRTM_radiance(xrtm, xrtm_separate_solvers, &
        SV, &
        wavelengths, SZA, VZA, SAA, VAA, &
-       altitude_levels, albedo, gas_tau, &
+       altitude_levels, albedo, &
+       gas_tau, &
+       aer_tau, &
+       ray_tau, &
        dtau_dtemp, &
        coef, lcoef, &
-       ray_tau, ray_depolf, gas_scale, &
+       gas_scale, &
        n_stokes, n_derivs, n_layers, &
        s_start, s_stop, gas_lookup, &
        radiance, &
@@ -444,11 +464,13 @@ contains
     double precision, intent(in) :: SZA, VZA, SAA, VAA, albedo(:)
     double precision, intent(in) :: altitude_levels(:)
     double precision, intent(in) :: gas_tau(:,:,:)
-    double precision, intent(in) :: dtau_dtemp(:,:)
-    double precision, allocatable, intent(in) :: coef(:,:,:,:)
-    double precision, allocatable, intent(in) :: lcoef(:,:,:,:,:)  !(3, 6, n_derivs, n_layers)
+    double precision, intent(in) :: aer_tau(:,:,:)
     double precision, intent(in) :: ray_tau(:,:)
-    double precision, intent(in) :: ray_depolf(:)
+
+    double precision, intent(in) :: dtau_dtemp(:,:)
+    double precision, allocatable, intent(in) :: coef(:,:,:,:) !(spectral, pfmom, elem, n_layers)
+    double precision, allocatable, intent(in) :: lcoef(:,:,:,:,:)  !(spectral, pfmom, elem, n_derivs, n_layers)
+
     double precision, intent(in) :: gas_scale(:)
     integer, intent(in) :: n_stokes
     integer, intent(in) :: n_derivs
@@ -490,6 +512,7 @@ contains
     double precision :: lsurf(n_derivs)
     
     double precision :: tau(n_layers), omega(n_layers), omega_tmp(n_layers)
+    double precision, allocatable :: this_coef(:,:,:), this_lcoef(:,:,:,:)
     integer :: N_spec
     integer :: max_coefs
     integer :: i,j,k,l,m
@@ -530,7 +553,9 @@ contains
        !allocate(coef(3, 1, n_layers))
     endif
 
-    n_coef(:) = 3
+    n_coef(:) = size(coef, 2)
+
+
 
     ! Allocate output containers - these will not change with wavelength, hence
     ! we only need to do this once per microwindow
@@ -538,6 +563,14 @@ contains
     allocate(I_m(n_stokes, 1, 1, 1))
     allocate(K_p(n_stokes, 1, 1, n_derivs, 1))
     allocate(K_m(n_stokes, 1, 1, n_derivs, 1))
+
+    allocate(this_coef(size(coef, 2), size(coef, 3), size(coef, 4)))
+    allocate(this_lcoef(size(lcoef, 2), size(lcoef, 3), size(lcoef, 4), size(lcoef, 5)))
+
+    write(*,*) shape(coef), '--', shape(lcoef)
+    write(*,*) shape(this_coef), '--', shape(this_lcoef)
+    read(*,*)
+
 
     ! Some general set-up's that are not expected to change, and can
     ! be safely hard-coded.
@@ -645,7 +678,8 @@ contains
     do i=1, N_spec
 
        if (mod(i, N_spec/10) == 0) then
-          write(tmp_str, '(A, F6.2, A, G0.1, A, G0.1, A)') "XRTM calls (", 100.0 * i/N_spec, "%, ", i, "/", N_spec, ")"
+          write(tmp_str, '(A, F6.2, A, G0.1, A, G0.1, A)') &
+               "XRTM calls (", 100.0 * i/N_spec, "%, ", i, "/", N_spec, ")"
           call logger%debug(fname, trim(tmp_str))
        end if
 
@@ -653,9 +687,9 @@ contains
        ! RT code for the forward calculation.
 
        ! Calculate total tau
-       tau(:) = sum(gas_tau(i,:,:), dim=2) + ray_tau(i, :)
+       tau(:) = sum(gas_tau(i,:,:), dim=2) + sum(aer_tau(i,:,:), dim=2) + ray_tau(i, :)
        ! Calculate the total single scatter albedo
-       omega(:) = ray_tau(i, :) / tau(:)
+       omega(:) = (ray_tau(i, :) + sum(aer_tau(i,:,:), dim=2))/ tau(:)
 
        ! Linearized inputs:
        ! Gas sub-columns - NOTE that the l_tau and l_omega are WITH
@@ -676,14 +710,6 @@ contains
           ltau(SV%num_gas + 1, :) = dtau_dtemp(i, :)
           lomega(SV%num_gas + 1, :) = -omega(:) / tau(:) * dtau_dtemp(i, :)
        end if
-
-       ! Calculate the rayleigh scattering matrix
-       call calculate_rayleigh_scatt_matrix(ray_depolf(i), ray_coef)
-
-       ! Copy over the Rayleigh scattering matrix
-       do j=1, n_layers
-          coef(:,:,j) = ray_coef(:,:)
-       end do
 
        ! Plug in surface property
        call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
@@ -721,14 +747,28 @@ contains
        end if
 
        ! Plug in the layer scattering matrix
-       call xrtm_set_coef_n_f90(xrtm, n_coef, coef, xrtm_error)
+       !this_coef(:,:,:) = coef(i,:,:,:)
+
+       ! Calculate the rayleigh scattering matrix
+       call calculate_rayleigh_scatt_matrix(&
+            calculate_rayleigh_depolf(wavelengths(i)), ray_coef)
+
+       ! Copy over the Rayleigh scattering matrix
+       do j=1, n_layers
+          this_coef(:,:,j) = ray_coef(:,:)
+       end do
+
+
+       call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_n_f90")
           return
        end if
 
        ! Plug in the layer scattering matrix derivatives
-       call xrtm_set_coef_l_nn_f90(xrtm, lcoef, xrtm_error)
+       !this_lcoef(:,:,:,:) = lcoef(i,:,:,:,:)
+       this_lcoef(:,:,:,:) = 0.0d0
+       !call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
           return

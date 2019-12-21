@@ -598,13 +598,15 @@ contains
   !> @param filename Momfile location
   !> @param wavelengths Number of wavelengths
   !> @param coefs The phase matrix Legendre coefficients
-  subroutine read_mom_file(filename, wavelengths, coefs, success)
+  subroutine read_mom_file(filename, wavelengths, coefs, max_coef, success)
 
     implicit none
     character(len=*) :: filename
     double precision, allocatable, intent(inout) :: wavelengths(:)
     ! Coefs: coef, matrix element, wavelength
     double precision, allocatable, intent(inout) :: coefs(:,:,:)
+    ! Largest number of coeffs in file, needed for array allocation
+    integer, intent(inout) :: max_coef
     logical, intent(inout) :: success
 
     character(len=*), parameter :: fname = "read_mom_file"
@@ -614,8 +616,7 @@ contains
     integer :: wl_count
     ! Temporary value
     integer :: tmp_value
-    ! Largest number of coeffs in file, needed for array allocation
-    integer :: max_coef
+
     ! Loop variables
     integer :: i,j
     ! Other loop variables
@@ -671,15 +672,18 @@ contains
        end if
     end do
 
+    max_coef = max_coef + 1
+
     write(dummy, '(A, G0.1)') "Mom file has this many wavelengths: ", wl_count
     call logger%debug(fname, trim(dummy))
     write(dummy, '(A, G0.1)') "Maximum number of coefficients: ", max_coef
     call logger%debug(fname, trim(dummy))
 
+
     ! Now we know how many elements our coef array needs to have
     ! "6" is hardcoded here, but I guess we don't expect physics
     ! to change all that much..
-    allocate(coefs(max_coef + 1, 6, wl_count))
+    allocate(coefs(max_coef, 6, wl_count))
     coefs(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(wavelengths(wl_count))
     wavelengths(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)

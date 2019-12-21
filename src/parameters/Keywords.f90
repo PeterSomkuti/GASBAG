@@ -170,9 +170,10 @@ contains
        this_idx = aerosol_start + aerosol_nr
 
        valid_sections(this_idx)  = trim(tmp_str)
-       valid_options(this_idx,1) = "name"
-       valid_options(this_idx,2) = "mom_file"
-       valid_options(this_idx,3) = "mie_file"
+       valid_options(this_idx,1) = "aerosol_name"
+       valid_options(this_idx,2) = "aerosol_type"
+       valid_options(this_idx,3) = "mom_file"
+       valid_options(this_idx,4) = "mie_file"
     end do
 
 

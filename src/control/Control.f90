@@ -112,6 +112,8 @@ module control_mod
      double precision, allocatable :: ils_stretch_cov(:)
      !> Names of gases which are present in the window
      type(string), allocatable :: gases(:)
+     !> What is the number of gases in this window?
+     integer :: num_gases
      !> GAS prior string
      type(string) :: gas_prior_type_string
      !> Which type of priors are we using
@@ -137,8 +139,21 @@ module control_mod
      double precision, allocatable :: smart_scale_first_guess_wl_in(:)
      double precision, allocatable :: smart_scale_first_guess_wl_out(:)
      double precision, allocatable :: smart_scale_first_guess_delta_tau(:)
-     !> What is the number of gases in this window?
-     integer :: num_gases
+     !> Aerosols used in this window
+     type(string), allocatable :: aerosols(:)
+     !> Number of aerosols used in this window
+     integer :: num_aerosols
+     !> This gas_index variable holds the information about which aerosol-section
+     !> (CS_aerosol) index corresponds to the aerosol that is stored in 'aerosols'
+     integer, allocatable :: aerosol_index(:)
+     !> Do we retrieve AOD from this aerosol?
+     logical, allocatable :: aerosol_retrieve_aod(:)
+     !> Prior AOD from SV string
+     double precision, allocatable :: aerosol_prior_aod(:)
+     !> Prior covariance from SV string
+     double precision, allocatable :: aerosol_aod_cov(:)
+     !> Do we keep the scattering coefficients constant throughout the band? Speedup!
+     logical :: constant_coef
      !> What is the number of sublayers to be used for gas OD calculations
      integer :: N_sublayers
      !> The dsigma_square factor to adjust convergence
@@ -865,8 +880,39 @@ contains
              deallocate(fini_string_array)
           end if
 
+          MCS%window(window_nr)%num_aerosols = 0
+          call fini_extract(fini, win_str, 'aerosols', .false., fini_string_array)
+
+          if (allocated(fini_string_array)) then
+
+             allocate(MCS%window(window_nr)%aerosols(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_index(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_retrieve_aod(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_prior_aod(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_aod_cov(size(fini_string_array)))
+
+             MCS%window(window_nr)%aerosol_retrieve_aod(:) = .false.
+
+             do i=1, size(fini_string_array)
+                MCS%window(window_nr)%aerosols(i) = fini_string_array(i)
+                MCS%window(window_nr)%num_aerosols = MCS%window(window_nr)%num_aerosols + 1
+             end do
+             deallocate(fini_string_array)
+          end if
+          
+
           call fini_extract(fini, win_str, 'atmosphere', .false., fini_char)
           MCS%window(window_nr)%atmosphere_file = trim(fini_char)
+
+          call fini_extract(fini, win_str, 'keep_scattering_constant', .false., fini_char)
+          fini_string = fini_char
+          if (fini_string == "") then
+             ! If not supplied, default state is "no"
+             MCS%window(window_nr)%constant_coef = .false.
+          else
+             MCS%window(window_nr)%constant_coef = string_to_bool(fini_string)
+          end if
+
 
        else
           MCS%window(window_nr)%used = .false.
@@ -982,7 +1028,7 @@ contains
              gas_found = .true.
              write(tmp_str, '(A, A, A, G0.1, A)')  "Gas found: ",  &
                   window(i_win)%gases(i)%chars(), " (gas-", j, ")"
-             call logger%trivia(fname, trim(tmp_str))
+             call logger%info(fname, trim(tmp_str))
              ! And also store which gas section corresponds to this particular gas
              ! in the window gas definition.
              window(i_win)%gas_index(i) = j
@@ -1004,6 +1050,69 @@ contains
     end do ! Finish first loop to find/match gases with window gases
 
   end subroutine MCS_find_gases
+
+  !> Subroutine to match aerosols from the window object to the
+  !> aerosol sections.
+  !>
+  !> @param window CS_window object array
+  !> @param aerosol CS_aerosol object array
+  !> @param i_win CS_window index
+  subroutine MCS_find_aerosols(window, aerosol, i_win)
+    implicit none
+
+    type(CS_window), intent(inout) :: window(:)
+    type(CS_aerosol), intent(inout) :: aerosol(:)
+    integer, intent(in) :: i_win
+
+    ! Local variables
+
+    ! Loop variables
+    integer :: i, j
+    ! Set if gas is found
+    logical :: aerosol_found
+    ! Function name
+    character(len=*), parameter :: fname = "MCS_find_aerosols"
+    ! Temp character array for conversions
+    character(len=999) :: tmp_str
+
+    ! If we have no aerosols in this window, there's nothing to do
+    ! so might as well just return.
+    if (window(i_win)%num_aerosols == 0) return
+
+    do i=1, size(window(i_win)%aerosols)
+       ! Loop over all gases specified in the retrieval window
+
+       ! Skip unused retrieval windows
+       if (.not. window(i_win)%used) cycle
+
+       aerosol_found = .false.
+       do j=1, MAX_AEROSOLS
+          if (window(i_win)%aerosols(i) == aerosol(j)%name) then
+             aerosol_found = .true.
+             write(tmp_str, '(A, A, A, G0.1, A)')  "Aerosol found: ",  &
+                  window(i_win)%aerosols(i)%chars(), " (aerosol-", j, ")"
+             call logger%info(fname, trim(tmp_str))
+             ! And also store which gas section corresponds to this particular
+             ! aerosol in the window aerosol definition.
+             window(i_win)%aerosol_index(i) = j
+             ! Gas was found, step out of loop
+             exit
+          end if
+       end do
+
+       ! If this specific gas was not found, kill the program immediately. There's no use-case
+       ! for a gas being specified in a retrieval window, and that gas then not being defined
+       ! in a 'gas'-section.
+       if (.not. aerosol_found) then
+          write(tmp_str, '(A, A, A, G0.1)') "Sorry - aerosol '", window(i_win)%aerosols(i)%chars(), &
+               "' was not found in window-", dble(i_win)
+          call logger%fatal(fname, trim(tmp_str))
+          stop 1
+       end if
+
+    end do ! Finish first loop to find/match gases with window gases
+
+  end subroutine MCS_find_aerosols
 
 
   subroutine MCS_find_gas_priors(window, gas, i_win)

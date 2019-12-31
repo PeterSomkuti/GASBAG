@@ -102,21 +102,6 @@ contains
     !> Scattering Angstrom coefficient
     double precision :: alpha_sca
 
-    ! ----------------------------------
-    ! Find out how many aerosols we have
-    ! ----------------------------------
-
-    count_aer = 0
-    do i = 1, size(MCS%aerosol)
-       if (MCS%aerosol(i)%used) then
-          count_aer = count_aer + 1
-       end if
-    end do
-
-    scn%num_aerosols = count_aer
-    ! Set this as 3 for Rayleigh scattering, will be overwritten
-    ! if aerosols are found and used
-    scn%max_pfmom = 3
 
     allocate(scn%op%aer_wl_idx_l(scn%num_aerosols))
     allocate(scn%op%aer_wl_idx_r(scn%num_aerosols))
@@ -134,6 +119,8 @@ contains
          scn%num_levels-1, scn%num_aerosols))
     allocate(scn%op%aer_sca_tau_edge(2, &
          scn%num_levels-1, scn%num_aerosols))
+
+    allocate(scn%op%reference_aod(scn%num_aerosols))
 
     ! -------------------------------
     ! Loop through all used aerosols
@@ -203,19 +190,43 @@ contains
 
   end subroutine aerosol_init
 
-
-  subroutine aerosol_gauss_shape(scn)
+  subroutine destroy_aerosol(scn)
 
     type(scene), intent(inout) :: scn
 
+    deallocate(scn%op%aer_wl_idx_l)
+    deallocate(scn%op%aer_wl_idx_r)
+    deallocate(scn%op%aer_mcs_map)
+    deallocate(scn%op%aer_ext_q)
+    deallocate(scn%op%aer_sca_q)
+    deallocate(scn%op%aer_ssa)
+
+    deallocate(scn%op%aer_ext_tau)
+    deallocate(scn%op%aer_sca_tau)
+
+    deallocate(scn%op%aer_ext_tau_edge)
+    deallocate(scn%op%aer_sca_tau_edge)
+
+    deallocate(scn%op%reference_aod)
+
+  end subroutine destroy_aerosol
+
+
+
+  subroutine aerosol_gauss_shape(scn, aero_aod)
+
+    type(scene), intent(inout) :: scn
+    double precision, intent(in) :: aero_aod(:)
+
     double precision, parameter :: aero_height = 10000.0
-    double precision, parameter :: aero_aod = 2.0
     double precision, parameter :: aero_width = 3000.0
 
-
     double precision, allocatable :: layer_height(:)
+
     double precision :: aod_norm
-    integer :: aer, wl, lay
+    integer :: aer
+    integer :: wl
+    integer :: lay
 
     allocate(layer_height(scn%num_levels - 1))
 
@@ -228,7 +239,12 @@ contains
     do aer = 1, scn%num_aerosols
 
        ! First calculate ext/sca for the wavelenghts for which the aerosols are
-       ! actually specified / calculated.
+       ! actually specified / calculated. This is usually at two wavelengths near
+       ! the band edges.
+
+       ! We also store the reference AOD for this scene (iteration) for this aerosol type.
+       ! Comes in handy when we need to calculate jacobians.
+       scn%op%reference_aod(aer) = aero_aod(aer)
 
        do wl = 1, 2
 
@@ -238,9 +254,11 @@ contains
           end do
 
           ! The normalization factor is ONLY computed for a reference wavelength, which
-          ! is the first (lower) wavelength for this particular band.
+          ! is the first (lower) wavelength for this particular band. The AOD for a given
+          ! aerosol is also defined at this wavelength. Depending on the spectral properties
+          ! of the aerosol, some wavelengths can exceed the reference AOD
           if (wl == 1) then
-             aod_norm = sum(scn%op%aer_ext_tau_edge(wl,:,aer)) / aero_aod
+             aod_norm = sum(scn%op%aer_ext_tau_edge(wl,:,aer)) / aero_aod(aer)
           end if
 
           scn%op%aer_ext_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) / aod_norm

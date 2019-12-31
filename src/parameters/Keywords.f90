@@ -147,6 +147,7 @@ contains
        valid_options(this_idx,36) = "polarization"
        valid_options(this_idx,37) = "gas_prior_type"
        valid_options(this_idx,38) = "rt_streams"
+       valid_options(this_idx,40) = "keep_scattering_constant"
 
     end do
 

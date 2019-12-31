@@ -19,7 +19,7 @@ module physical_model_mod
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
   use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, &
-       MCS_find_gases, MCS_find_gas_priors
+       MCS_find_gases, MCS_find_aerosols, MCS_find_gas_priors
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use solar_model_mod
@@ -231,7 +231,6 @@ contains
     ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
     !---------------------------------------------------------------------
 
-
     ! Read in MET and L1B data, this is instrument-dependent, so we need to
     ! make our instrument select here as well.
     select type(my_instrument)
@@ -358,6 +357,9 @@ contains
        ! and see if a gas with the corresponding name has been defined.
        call MCS_find_gases(MCS%window, MCS%gas, i_win)
 
+       ! Same for aerosols
+       call MCS_find_aerosols(MCS%window, MCS%aerosol, i_win)
+
        ! We also check what type of gas priors the user wants to have
        call MCS_find_gas_priors(MCS%window, MCS%gas, i_win)
 
@@ -394,6 +396,10 @@ contains
 
        end if
 
+       ! Similarly, find the aerosols which the user wants for this window
+       
+
+
        ! The currently used band / spectrometer number
        band = MCS%window(i_win)%band
        ! Grab the number of spectral pixels in this band
@@ -412,7 +418,7 @@ contains
                altitude, relative_velocity, relative_solar_velocity)
           ! Grab the L1B stokes coefficients
           call my_instrument%read_stokes_coef(l1b_file_id, band, stokes_coef)
-          stokes_coef(:,:,:) = 1.0d0
+
           ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
           if (spike_exists) then
@@ -572,9 +578,10 @@ contains
 
 
        ! If the user wants to run in step-through mode, then that decision takes
-       ! higher priority than OpenMP threads. So we force the number of threads
-       ! to be one. Step-Through mode would crash GASBAG because it tries to
-       ! write to the same file from different threads, and is thus NOT thread-safe!
+       ! higher priority than the number of requested OpenMP threads.
+       ! So we force the number of threads to be one.
+       ! Step-Through mode would crash GASBAG because it tries to
+       ! write to the same file from different threads - NOT thread-safe!
 
 #ifdef _OPENMP
        if (MCS%algorithm%step_through) then
@@ -597,8 +604,6 @@ contains
        ! Note that other modules in GASBAG have some OMP directives to make sure that
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
-
-       frame_start = 3500
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
@@ -1006,7 +1011,12 @@ contains
     integer :: n_stokes
 
     ! For e.g. XRTM, we need containers for the derivatives w.r.t.
-    double precision, allocatable :: dI_dgas(:,:,:), dI_dsurf(:,:), dI_dTemp(:,:)
+    ! (spectral, parameter, stokes)
+    double precision, allocatable :: dI_dgas(:,:,:), dI_dsurf(:,:,:)
+    ! (spectral, stokes)
+    double precision, allocatable :: dI_dTemp(:,:)
+    ! (spectral, aerosol, stokes)
+    double precision, allocatable :: dI_dAOD(:,:,:)
 
     ! Radiative transfer models - which one are we using?
     integer :: RT_model
@@ -1019,7 +1029,7 @@ contains
     type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
     ! Sounding location variables
-    double precision :: mu0, mu ! cos(sza) and cos(vza)
+    !double precision :: mu0, mu ! cos(sza) and cos(vza)
     ! Epoch, which is just the date split into an integer array
     integer :: epoch(7)
 
@@ -1103,6 +1113,11 @@ contains
     logical :: success_scale_levels
     double precision, allocatable :: scale_first_guess(:)
 
+    ! Aerosols (num_aero)
+    double precision, allocatable :: this_aerosol_aod(:)
+    double precision, allocatable :: this_aerosol_height(:)
+    double precision, allocatable :: this_aerosol_width(:)
+
     ! Retrieval quantities
     type(statevector) :: SV
     ! User-defined value to scale the dsigma_sq value that essentially
@@ -1123,7 +1138,7 @@ contains
 
     ! Temporary matrices and vectors for computation
     double precision, allocatable :: tmp_m1(:,:), tmp_m2(:,:)
-    double precision, allocatable :: tmp_v1(:), tmp_v2(:), tmp_v3(:), tmp_v4(:)
+    double precision, allocatable :: tmp_v1(:), tmp_v2(:), tmp_v3(:)
     double precision, allocatable :: KtSeK(:,:), gain_matrix(:,:), AK(:,:)
     ! Was the matrix inversion operation successful?
     logical :: success_inv_mat
@@ -1159,22 +1174,9 @@ contains
     ! Has last iteration been a divergent one?
     logical :: divergent_step
 
-    ! XRTM Radiative Transfer model handler
-    type(xrtm_type) :: xrtm
-    ! Actual options variable
-    integer :: xrtm_options
-    ! Actual solvers variable
-    integer :: xrtm_solvers
-    ! Solvers separated into individual one's
-    integer, allocatable :: xrtm_separate_solvers(:)
-    ! XRTM surface kernels
-    integer :: xrtm_kernels(1)
+    ! XRTM Radiative Transfer stuff
     ! Was the call to XRTM successful?
     logical :: xrtm_success
-    ! XRTM error variable
-    integer :: xrtm_error
-    ! How many derivatives does XRTM need to calculate?
-    integer :: xrtm_n_derivs
 
     ! Miscellaneous stuff
     ! String to hold various names etc.
@@ -1182,10 +1184,9 @@ contains
     ! Function name
     character(len=*), parameter :: fname = "physical_FM"
     ! Loop variables
-    integer :: i, j, q, l
+    integer :: i, j, q
     ! File unit for debugging
     integer :: funit
-    double precision, allocatable :: tmp_convolved_gas(:,:)
 
     ! DEBUG STUFF
     double precision :: cpu_conv_start, cpu_conv_stop
@@ -1201,7 +1202,8 @@ contains
     l1b_file_id = MCS%input%l1b_file_id
     output_file_id = MCS%output%output_file_id
 
-    ! Ingest scene geometry
+    ! Ingest scene geometry and store them into the scene
+    ! object.
     scn%SZA = SZA(i_fp, i_fr)
     scn%VZA = VZA(i_fp, i_fr)
     scn%mu0 = cos(DEG2RAD * scn%SZA)
@@ -1214,8 +1216,8 @@ contains
     scn%alt = altitude(i_fp, i_fr)
 
     ! For convenience, calculate cos(sza) and cos(vza) here
-    mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
-    mu = cos(DEG2RAD * VZA(i_fp, i_fr))
+    !mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
+    !mu = cos(DEG2RAD * VZA(i_fp, i_fr))
 
 
     ! Set the used radiative transfer model
@@ -1337,6 +1339,12 @@ contains
     ! Allocate the micro-window bounded solar arrays
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
+
+    if (MCS%window(i_win)%num_aerosols > 0) then
+       allocate(this_aerosol_aod(MCS%window(i_win)%num_aerosols))
+       allocate(this_aerosol_height(MCS%window(i_win)%num_aerosols))
+       allocate(this_aerosol_width(MCS%window(i_win)%num_aerosols))
+    end if
 
     ! The "instrument doppler shift" is caused by the relative velocity
     ! between the point on the surface and the spacecraft. Obviously, this
@@ -1491,7 +1499,7 @@ contains
     ! Dispersion prior is taken from L1B
     if (SV%num_dispersion > 0) then
        ! Start with the L1b dispersion values as priors
-       do i=1, SV%num_dispersion
+       do i = 1, SV%num_dispersion
           SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i, i_fp, band)
        end do
     end if
@@ -1500,7 +1508,7 @@ contains
     if (SV%num_ils_stretch > 0) then
        ! Set the first coefficient to 1.0d0, i.e. no stretch
        SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
-       do i=2, SV%num_ils_stretch
+       do i = 2, SV%num_ils_stretch
           ! And set all other coefficients to zero at first
           SV%svap(SV%idx_ils_stretch(i)) = 0.0d0
        end do
@@ -1511,9 +1519,18 @@ contains
        SV%svap(SV%idx_psurf(1)) = met_psurf(i_fp, i_fr)
     end if
 
+    ! Aerosol AOD taken from SV string
+    if (SV%num_aerosol_aod > 0) then
+       do i = 1, SV%num_aerosol_aod
+          if (MCS%window(i_win)%aerosol_retrieve_aod(sv%aerosol_idx_lookup(i))) then
+             SV%svap(SV%idx_aerosol_aod(i)) = MCS%window(i_win)%aerosol_prior_aod(i)
+          end if
+       end do
+    end if
+
     ! Gases. Scale factors are set to one in the beginning.
     if (SV%num_gas > 0) then
-       do i=1, SV%num_gas
+       do i = 1, SV%num_gas
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,1)) = mean(scale_first_guess(:))
           end if
@@ -1543,8 +1560,10 @@ contains
 
        ! Copy over the initial atmosphere
        scn%atm = initial_atm
+
        scn%num_levels = scn%atm%num_levels
        scn%num_gases = scn%atm%num_gases
+       scn%num_aerosols = MCS%window(i_win)%num_aerosols
        
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, num_gases)
@@ -1670,7 +1689,7 @@ contains
              old_sv = SV%svsv
           end if
 
-          ! If this is not the first iteration, we grab forward model values from the !
+          ! If this is not the first iteration, we grab forward model values from the
           ! current state vector.
 
           ! Albedo coefficients grabbed from the SV and used to construct
@@ -1751,15 +1770,25 @@ contains
 
           ! Allocate these containers only if XRTM is used
           if (RT_model == RT_XRTM) then
+             
              ! For dI/dtau and dI/domega, we need one element for
              ! a) Every retrieved gas subcolumn
              ! b) Temperature jacobian
-             ! c) Surface pressure [NOT IMPLEMENTED YET]
-
+             ! c) Every retrieved albedo parameter
+             ! d) Surface pressure [NOT IMPLEMENTED YET]
+             
              allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
-             allocate(dI_dsurf(N_hires, n_stokes))
+
+             if (SV%num_albedo > 0) then
+                allocate(dI_dsurf(N_hires, SV%num_albedo, n_stokes))
+             end if
+
              if (SV%num_temp > 0) then
                 allocate(dI_dTemp(N_hires, n_stokes))
+             end if
+
+             if (SV%num_aerosol_aod > 0) then
+                allocate(dI_dAOD(N_hires, SV%num_aerosol_aod, n_stokes))
              end if
           end if
 
@@ -1914,13 +1943,20 @@ contains
           ! ---------------------------------------------------------------
 
 
-          ! Initialize first (calculate layer-independent quantities)
-          call aerosol_init(scn)
-
           ! Calculate vertical distribution and optical depths that
           ! enter the RT calculations
           if (scn%num_aerosols > 0) then
-             call aerosol_gauss_shape(scn)
+             ! Initialize first (calculate layer-independent quantities)
+             call aerosol_init(scn)
+
+             this_aerosol_aod = 0.0d0
+             do i=1, SV%num_aerosol_aod
+                this_aerosol_aod(i) = SV%svsv(SV%idx_aerosol_aod(i))
+             end do
+
+             ! Distribute aerosols in atmosphere
+             call aerosol_gauss_shape(scn, this_aerosol_aod)
+
           end if
 
           ! ---------------------------------------------------------------
@@ -1933,27 +1969,27 @@ contains
           where(scn%op%ray_tau < 1d-10) scn%op%ray_tau = 1d-10
 
           ! Total optical depth is calculated as sum of all gas ODs
-          scn%op%total_tau(:) = sum(sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau, dim=2)
+          scn%op%layer_tau(:,:) = sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau
 
           ! If there are aerosols in the scene, add them to the total OD
           if (allocated(scn%op%aer_ext_tau)) then
              call logger%debug(fname, "Adding aerosol extinction")
-             scn%op%total_tau(:) = scn%op%total_tau(:) &
-                  + sum(sum(scn%op%aer_ext_tau(:,:,:), dim=3), dim=2)
+             scn%op%layer_tau(:,:) = scn%op%layer_tau(:,:) &
+                  + sum(scn%op%aer_ext_tau(:,:,:), dim=3)
           end if
+
+          scn%op%total_tau(:) = sum(scn%op%layer_tau, dim=2)
 
           ! The layer-resolved single scatter albedo is (Rayleigh + Aerosol) / (Total)
           ! extinctions.
           if (allocated(scn%op%aer_ext_tau)) then
              call logger%debug(fname, "Calculating SSA including aerosols")
-             scn%op%omega(:,:) = ( &
+             scn%op%layer_omega(:,:) = &
                   (scn%op%ray_tau + sum(scn%op%aer_ext_tau(:,:,:), dim=3)) &
-                  / (sum(scn%op%gas_tau, dim=3) + sum(scn%op%aer_ext_tau(:,:,:), dim=3) + scn%op%ray_tau) )
+                  / scn%op%layer_tau(:,:)
           else
 
-             scn%op%omega(:,:) = ( &
-                  (scn%op%ray_tau) &
-                  / (sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau) )
+             scn%op%layer_omega(:,:) = scn%op%ray_tau(:,:) / scn%op%layer_tau(:,:)
 
           end if
 
@@ -2009,7 +2045,9 @@ contains
        allocate(noise_work(N_spec))
 
        !---------------------------------------------------------------------
-       ! RT CALCULATIONS
+       !
+       !                RT CALCULATIONS
+       !
        !---------------------------------------------------------------------
 
        ! One last check if the radiances (measured) are valid
@@ -2045,7 +2083,8 @@ contains
                n_stokes, & ! Number of Stokes parameters to calculate
                s_start, & ! sub-column start indices
                s_stop, & ! sub_column stop indices
-               radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, & ! Results
+               radiance_calc_work_hi_stokes, & ! Results
+               dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, & ! Jacobian results
                xrtm_success &
                )
 
@@ -2190,6 +2229,22 @@ contains
           end do
        end if
 
+       ! Aerosol jacobians
+       if (SV%num_aerosol_aod > 0) then
+          select case (RT_model)
+          case (RT_XRTM)
+             do i=1, SV%num_aerosol_aod
+                do q=1, n_stokes
+                   K_hi_stokes(:, SV%idx_aerosol_aod(i), q) = this_solar(:,2) * dI_dAOD(:,i,q)
+                end do
+             end do
+          case default
+             call logger%error(fname, "AOD Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
+       end if
+
        ! Albedo Jacobians
        if (SV%num_albedo > 0) then
           select case (RT_model)
@@ -2201,7 +2256,7 @@ contains
           case (RT_XRTM)
              do i=1, SV%num_albedo
                 do q=1, n_stokes
-                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,q) &
+                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,i,q) &
                         * (scn%op%wl(:) - scn%op%wl(center_pixel_hi))**(dble(i-1))
                 end do
              end do
@@ -2270,9 +2325,11 @@ contains
                 ! TODO: This threshold value should be user-supplied, as well
                 ! as the noise inflation factor.
                 ! -127 is a fill value of some sort, so ignore that one
+
                 if ((spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) .and. &
                      (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) /= -127)) then
-                   noise_work(i) = noise_work(i) * 10000.0d0
+                   ! For now .. use the maximally allowed radiance? Is that too low?
+                   noise_work(i) = 10.0d0 * MaxMS(band)
                 end if
              end do
           end if
@@ -2893,6 +2950,7 @@ contains
              call logger%debug(fname, trim(tmp_str))
           end if
 
+          ! Halt the execution here and wait for user keypress
           call logger%debug(fname, "---------------------------------")
           call logger%debug(fname, "Press ENTER to continue")
           read(*,*)
@@ -2908,13 +2966,17 @@ contains
        ! Deallocate scene optical property arrays
        call destroy_optical_properties(scn)
 
+       if (scn%num_aerosols > 0) then
+          call destroy_aerosol(scn)
+       end if
+
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
        if (allocated(prior_vmr_profile)) deallocate(prior_vmr_profile)
 
        if (allocated(dI_dgas)) deallocate(dI_dgas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
        if (allocated(dI_dTemp)) deallocate(dI_dTemp)
-       if (allocated(xrtm_separate_solvers)) deallocate(xrtm_separate_solvers)
+       if (allocated(dI_dAOD)) deallocate(dI_dAOD)
 
        if (.not. divergent_step) then
           ! Make sure we keep the 'old' Chi2 only from a valid iteration
@@ -3002,6 +3064,15 @@ contains
                !(10.0d0 * MCS%window(i_win)%ils_stretch_pert(i))**2
        end do
     end if
+
+
+    ! Aerosol AOD covariances come from MCS
+    do i = 1, SV%num_aerosol_aod
+       if (MCS%window(i_win)%aerosol_retrieve_aod(sv%aerosol_idx_lookup(i))) then
+          Sa(SV%idx_aerosol_aod(i), SV%idx_aerosol_aod(i)) = &
+               MCS%window(i_win)%aerosol_aod_cov(sv%aerosol_idx_lookup(i)) ** 2
+       end if
+    end do
 
     ! The scale factor covariances are taken from the configuration file / MCS
     do i=1, SV%num_gas

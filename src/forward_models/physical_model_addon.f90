@@ -71,8 +71,11 @@ module physical_model_addon_mod
 
      !> Total column optical depth (spectral)
      double precision, allocatable :: total_tau(:)
+     ! Total layer optical properties go into the RT calculations
+     !> Layer total optical depth (spectral, layer)
+     double precision, allocatable :: layer_tau(:,:)
      !> Total single scatter albedo (spectral, layer)
-     double precision, allocatable :: omega(:,:)
+     double precision, allocatable :: layer_omega(:,:)
 
      !> Map the aerosol "number" to the MCS entry (aerosol)
      ! aer_mcs_map(1) = 2 e.g. means that [aerosol-2] is the first
@@ -88,6 +91,9 @@ module physical_model_addon_mod
      double precision, allocatable :: aer_sca_q(:,:)
      !> Aerosol single scatter albedo (spectral, aerosol)
      double precision, allocatable :: aer_ssa(:,:)
+
+     !> Aerosol reference AOD (aerosol)
+     double precision, allocatable :: reference_aod(:)
 
      ! These here are calculated AFTER inferring the
      ! aerosol distribution (which layers?)
@@ -116,15 +122,15 @@ module physical_model_addon_mod
   type, public :: scene
 
      !> Number of levels in the model atmosphere
-     integer :: num_levels
+     integer :: num_levels = 0
      !> Number of active levels currently used
-     integer :: num_active_levels
+     integer :: num_active_levels = 0
      !> Number of gases in the model atmosphere
-     integer :: num_gases
+     integer :: num_gases = 0
      !> Number of aerosols in the scene
-     integer :: num_aerosols
+     integer :: num_aerosols = 0
      !> Largest number of phase function moments, needed for allocation
-     integer :: max_pfmom
+     integer :: max_pfmom = 0
 
      !> The atmosphere of the scene
      type(atmosphere) :: atm
@@ -242,7 +248,10 @@ contains
        scn%op%ray_depolf(:) = 0.0d0
        allocate(scn%op%total_tau(N_hires))
        scn%op%total_tau(:) = 0.0d0
-       allocate(scn%op%omega(N_hires, scn%num_levels-1))
+       allocate(scn%op%layer_tau(N_hires, scn%num_levels-1))
+       scn%op%layer_tau(:,:) = 0.0d0
+       allocate(scn%op%layer_omega(N_hires, scn%num_levels-1))
+       scn%op%layer_omega(:,:) = 0.0d0
     end if
 
   end subroutine allocate_optical_properties
@@ -261,15 +270,19 @@ contains
     if (allocated(scn%op%ray_tau)) deallocate(scn%op%ray_tau)
     if (allocated(scn%op%ray_depolf)) deallocate(scn%op%ray_depolf)
     if (allocated(scn%op%total_tau)) deallocate(scn%op%total_tau)
-    if (allocated(scn%op%omega)) deallocate(scn%op%omega)
+    if (allocated(scn%op%layer_tau)) deallocate(scn%op%layer_tau)
+    if (allocated(scn%op%layer_omega)) deallocate(scn%op%layer_omega)
 
   end subroutine destroy_optical_properties
 
 
-  subroutine precompute_all_coef(scn, n_stokes, coef, lcoef)
+  subroutine precompute_all_coef(scn, SV, n_stokes, n_derivs, constant_coef, coef, lcoef)
 
     type(scene), intent(in) :: scn
+    type(statevector), intent(in) :: SV
     integer, intent(in) :: n_stokes
+    integer, intent(in) :: n_derivs
+    logical, intent(in) :: constant_coef
     double precision, allocatable, intent(inout) :: coef(:,:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:,:)
 
@@ -289,9 +302,12 @@ contains
     double precision :: left_wl, right_wl
     double precision :: wl
     double precision :: fac
-    integer :: nmom
+    integer :: n_mom
+    integer :: n_coefs
     integer :: i, l, p, a
     integer :: n_layers
+
+    call logger%debug(fname, "FUNCTION START")
 
     n_layers = scn%num_active_levels - 1
 
@@ -299,25 +315,22 @@ contains
     ! we only need to do a certain number of phase matrix
     ! elements.
 
-    nmom = -1
+    n_mom = -1
     if (n_stokes == 1) then
-       nmom = 1
+       call logger%debug(fname, "Setting number of PFmom elements to 1")
+       n_mom = 1
     else if (n_stokes == 3) then
-       nmom = 6
+       call logger%debug(fname, "Setting number of PFmom elements to 6")
+       n_mom = 6
     else
        call logger%fatal(fname, "Number of stokes elements is neither 1 or 3!")
        stop 1
     end if
 
-    allocate(coef(size(scn%op%wl), scn%max_pfmom, nmom, n_layers))
-    allocate(lcoef(size(scn%op%wl), scn%max_pfmom, nmom, 1, n_layers))
-    allocate(ray_coef(size(scn%op%wl), 3, nmom))
-
-
-    coef(:,:,:,:) = 0.0d0
-    lcoef(:,:,:,:,:) = 0.0d0
+    allocate(ray_coef(3, n_mom, size(scn%op%wl)))
 
     if (scn%num_aerosols > 0) then
+       call logger%debug(fname, "We have aerosols - allocating scattering optical depths.")
        left_wl = MCS%aerosol(1)%wavelengths(scn%op%aer_wl_idx_l(1))
        right_wl = MCS%aerosol(1)%wavelengths(scn%op%aer_wl_idx_r(1))
 
@@ -327,68 +340,99 @@ contains
        aer_sca_left(:,:) = scn%op%aer_sca_tau(1,:,:)
        aer_sca_right(:,:) = scn%op%aer_sca_tau(size(scn%op%wl),:,:)
     else
+       call logger%debug(fname, "No aerosols present. Just grabbing band edge wavelengths.")
        left_wl = scn%op%wl(1)
        right_wl = scn%op%wl(size(scn%op%wl))
-
-       allocate(aer_sca_left(n_layers, 1))
-       allocate(aer_sca_right(n_layers, 1))
-
-       aer_sca_left(:,:) = 0.0d0
-       aer_sca_right(:,:) = 0.0d0
     end if
 
-
-    call compute_coef_at_wl(scn, left_wl, nmom, &
+    call logger%debug(fname, "Calculating coefficients at left edge")
+    call compute_coef_at_wl(scn, SV, left_wl, n_mom, n_derivs, &
          scn%op%ray_tau(1,:), aer_sca_left, coef_left, lcoef_left)
 
-    call compute_coef_at_wl(scn, right_wl, nmom, &
+    call logger%debug(fname, "Calculating coefficients at right edge")
+    call compute_coef_at_wl(scn, SV, right_wl, n_mom, n_derivs, &
          scn%op%ray_tau(size(scn%op%wl),:), aer_sca_right, coef_right, lcoef_right)
 
-    ! NOTE !!!
-    ! This here is a heinously slow operation
-    do i = 1, size(scn%op%wl)
-       wl = scn%op%wl(i)
+    if (constant_coef) then
+       n_coefs = 1
+    else
+       n_coefs = size(coef_left, 1)
+    end if
 
-       fac = (wl - left_wl)  / (right_wl - left_wl)
+    allocate(coef(size(coef_left, 1), &
+         size(coef_left, 2), size(coef_left, 3), n_coefs))
+    allocate(lcoef(size(lcoef_left, 1), size(lcoef_left, 2), &
+         size(lcoef_left, 3), size(lcoef_left, 4), n_coefs))
 
-       coef(i,:,:,:) = (1.0d0 - fac) * coef_left(:,:,:) + fac * coef_right(:,:,:)
-       lcoef(i,:,:,:,:) = (1.0d0 - fac) * lcoef_left(:,:,:,:) + fac * lcoef_right(:,:,:,:)
+    call logger%debug(fname, "Setting coef and lcoef arrays to zero.")
+    coef(:,:,:,:) = 0.0d0
+    lcoef(:,:,:,:,:) = 0.0d0
 
-    end do
 
+    ! Assume the scattering properties from the middle of the reference wavelengths
+    if (constant_coef) then
+       call logger%debug(fname, "Using constant scattering coefficients for the band.")
+       fac = 0.5
+       coef(:,:,:,1) = (1.0d0 - fac) * coef_left(:,:,:) + fac * coef_right(:,:,:)
+       lcoef(:,:,:,:,1) = (1.0d0 - fac) * lcoef_left(:,:,:,:) + fac * lcoef_right(:,:,:,:)
+    else
+       ! NOTE
+       ! This here is a heinously slow operation
+
+       call logger%debug(fname, "Creating big coef and lcoef arrays (SLOW).")
+       do i = 1, size(scn%op%wl)
+          wl = scn%op%wl(i)
+
+          fac = (wl - left_wl)  / (right_wl - left_wl)
+
+          coef(:,:,:,i) = (1.0d0 - fac) * coef_left(:,:,:) + fac * coef_right(:,:,:)
+          lcoef(:,:,:,:,i) = (1.0d0 - fac) * lcoef_left(:,:,:,:) + fac * lcoef_right(:,:,:,:)
+
+       end do
+    end if
+
+    call logger%debug(fname, "FUNCTION END")
 
   end subroutine precompute_all_coef
 
 
-  subroutine compute_coef_at_wl(scn, wl, n_mom, ray_tau, aer_sca_tau, coef, lcoef)
+  subroutine compute_coef_at_wl(scn, SV, wl, n_mom, n_derivs, ray_tau, aer_sca_tau, coef, lcoef)
 
     type(scene), intent(in) :: scn
+    type(statevector), intent(in) :: SV
     double precision, intent(in) :: wl
     integer, intent(in) :: n_mom
+    integer, intent(in) :: n_derivs
     double precision, intent(in) :: ray_tau(:)
-    double precision, intent(in) :: aer_sca_tau(:,:)
+    double precision, allocatable, intent(in) :: aer_sca_tau(:,:)
     double precision, allocatable, intent(inout) :: coef(:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
 
     integer :: n_layer
     integer :: n_aer
-    integer :: a, l, p
+    integer :: n_pfmom
+    integer :: a, l, p, i
     integer :: aer_idx
+    integer :: aer_sv_idx
+    integer :: l_aod_idx
 
     double precision :: fac
     double precision :: denom
-    double precision, allocatable :: numer(:)
+    !double precision, allocatable :: numer(:)
     double precision, allocatable :: ray_coef(:,:)
-    double precision, allocatable :: aerpmom(:,:,:)
+    double precision, allocatable :: aerpmom(:,:,:,:)
 
 
-    n_layer = size(ray_tau)
-    n_aer = size(aer_sca_tau, 2)
+    n_layer = scn%num_active_levels - 1
+    n_aer = scn%num_aerosols
+    ! Set number of phase function coefficients to either 3 (Rayleigh only)
+    ! or whatever number we need if we have aerosols
+    n_pfmom = max(3, scn%max_pfmom)
 
     allocate(ray_coef(3, n_mom))
-    allocate(aerpmom(scn%max_pfmom, n_mom, n_layer))
-    allocate(coef(scn%max_pfmom, n_mom, n_layer))
-    allocate(lcoef(scn%max_pfmom, n_mom, 1, n_layer))
+    allocate(aerpmom(n_aer, n_pfmom, n_mom, n_layer))
+    allocate(coef(n_pfmom, n_mom, n_layer))
+    allocate(lcoef(n_pfmom, n_mom, n_derivs, n_layer))
 
     coef(:,:,:) = 0.0d0
     lcoef(:,:,:,:) = 0.0d0
@@ -396,19 +440,17 @@ contains
     call calculate_rayleigh_scatt_matrix(&
          calculate_rayleigh_depolf(wl), ray_coef(:,:))
 
-
     ! Remember, the total phasefunction coefficients are calculated as follows
     ! beta = (beta_aer * tau_aer_sca + beta_ray * tau_ray) / (tau_aer_sca + tau_ray)
-
-
 
     ! Loop over every type of aerosol used
     do l = 1, n_layer
 
        ! The denominator is the sum of aerosol and Rayleigh scattering optical depth
-       denom = sum(aer_sca_tau(l, :)) + ray_tau(l)
+       denom = ray_tau(l)
+       if (n_aer > 0) denom = denom + sum(aer_sca_tau(l, :))
 
-       do a = 1, scn%num_aerosols
+       do a = 1, n_aer
 
           aer_idx = scn%op%aer_mcs_map(a)
 
@@ -424,13 +466,13 @@ contains
           ! should be either 0 or 1, and essentially just use the numbers as they are
           ! stored in the file.
 
-          aerpmom(1:MCS%aerosol(aer_idx)%max_n_coef,:,l) = &
+          aerpmom(a,1:MCS%aerosol(aer_idx)%max_n_coef,:,l) = &
                (1.0d0 - fac) * MCS%aerosol(aer_idx)%coef(:,1:n_mom,scn%op%aer_wl_idx_l(a)) &
                + fac * MCS%aerosol(aer_idx)%coef(:,1:n_mom,scn%op%aer_wl_idx_r(a))
 
           do p = 1, n_mom
              ! Add aerosol contributions here
-             coef(:, p, l) = aerpmom(:, p, l) * aer_sca_tau(l, a)
+             coef(:, p, l) = aerpmom(a, :, p, l) * aer_sca_tau(l, a)
           end do
 
        end do
@@ -440,10 +482,31 @@ contains
        ! and divide the entire layer-moments by the denominator
        coef(:, :, l) = coef(:, :, l) / denom
 
+       ! Now that we have beta, we can 'simply' calculate the derivative inputs
+       ! needed by the RT model(s).
+
+       ! Aerosol AODs
+       do i = 1, SV%num_aerosol_aod
+
+          ! The position of the AOD derivative inputs must essentially
+          ! match the SV structure, and we are generally using this ordering
+          ! TODO: this is a bit hacky, would be nice to have some global
+          ! dictionary where one can look these up
+
+          l_aod_idx = SV%num_gas + SV%num_temp + SV%num_albedo + i
+          ! Which aerosol belongs to SV index 'i'?
+          aer_sv_idx = SV%aerosol_idx_lookup(i)
+          ! What is the corresponding aerosol in the MCS?
+          aer_idx = scn%op%aer_mcs_map(aer_sv_idx)
+
+          ! And calculate dBeta/dAOD for layer l
+          lcoef(:,:,l_aod_idx,l) =  aer_sca_tau(l, aer_idx) / scn%op%reference_aod(aer_idx) * &
+               (aerpmom(aer_sv_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_idx) + ray_tau(l))
+
+       end do
+
+
     end do
-
-
-
 
   end subroutine compute_coef_at_wl
 
@@ -1052,6 +1115,15 @@ contains
        do j=1, SV%num_ils_stretch
           if (SV%idx_ils_stretch(j) == i) then
              write(tmp_str, '(A,G0.1)') "ils_stretch_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Retrieved aerosol AOD names
+       do j=1, SV%num_aerosol_aod
+          if (SV%idx_aerosol_aod(j) == i) then
+             lower_str = MCS%window(i_win)%aerosols(sv%aerosol_idx_lookup(j))%lower()
+             write(tmp_str, '(A,A)') lower_str%chars(), "_aod"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do

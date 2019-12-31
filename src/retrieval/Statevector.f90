@@ -199,13 +199,13 @@ contains
              exit
           end if
 
-          ! If there is a (one) '-' in the state vector name, we might
+          ! If there is a (one) '|' in the state vector name, we might
           ! have a gas or aerosol SV element
-          if (split_string(i)%count('-') >= 1) then
+          if (split_string(i)%count('|') >= 1) then
 
              ! Split that string, so we can grab the gas bit before the
              ! dash, and check that one against the list of known SVs
-             call split_string(i)%split(tokens=split_sv_string, sep='-')
+             call split_string(i)%split(tokens=split_sv_string, sep='|')
              if (split_sv_string(1)%lower() == known_SV(j)%lower()) then
                 SV_found = .true.
                 deallocate(split_sv_string)
@@ -377,11 +377,11 @@ contains
           ! These are case-sensitive (not sure why?)
 
           ! We tell the algorithm to retrieve either a scaling factor,
-          ! or a full profile by attaching a "-scale" or "-profile". So when
+          ! or a full profile by attaching a "|scale" or "|profile". So when
           ! checking for gases, we must drop that part of the string.
 
-          if (split_string(i)%count("-") >= 1) then
-             call split_string(i)%split(tokens=split_sv_string, sep='-')
+          if (split_string(i)%count("|") >= 1) then
+             call split_string(i)%split(tokens=split_sv_string, sep='|')
              check_sv_name = split_sv_string(1)
              check_sv_retr_type = split_sv_string(2)
           else
@@ -421,7 +421,7 @@ contains
                       call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
 
                       if (size(split_svval_string) /= 3) then
-                         call logger%fatal(fname, "Error in gas-scale string. Must have exactly 2 colons.")
+                         call logger%fatal(fname, "Error in gas-scale string. Must have exactly 2 vertical bars.")
                          stop 1
                       end if
 
@@ -450,16 +450,16 @@ contains
 
                    else
                       call logger%fatal(fname, "Gas state vector needs to be stated as " &
-                           // "[gas]-profile or [gas]-scale.")
+                           // "[gas]|profile or [gas]|scale.")
                       call logger%fatal(fname, " .. instead I got: " // split_string(i)%chars())
                       stop 1
                    end if
-                   call logger%info(fname, trim(tmp_str))
 
                 end if
              end do
           end if
 
+          ! Is this a known SV element, and it it related to an aerosol?
           if ((check_sv_name == known_SV(j)) .and. (is_aerosol_SV(j))) then
 
              do k=1, MCS%window(i_win)%num_aerosols
@@ -470,13 +470,20 @@ contains
 
                 if (MCS%window(i_win)%aerosols(k) == check_sv_name) then
 
-                   if (check_sv_retr_type == 'aod') then
+                   if ((check_sv_retr_type == 'aod') .or. &
+                        (check_sv_retr_type == 'aod-log')) then
+
                       write(tmp_str, '(A, A)') "We are retrieving the optical depth from aerosol: ", &
                            check_sv_name%chars()
                       call logger%debug(fname, trim(tmp_str))
 
                       MCS%window(i_win)%aerosol_retrieve_aod(k) = .true.
                       num_aerosol_aod_parameters = num_aerosol_aod_parameters + 1
+
+                      if (check_sv_retr_type == 'aod-log') then
+                         call logger%debug(fname, ".. in log-space.")
+                         MCS%window(i_win)%aerosol_retrieve_aod_log(k) = .true.
+                      end if
 
                       call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
 
@@ -490,6 +497,11 @@ contains
                       write(tmp_str, *) split_svval_string(2)%chars()
                       read(tmp_str, *) MCS%window(i_win)%aerosol_aod_cov(k)
 
+                   else
+                      call logger%fatal(fname, "Aerosol state vector needs to be stated as " &
+                           // "[aerosol]|aod")
+                      call logger%fatal(fname, " .. instead I got: " // split_string(i)%chars())
+                      stop 1
                    end if
 
                 end if

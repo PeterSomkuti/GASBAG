@@ -218,8 +218,8 @@ contains
     type(scene), intent(inout) :: scn
     double precision, intent(in) :: aero_aod(:)
 
-    double precision, parameter :: aero_height = 10000.0
-    double precision, parameter :: aero_width = 3000.0
+    double precision, parameter :: aero_height = 1000.0
+    double precision, parameter :: aero_width = 500.0
 
     double precision, allocatable :: layer_height(:)
 

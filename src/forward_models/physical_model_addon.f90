@@ -337,8 +337,8 @@ contains
        allocate(aer_sca_left(n_layers, scn%num_aerosols))
        allocate(aer_sca_right(n_layers, scn%num_aerosols))
 
-       aer_sca_left(:,:) = scn%op%aer_sca_tau(1,:,:)
-       aer_sca_right(:,:) = scn%op%aer_sca_tau(size(scn%op%wl),:,:)
+       aer_sca_left(:,:) = scn%op%aer_sca_tau(1,1:n_layers,:)
+       aer_sca_right(:,:) = scn%op%aer_sca_tau(size(scn%op%wl),1:n_layers,:)
     else
        call logger%debug(fname, "No aerosols present. Just grabbing band edge wavelengths.")
        left_wl = scn%op%wl(1)
@@ -500,8 +500,8 @@ contains
           aer_idx = scn%op%aer_mcs_map(aer_sv_idx)
 
           ! And calculate dBeta/dAOD for layer l
-          lcoef(:,:,l_aod_idx,l) =  aer_sca_tau(l, aer_idx) / scn%op%reference_aod(aer_idx) * &
-               (aerpmom(aer_sv_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_idx) + ray_tau(l))
+          lcoef(:,:,l_aod_idx,l) =  aer_sca_tau(l, aer_sv_idx) / scn%op%reference_aod(aer_sv_idx) * &
+               (aerpmom(aer_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
 
        end do
 

@@ -135,8 +135,8 @@ contains
        call logger%debug(fname, "Using XRTM in scalar mode.")
     end if
 
-    xrtm_options = ior(xrtm_options, XRTM_OPTION_N_T_TMS)
-    xrtm_options = ior(xrtm_options, XRTM_OPTION_DELTA_M)
+    !xrtm_options = ior(xrtm_options, XRTM_OPTION_N_T_TMS)
+    !xrtm_options = ior(xrtm_options, XRTM_OPTION_DELTA_M)
 
     success = .true.
 
@@ -348,6 +348,7 @@ contains
 
           else
 
+             call logger%debug(fname, "Setting RT streams to 1 per hemisphere.")
              xrtm_streams = 1
              
           end if
@@ -385,6 +386,7 @@ contains
           allocate(lomega(size(scn%op%wl), xrtm_n_derivs, num_lay))
           allocate(lsurf(size(scn%op%wl), xrtm_n_derivs))
 
+          ! Output weighting function container
           allocate(weighting_functions(size(scn%op%wl), n_stokes, xrtm_n_derivs))
 
 
@@ -395,6 +397,7 @@ contains
           do j=1, SV%num_gas
              ltau(:, j, s_start(j):s_stop(j)-1) = &
                   scn%op%gas_tau(:, s_start(j):s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
+
              lomega(:, j, s_start(j):s_stop(j)-1) = &
                   -scn%op%layer_omega(:,s_start(j):s_stop(j)-1) / scn%op%layer_tau(:,s_start(j):s_stop(j)-1) &
                   * ltau(:, j, s_start(j):s_stop(j)-1)
@@ -405,7 +408,6 @@ contains
 
              ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:num_lay,:), dim=3)
              lomega(:,j,:) = -scn%op%layer_omega(:,:) / scn%op%layer_tau(:,:) * ltau(:,j,:)
-
           end if
 
           do j=1, SV%num_albedo
@@ -420,6 +422,7 @@ contains
 
              ltau(:,i,:) = scn%op%aer_ext_tau(:,:,aer_idx) / scn%op%reference_aod(aer_idx)
              lomega(:,i,:) = ltau(:,i,:) * (1.0d0 - scn%op%layer_omega(:,:) / scn%op%layer_tau(:,:))
+             ! lcoef is calculated within "precompute_all_coef"
           end do
 
           ! ------------------------------------------
@@ -443,7 +446,8 @@ contains
                ltau, &
                lomega, &
                lsurf, &
-               coef, lcoef, &
+               coef, &
+               lcoef, &
                n_stokes, & ! Number of Stokes parameters to calculate
                xrtm_n_derivs, & ! Number of derivatives to be calculated
                num_lay, & ! Number of atmospheric layers
@@ -467,16 +471,15 @@ contains
              return
           end if
 
-
           ! Recover the Jacobians from the XRTM container
           ! Store gas subcolumn derivatives
           do j=1, SV%num_gas
-             dI_dgas(:,j,:) = dI_dgas(:,j,:) + weighting_functions(:,:,j)
+             dI_dgas(:,j,:) = weighting_functions(:,:,j)
           end do
 
           ! Store the temperature offset Jacobian if needed
           if (SV%num_temp > 0) then
-             dI_dTemp(:,:) = dI_dTemp(:,:) + weighting_functions(:,:,SV%num_gas + 1)
+             dI_dTemp(:,:) = weighting_functions(:,:,SV%num_gas + 1)
           end if
 
           ! Store surface jacobian
@@ -486,6 +489,11 @@ contains
 
           do j=1, SV%num_aerosol_aod
              dI_dAOD(:,j,:) = weighting_functions(:,:,SV%num_gas + SV%num_temp + SV%num_albedo + j)
+             ! If this AOD retrieval is in log-space, we need to multiply by
+             ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
+             if (window%aerosol_retrieve_aod_log(SV%aerosol_idx_lookup(j))) then
+                dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * (-exp(SV%svsv(SV%idx_aerosol_aod(j))))
+             end if
           end do
 
     else
@@ -595,11 +603,6 @@ contains
 
     radiance(:,:) = 0.0d0
     derivs(:,:,:) = 0.0d0
-    !dI_dgas(:,:,:) = 0.0d0
-    
-    !if (allocated(dI_dTemp)) dI_dTemp(:,:) = 0.0d0
-    !if (allocated(dI_dsurf)) dI_dsurf(:,:,:) = 0.0d0
-    !if (allocated(dI_dAOD)) dI_dAOD(:,:,:) = 0.0d0
 
     out_thetas(1) = VZA
     out_phis(1,1) = VAA
@@ -609,22 +612,7 @@ contains
     single_lomega(:,:) = 0.0d0
     single_lsurf(:) = 0.0d0
 
-    ! Derivative dI/dsurf - for the time being only Albedo
-    !do i = 1, SV%num_albedo
-    !   lsurf(SV%num_gas + SV%num_temp + i) = 1.0d0
-    !end do
-    
-    !if (n_stokes > 1) then
-    !   allocate(ray_coef(3, 6))
-       !allocate(coef(3, 6, n_layers))
-    !else
-    !   allocate(ray_coef(3, 1))
-       !allocate(coef(3, 1, n_layers))
-    !endif
-
     n_coef(:) = size(coef, 2)
-
-
 
     ! Allocate output containers - these will not change with wavelength, hence
     ! we only need to do this once per microwindow
@@ -746,8 +734,12 @@ contains
 
        ! TOTAL atmospheric optical properties - these go into the
        ! RT code for the forward calculation.
-       tau(:) = layer_tau(i, :)
-       omega(:) = layer_omega(i, :) !(ray_tau(i, :) + sum(aer_tau(i,:,:), dim=2))/ tau(:)
+       tau(:) = layer_tau(i, 1:n_layers)
+       omega(:) = layer_omega(i, 1:n_layers)
+       
+       single_ltau(:,:) = ltau(i,:,:)
+       single_lomega(:,:) = lomega(i,:,:)
+       single_lsurf(:) = lsurf(i,:)
 
        ! Plug in surface property
        call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
@@ -764,7 +756,7 @@ contains
        end if
 
        ! Plug in the layer optical depth derivatives
-       single_ltau(:,:) = ltau(i,:,:)
+
        call xrtm_set_ltau_l_nn_f90(xrtm, single_ltau, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_ltau_nn_f90")
@@ -779,7 +771,7 @@ contains
        end if
 
        ! Plug in the single-scatter albedo derivatives
-       single_lomega(:,:) = lomega(i,:,:)
+
        call xrtm_set_omega_l_nn_f90(xrtm, single_lomega, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_omega_l_nn_f90")
@@ -788,9 +780,11 @@ contains
 
        ! Plug in the layer scattering matrix
        if (size(coef, 4) > 1) then
+          ! Spectrally varying scattering properties
           this_coef(:,:,:) = coef(:,:,:,i)
           this_lcoef(:,:,:,:) = lcoef(:,:,:,:,i)
        else
+          ! Spectrally flat scattering properties
           this_coef(:,:,:) = coef(:,:,:,1)
           this_lcoef(:,:,:,:) = lcoef(:,:,:,:,1)
        end if
@@ -801,17 +795,14 @@ contains
           return
        end if
 
-
-
-       !call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
+       call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
           return
        end if
 
        ! Plug in the surface derivatives
-       single_lsurf(:) = lsurf(i,:)
-       call xrtm_set_kernel_ampfac_l_n_f90(xrtm, 0, single_lsurf(:), xrtm_error)
+       call xrtm_set_kernel_ampfac_l_n_f90(xrtm, 0, single_lsurf, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_kernel_ampflac_l_n_f90")
           return
@@ -828,8 +819,6 @@ contains
        ! XRTM has been initialized with whatever number of solvers are stored in
        ! "xrtm_solvers", however only one is executed at a time (ask Greg?).
        ! Thus, we need to loop over the possible bitmask positions.
-       !
-
 
        do l=1, size(xrtm_separate_solvers)
           ! Calculate TOA radiance!

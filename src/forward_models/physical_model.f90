@@ -596,6 +596,7 @@ contains
 
        end if
 #endif
+
        ! At the moment, OpenMP is implemented to spread the loop over many threads,
        ! and should be maxed out at the number of available cores on the same machine.
        ! This could be further expanded to use MPI, but at the moment, this seems fast
@@ -619,10 +620,10 @@ contains
 #endif
 
              !write(*,*) land_fraction(i_fp, i_fr)
-             !if (land_fraction(i_fp, i_fr) == 0) then
-             !   call logger%debug(fname, "Skipping water scene.")
-             !   cycle
-             !end if
+             if (land_fraction(i_fp, i_fr) == 0) then
+                call logger%debug(fname, "Skipping water scene.")
+                cycle
+             end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -1951,7 +1952,13 @@ contains
 
              this_aerosol_aod = 0.0d0
              do i=1, SV%num_aerosol_aod
-                this_aerosol_aod(i) = SV%svsv(SV%idx_aerosol_aod(i))
+                if (MCS%window(i_win)%aerosol_retrieve_aod_log(SV%aerosol_idx_lookup(i))) then
+                   ! AOD supplied in log-space
+                   this_aerosol_aod(i) = exp(SV%svsv(SV%idx_aerosol_aod(i)))
+                else
+                   ! AOD supplied in linear space
+                   this_aerosol_aod(i) = SV%svsv(SV%idx_aerosol_aod(i))
+                end if
              end do
 
              ! Distribute aerosols in atmosphere
@@ -2742,11 +2749,11 @@ contains
           end if
 
           ! Write a debug message
-          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,E10.3,A,F10.2)') "Iteration: ", iteration , &
+          write(tmp_str, '(A,G3.1,A,F6.1,A,G2.1,A,F10.2,A,F10.2)') &
+               "Iteration: ", iteration , &
                ", Chi2: ",  results%chi2(i_fp, i_fr), &
                ", Active Levels: ", num_active_levels, &
                ", Psurf: ", scn%atm%psurf, &
-               ", LM-Gamma: ", lm_gamma, &
                ", SNR: ", results%SNR(i_fp, i_fr)
           call logger%debug(fname, trim(tmp_str))
 
@@ -2812,6 +2819,7 @@ contains
        ! If the user requests a step-through, then we print a bunch of debug information about
        ! the retrieval for each iteration and wait for a return by the user.
        ! Also, various variables (SV, spectra, AK, gain matrix etc.) are written out.
+
        if (MCS%algorithm%step_through) then
 
           call logger%debug(fname, "---------------------------------")

@@ -148,6 +148,8 @@ module control_mod
      integer, allocatable :: aerosol_index(:)
      !> Do we retrieve AOD from this aerosol?
      logical, allocatable :: aerosol_retrieve_aod(:)
+     !> Do we retrieve AOD in log-space?
+     logical, allocatable :: aerosol_retrieve_aod_log(:)
      !> Prior AOD from SV string
      double precision, allocatable :: aerosol_prior_aod(:)
      !> Prior covariance from SV string
@@ -888,10 +890,12 @@ contains
              allocate(MCS%window(window_nr)%aerosols(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_index(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_retrieve_aod(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_retrieve_aod_log(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_prior_aod(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_aod_cov(size(fini_string_array)))
 
              MCS%window(window_nr)%aerosol_retrieve_aod(:) = .false.
+             MCS%window(window_nr)%aerosol_retrieve_aod_log(:) = .false.
 
              do i=1, size(fini_string_array)
                 MCS%window(window_nr)%aerosols(i) = fini_string_array(i)

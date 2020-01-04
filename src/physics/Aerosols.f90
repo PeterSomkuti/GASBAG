@@ -6,8 +6,8 @@
 module aerosols_mod
 
   ! User modules
+  use scene_mod
   use file_utils_mod, only: read_mom_file, read_mie_file
-  use physical_model_addon_mod
   use control_mod, only: MCS, CS_aerosol
   use math_utils_mod
   
@@ -86,10 +86,10 @@ contains
 
   !> @brief Initialize the required aerosol data
   !> @param scn Scene object
-  subroutine aerosol_init(scn)
+  subroutine aerosol_init(scn, i_win)
 
     type(scene), intent(inout) :: scn
-
+    integer, intent(in) :: i_win
     ! Local
     character(len=*), parameter :: fname = "aerosol_init"
     character(len=999) :: tmp_str
@@ -122,14 +122,16 @@ contains
 
     allocate(scn%op%reference_aod(scn%num_aerosols))
 
-    ! -------------------------------
-    ! Loop through all used aerosols
-    ! -------------------------------
+    ! ------------------------------------------------------
+    ! Loop through all aerosols specified in the config file
+    ! ------------------------------------------------------
 
-    j = 0
-    do i = 1, size(MCS%aerosol)
-       if (MCS%aerosol(i)%used) then
-          j = j + 1
+    do j = 1, scn%num_aerosols
+
+       do i = 1, size(MCS%aerosol)
+
+          if (MCS%window(i_win)%aerosols(j) /= MCS%aerosol(i)%name) cycle
+
 
           ! Find out which wavelength regions of the
           ! aerosol files are needed for this band
@@ -169,7 +171,7 @@ contains
 
           alpha_ext = -log(MCS%aerosol(i)%qext(idx_l) / MCS%aerosol(i)%qext(idx_r)) &
                / log(MCS%aerosol(i)%wavelengths(idx_l) / MCS%aerosol(i)%wavelengths(idx_r))
-          
+
           alpha_sca = -log(MCS%aerosol(i)%qsca(idx_l) / MCS%aerosol(i)%qsca(idx_r)) &
                / log(MCS%aerosol(i)%wavelengths(idx_l) / MCS%aerosol(i)%wavelengths(idx_r))
 
@@ -185,7 +187,8 @@ contains
 
           end do
 
-       end if
+       end do
+
     end do
 
   end subroutine aerosol_init
@@ -213,20 +216,22 @@ contains
 
 
 
-  subroutine aerosol_gauss_shape(scn, aero_aod)
+  subroutine aerosol_gauss_shape(scn, aero_aod, aero_height, aero_width)
 
     type(scene), intent(inout) :: scn
     double precision, intent(in) :: aero_aod(:)
+    double precision, intent(in) :: aero_height(:)
+    double precision, intent(in) :: aero_width(:)
 
-    double precision, parameter :: aero_height = 1000.0
-    double precision, parameter :: aero_width = 500.0
 
     double precision, allocatable :: layer_height(:)
-
     double precision :: aod_norm
     integer :: aer
     integer :: wl
-    integer :: lay
+    integer :: lay, j
+
+    character(len=*), parameter :: fname = "aerosol_gauss_shape"
+    character(len=999) :: tmp_str
 
     allocate(layer_height(scn%num_levels - 1))
 
@@ -246,22 +251,15 @@ contains
        ! Comes in handy when we need to calculate jacobians.
        scn%op%reference_aod(aer) = aero_aod(aer)
 
+       aod_norm = sum(exp(-((layer_height(:) - aero_height(aer))**2) &
+                  / (2 * aero_width(aer) * aero_width(aer))))
+
        do wl = 1, 2
 
           do lay = 1, scn%num_levels - 1
-             scn%op%aer_ext_tau_edge(wl,lay,aer) = exp(-((layer_height(lay) - aero_height)**2) &
-                  / (2 * aero_width * aero_width))
+             scn%op%aer_ext_tau_edge(wl,lay,aer) = exp(-((layer_height(lay) - aero_height(aer))**2) &
+                  / (2 * aero_width(aer) * aero_width(aer))) * aero_aod(aer) / aod_norm
           end do
-
-          ! The normalization factor is ONLY computed for a reference wavelength, which
-          ! is the first (lower) wavelength for this particular band. The AOD for a given
-          ! aerosol is also defined at this wavelength. Depending on the spectral properties
-          ! of the aerosol, some wavelengths can exceed the reference AOD
-          if (wl == 1) then
-             aod_norm = sum(scn%op%aer_ext_tau_edge(wl,:,aer)) / aero_aod(aer)
-          end if
-
-          scn%op%aer_ext_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) / aod_norm
 
           ! We are grabbing the left and right hand side SSAs from the file to compute
           ! the scattering contribution to the extinction.
@@ -276,19 +274,35 @@ contains
           where(scn%op%aer_ext_tau_edge(wl,:,aer) < 1.0d-10) scn%op%aer_ext_tau_edge(wl,:,aer) = 1d-10
           where(scn%op%aer_sca_tau_edge(wl,:,aer) < 1.0d-10) scn%op%aer_sca_tau_edge(wl,:,aer) = 1d-10
 
+          ! -----------------
+          ! Debug information
+          ! -----------------
+
+          if (wl == 1) then
+
+             write(tmp_str, '(A,A)') "Aerosol extinction, scattering and SSA for left edge and aerosol: ", &
+                  MCS%aerosol(scn%op%aer_mcs_map(aer))%name%chars()
+             call logger%debug(fname, trim(tmp_str))
+             do lay = 1, scn%num_levels - 1
+
+                write(tmp_str,'(A, I3, ES15.5, ES15.5, ES15.5)') "Layer: ", lay, &
+                     scn%op%aer_ext_tau_edge(1, lay, aer), scn%op%aer_sca_tau_edge(1, lay, aer), &
+                     scn%op%aer_sca_tau_edge(1, lay, aer) / scn%op%aer_ext_tau_edge(1, lay, aer)
+                call logger%debug(fname, trim(tmp_str))
+             end do
+
+          end if
+
        end do
 
-       ! Now do it for all wavelengths in our hires grid, but use the AOD normalization
-       ! factor given by the left-edge wavelength.
-
+       ! Now do it for all wavelengths in our hires grid
        do wl = 1, size(scn%op%wl)
 
           do lay = 1, scn%num_levels - 1
-             scn%op%aer_ext_tau(wl,lay,aer) = exp(-((layer_height(lay) - aero_height)**2) &
-                  / (2 * aero_width * aero_width))
+             scn%op%aer_ext_tau(wl,lay,aer) = exp(-((layer_height(lay) - aero_height(aer))**2) &
+                  / (2 * aero_width(aer) * aero_width(aer))) * aero_aod(aer) / aod_norm
           end do
 
-          scn%op%aer_ext_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) / aod_norm
           scn%op%aer_sca_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) * scn%op%aer_ssa(wl, aer)
 
           ! Bump up tiny values to some lower threshold
@@ -302,6 +316,32 @@ contains
     end do
     
   end subroutine aerosol_gauss_shape
+
+
+  subroutine calculate_aero_height_factors(layer_height, aero_height, aero_width, &
+       factor)
+
+    double precision, intent(in) :: layer_height(:)
+    double precision, intent(in) :: aero_height
+    double precision, intent(in) :: aero_width
+    double precision, intent(inout) :: factor(:)
+
+    double precision, allocatable :: aero_shape(:)
+    integer :: i, j
+
+    allocate(aero_shape(size(layer_height)))
+
+    aero_shape(:) = 0.0d0
+    factor(:) = 0.0d0
+
+    aero_shape(:) = exp(-(layer_height(:) - aero_height)**2 / (2 * aero_width**2))
+    factor(:) = (layer_height(:) - aero_height) / (aero_width**2)
+
+    do i = 1, size(layer_height)
+       factor(i) = factor(i) - sum(aero_shape(:) * (layer_height(:) - aero_height) / (aero_width**2)) / sum(aero_shape)
+    end do
+
+  end subroutine calculate_aero_height_factors
 
 
 end module aerosols_mod

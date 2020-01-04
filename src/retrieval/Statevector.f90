@@ -17,6 +17,7 @@ module statevector_mod
      integer :: num_temp
      integer :: num_ils_stretch
      integer :: num_aerosol_aod
+     integer :: num_aerosol_height
 
 
      integer, dimension(:), allocatable :: idx_albedo
@@ -29,10 +30,19 @@ module statevector_mod
      integer, dimension(:), allocatable :: idx_temp
      integer, dimension(:), allocatable :: idx_ils_stretch
      integer, dimension(:), allocatable :: idx_aerosol_aod
+     integer, dimension(:), allocatable :: idx_aerosol_height
 
-     integer, allocatable :: aerosol_idx_lookup(:)
+     ! Lookup arrays that tell us which aerosol/gas this statevector
+     ! element belongs to.
+     ! E.g. aerosol_aod_idx_lookup(2) = 1
+     ! means that the second AOD SV element (at position idx_aerosol_aod)
+     ! refers to the aerosol found in MCS%window(i_win)%aerosol(1)
+     ! .. and so on for gases.
 
+     integer, allocatable :: aerosol_aod_idx_lookup(:)
+     integer, allocatable :: aerosol_height_idx_lookup(:)
      integer, allocatable :: gas_idx_lookup(:)
+
      integer, allocatable :: idx_gas(:,:)
 
      double precision, allocatable :: gas_retrieve_scale_start(:)
@@ -67,6 +77,7 @@ contains
     if (allocated(SV%idx_temp)) deallocate(SV%idx_temp)
     if (allocated(SV%idx_ils_stretch)) deallocate(SV%idx_ils_stretch)
     if (allocated(SV%idx_aerosol_aod)) deallocate(SV%idx_aerosol_aod)
+    if (allocated(SV%idx_aerosol_height)) deallocate(SV%idx_aerosol_height)
 
     if (allocated(SV%svap)) deallocate(SV%svap)
     if (allocated(SV%svsv)) deallocate(SV%svsv)
@@ -75,7 +86,7 @@ contains
     if (allocated(SV%sv_ap_cov)) deallocate(SV%sv_ap_cov)
     if (allocated(SV%sv_post_cov)) deallocate(SV%sv_post_cov)
 
-    if (allocated(SV%aerosol_idx_lookup)) deallocate(SV%aerosol_idx_lookup)
+    if (allocated(SV%aerosol_aod_idx_lookup)) deallocate(SV%aerosol_aod_idx_lookup)
 
     if (allocated(SV%idx_gas)) deallocate(SV%idx_gas)
     if (allocated(SV%gas_idx_lookup)) deallocate(SV%gas_idx_lookup)
@@ -95,6 +106,7 @@ contains
     SV%num_temp = -1
     SV%num_ils_stretch = -1
     SV%num_aerosol_aod = -1
+    SV%num_aerosol_height = -1
 
   end subroutine clear_SV
 
@@ -129,16 +141,17 @@ contains
 
     integer, allocatable :: gas_retr_count(:)
 
-    integer :: num_albedo_parameters
-    integer :: num_dispersion_parameters
-    integer :: num_sif_parameters
-    integer :: num_psurf_parameters
-    integer :: num_solar_shift_parameters
-    integer :: num_solar_stretch_parameters
-    integer :: num_zlo_parameters
-    integer :: num_temp_parameters
-    integer :: num_ils_stretch_parameters
-    integer :: num_aerosol_aod_parameters
+    integer :: num_albedo_parameters = 0
+    integer :: num_dispersion_parameters = 0
+    integer :: num_sif_parameters = 0
+    integer :: num_psurf_parameters = 0
+    integer :: num_solar_shift_parameters = 0
+    integer :: num_solar_stretch_parameters = 0
+    integer :: num_zlo_parameters = 0
+    integer :: num_temp_parameters = 0
+    integer :: num_ils_stretch_parameters = 0
+    integer :: num_aerosol_aod_parameters = 0
+    integer :: num_aerosol_height_parameters = 0
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
@@ -231,17 +244,6 @@ contains
     ! supplied, we can loop through them, and depending on the type also check
     ! if necessary parameters are available. Example: if we want to retrieve
     ! dispersion, we also require the order and perturbation values.
-
-    num_albedo_parameters = 0
-    num_dispersion_parameters = 0
-    num_sif_parameters = 0
-    num_psurf_parameters = 0
-    num_solar_shift_parameters = 0
-    num_solar_stretch_parameters = 0
-    num_zlo_parameters = 0
-    num_temp_parameters = 0
-    num_ils_stretch_parameters = 0
-    num_aerosol_aod_parameters = 0
 
     ! Again, we can do these only if the arrays are allocated,
     ! which they aren't if no gases are defined..
@@ -479,7 +481,7 @@ contains
 
                       MCS%window(i_win)%aerosol_retrieve_aod(k) = .true.
                       num_aerosol_aod_parameters = num_aerosol_aod_parameters + 1
-
+                      
                       if (check_sv_retr_type == 'aod-log') then
                          call logger%debug(fname, ".. in log-space.")
                          MCS%window(i_win)%aerosol_retrieve_aod_log(k) = .true.
@@ -496,6 +498,27 @@ contains
                       read(tmp_str, *) MCS%window(i_win)%aerosol_prior_aod(k)
                       write(tmp_str, *) split_svval_string(2)%chars()
                       read(tmp_str, *) MCS%window(i_win)%aerosol_aod_cov(k)
+
+                   else if (check_sv_retr_type == 'height') then
+
+                      write(tmp_str, '(A, A)') "We are retrieving the layer height from aerosol: ", &
+                           check_sv_name%chars()
+                      call logger%debug(fname, trim(tmp_str))
+
+                      MCS%window(i_win)%aerosol_retrieve_height(k) = .true.
+                      num_aerosol_height_parameters = num_aerosol_height_parameters + 1
+
+                      call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
+
+                      if (size(split_svval_string) /= 2) then
+                         call logger%fatal(fname, "Error in aerosol string. Must have exactly 1 colon.")
+                         stop 1
+                      end if
+
+                      write(tmp_str, *) split_svval_string(1)%chars()
+                      read(tmp_str, *) MCS%window(i_win)%aerosol_prior_height(k)
+                      write(tmp_str, *) split_svval_string(2)%chars()
+                      read(tmp_str, *) MCS%window(i_win)%aerosol_height_cov(k)
 
                    else
                       call logger%fatal(fname, "Aerosol state vector needs to be stated as " &
@@ -533,6 +556,7 @@ contains
          num_temp_parameters, &
          num_ils_stretch_parameters, &
          num_aerosol_aod_parameters, &
+         num_aerosol_height_parameters, &
          gas_retr_count)
 
   end subroutine parse_and_initialize_SV
@@ -543,7 +567,9 @@ contains
   subroutine initialize_statevector(i_win, num_levels, sv, &
        count_albedo, count_sif, count_dispersion, count_psurf, &
        count_solar_shift, count_solar_stretch, count_zlo, &
-       count_temp, count_ils_stretch, count_aerosol_aod, gas_retr_count)
+       count_temp, count_ils_stretch, count_aerosol_aod, &
+       count_aerosol_height, &
+       gas_retr_count)
 
     implicit none
     integer, intent(in) :: i_win, num_levels
@@ -551,7 +577,7 @@ contains
     integer, intent(in) :: count_albedo, count_sif, &
          count_dispersion, count_psurf, count_solar_shift, &
          count_solar_stretch, count_zlo, count_temp, count_ils_stretch, &
-         count_aerosol_aod, gas_retr_count(:)
+         count_aerosol_aod, count_aerosol_height, gas_retr_count(:)
 
     integer :: count_gas
     character(len=*), parameter :: fname = "initialize_statevector"
@@ -570,6 +596,7 @@ contains
     sv%num_temp = count_temp
     sv%num_ils_stretch = count_ils_stretch
     sv%num_aerosol_aod = count_aerosol_aod
+    sv%num_aerosol_height = count_aerosol_height
     sv%num_gas = 0
 
     sv_count = 0
@@ -707,11 +734,11 @@ contains
 
 
     ! Aerosols
-
+    ! AOD
     if (sv%num_aerosol_aod > 0) then
 
-       allocate(sv%aerosol_idx_lookup(sv%num_aerosol_aod))
-       sv%aerosol_idx_lookup(:) = -1
+       allocate(sv%aerosol_aod_idx_lookup(sv%num_aerosol_aod))
+       sv%aerosol_aod_idx_lookup(:) = -1
 
        write(tmp_str, '(A, G0.1)') "Number of aerosol AOD elements: ", sv%num_aerosol_aod
        call logger%info(fname, trim(tmp_str))
@@ -724,7 +751,7 @@ contains
 
              sv_count = sv_count + 1
              sv%idx_aerosol_aod(i) = sv_count
-             sv%aerosol_idx_lookup(cnt) = i
+             sv%aerosol_aod_idx_lookup(cnt) = i
 
              cnt = cnt + 1
 
@@ -734,6 +761,35 @@ contains
        allocate(sv%idx_aerosol_aod(1))
        sv%idx_aerosol_aod(1) = -1
     end if
+
+    ! Aerosol Height
+    if (sv%num_aerosol_height > 0) then
+
+       allocate(sv%aerosol_height_idx_lookup(sv%num_aerosol_height))
+       sv%aerosol_height_idx_lookup(:) = -1
+
+       write(tmp_str, '(A, G0.1)') "Number of aerosol height elements: ", sv%num_aerosol_height
+       call logger%info(fname, trim(tmp_str))
+       allocate(sv%idx_aerosol_height(sv%num_aerosol_height))
+
+       cnt = 1
+
+       do i = 1, MCS%window(i_win)%num_aerosols
+          if (MCS%window(i_win)%aerosol_retrieve_height(i)) then
+
+             sv_count = sv_count + 1
+             sv%idx_aerosol_height(i) = sv_count
+             sv%aerosol_height_idx_lookup(cnt) = i
+
+             cnt = cnt + 1
+
+          end if
+       end do
+    else
+       allocate(sv%idx_aerosol_height(1))
+       sv%idx_aerosol_height(1) = -1
+    end if
+
 
     ! Gases
 

@@ -154,6 +154,12 @@ module control_mod
      double precision, allocatable :: aerosol_prior_aod(:)
      !> Prior covariance from SV string
      double precision, allocatable :: aerosol_aod_cov(:)
+     !> Do we retrieve height from this aerosol?
+     logical, allocatable :: aerosol_retrieve_height(:)
+     !> Prior aerosol height from SV string
+     double precision, allocatable :: aerosol_prior_height(:)
+     !> Prior covariance from SV string
+     double precision, allocatable :: aerosol_height_cov(:)
      !> Do we keep the scattering coefficients constant throughout the band? Speedup!
      logical :: constant_coef
      !> What is the number of sublayers to be used for gas OD calculations
@@ -268,6 +274,12 @@ module control_mod
      type(string) :: mom_filename
      !> Name of the mie file
      type(string) :: mie_filename
+     !> Default value for AOD
+     double precision :: default_aod
+     !> Default value for layer height
+     double precision :: default_height
+     !> Default value for layer width
+     double precision :: default_width
      !> Coefficient array (coef, element, wavelength)
      double precision, allocatable :: coef(:,:,:)
      !> Max. no of coefs
@@ -889,10 +901,15 @@ contains
 
              allocate(MCS%window(window_nr)%aerosols(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_index(size(fini_string_array)))
+
              allocate(MCS%window(window_nr)%aerosol_retrieve_aod(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_retrieve_aod_log(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_prior_aod(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_aod_cov(size(fini_string_array)))
+
+             allocate(MCS%window(window_nr)%aerosol_retrieve_height(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_prior_height(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_height_cov(size(fini_string_array)))
 
              MCS%window(window_nr)%aerosol_retrieve_aod(:) = .false.
              MCS%window(window_nr)%aerosol_retrieve_aod_log(:) = .false.
@@ -901,6 +918,7 @@ contains
                 MCS%window(window_nr)%aerosols(i) = fini_string_array(i)
                 MCS%window(window_nr)%num_aerosols = MCS%window(window_nr)%num_aerosols + 1
              end do
+
              deallocate(fini_string_array)
           end if
           
@@ -982,6 +1000,15 @@ contains
 
           call fini_extract(fini, tmp_str, 'mie_file', .true., fini_char)
           MCS%aerosol(aerosol_nr)%mie_filename = trim(fini_char)
+
+          call fini_extract(fini, tmp_str, 'default_aod', .true., fini_val)
+          MCS%aerosol(aerosol_nr)%default_aod = fini_val
+
+          call fini_extract(fini, tmp_str, 'default_width', .true., fini_val)
+          MCS%aerosol(aerosol_nr)%default_width = fini_val
+
+          call fini_extract(fini, tmp_str, 'default_height', .true., fini_val)
+          MCS%aerosol(aerosol_nr)%default_height = fini_val
 
        else
           MCS%aerosol(aerosol_nr)%used = .false.

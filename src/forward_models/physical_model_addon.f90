@@ -6,6 +6,8 @@ module physical_model_addon_mod
   use math_utils_mod
   use statevector_mod
   use Rayleigh_mod
+  use scene_mod
+  use aerosols_mod
 
   ! Third-party modules
   use stringifor
@@ -15,150 +17,6 @@ module physical_model_addon_mod
   ! System modules
   use ISO_FORTRAN_ENV
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
-
-  implicit none
-
-  !> A simple structure to keep the atmosphere data nice and tidy
-  type atmosphere
-     !> Number of levels in the model atmosphere
-     integer :: num_levels
-     !> Number of gases in the model atmosphere
-     integer :: num_gases
-     !> The name(s) of the gas(es), (gas number)
-     type(string), allocatable :: gas_names(:)
-     !> Gas mixing ratios (level, gas number)
-     double precision, allocatable :: gas_vmr(:,:)
-     !> To which spectroscopy data does this gas correspond to? (gas number)
-     integer, allocatable :: gas_index(:)
-     !> Surface pressure
-     double precision :: psurf
-     !> Model atmosphere temperature
-     double precision, allocatable :: T(:)
-     !> Model atmosphere pressure
-     double precision, allocatable :: p(:)
-     !> Model atmosphere specific humidity
-     double precision, allocatable :: sh(:)
-     !> Model atmosphere gravity at pressure levels
-     double precision, allocatable :: grav(:)
-     !> Model atmosphere altitude at pressure levels
-     double precision, allocatable :: altitude_levels(:)
-     !> Model atmosphere dry air column at layers
-     double precision, allocatable :: ndry(:)
-  end type atmosphere
-
-  !> Holds optical gas/aerosol properties of the scene
-  type optical_properties
-     !> Wavelengths
-     double precision, allocatable :: wl(:)
-     !> Surface albedo
-     double precision, allocatable :: albedo(:)
-
-     !> Gas optical depth (spectral, layer, gas number)
-     double precision, allocatable :: gas_tau(:,:,:)
-     !> dtau / dtemp (spectral, layer, gas number)
-     double precision, allocatable :: gas_tau_dtemp(:,:,:)
-     !> dtau / dpsurf (spectral, layer, gas number)
-     double precision, allocatable :: gas_tau_dpsurf(:,:,:)
-     !> dtau / dvmr (spectral, layer, gas number, level-below-or-above)
-     double precision, allocatable :: gas_tau_dvmr(:,:,:,:)
-     !> Perturbed gas optical depth (spectral, layer, gas number)
-     double precision, allocatable :: gas_tau_pert(:,:,:,:)
-
-     !> Rayleigh extinction optical depth (spectral, layer)
-     double precision, allocatable :: ray_tau(:,:)
-     !> Rayleigh depolarization factor (spectral)
-     double precision, allocatable :: ray_depolf(:)
-
-     !> Total column optical depth (spectral)
-     double precision, allocatable :: total_tau(:)
-     ! Total layer optical properties go into the RT calculations
-     !> Layer total optical depth (spectral, layer)
-     double precision, allocatable :: layer_tau(:,:)
-     !> Total single scatter albedo (spectral, layer)
-     double precision, allocatable :: layer_omega(:,:)
-
-     !> Map the aerosol "number" to the MCS entry (aerosol)
-     ! aer_mcs_map(1) = 2 e.g. means that [aerosol-2] is the first
-     ! aerosol we have in this configuration.
-     integer, allocatable :: aer_mcs_map(:)
-     !> Which left-wavelength index of the aerosol file are we using? (aerosol)
-     integer, allocatable :: aer_wl_idx_l(:)
-     !> Which right-wavelength index of the aerosol file are we using? (aerosol)
-     integer, allocatable :: aer_wl_idx_r(:)
-     !> Aerosol extinction cross section (spectral, aerosol)
-     double precision, allocatable :: aer_ext_q(:,:)
-     !> Aerosol scattering cross section (spectral, aerosol)
-     double precision, allocatable :: aer_sca_q(:,:)
-     !> Aerosol single scatter albedo (spectral, aerosol)
-     double precision, allocatable :: aer_ssa(:,:)
-
-     !> Aerosol reference AOD (aerosol)
-     double precision, allocatable :: reference_aod(:)
-
-     ! These here are calculated AFTER inferring the
-     ! aerosol distribution (which layers?)
-
-     !> Aerosol extinction optical depth (spectral, layer, aerosol)
-     double precision, allocatable :: aer_ext_tau(:,:,:)
-     !> Aerosol scattering optical depth (spectral, layer, aerosol)
-     double precision, allocatable :: aer_sca_tau(:,:,:)
-
-     ! These here are the same as the two above, but contain the
-     ! extinction and scattering profiles at the wavelengths at
-     ! which the miemom-type aerosol is actually calculated. This
-     ! is needed for a quicker calculation of the phase function moments
-     ! across the entire band
-
-     !> Aerosol extinction optical depth (edge, layer, aerosol)
-     double precision, allocatable :: aer_ext_tau_edge(:,:,:)
-     !> Aerosol scattering optical depth (edge, layer, aerosol)
-     double precision, allocatable :: aer_sca_tau_edge(:,:,:)
-
-  end type optical_properties
-
-
-  ! The "biggest" custom type that contains most per-scene
-  ! information you'll ever need to run a physical retrieval.
-  type, public :: scene
-
-     !> Number of levels in the model atmosphere
-     integer :: num_levels = 0
-     !> Number of active levels currently used
-     integer :: num_active_levels = 0
-     !> Number of gases in the model atmosphere
-     integer :: num_gases = 0
-     !> Number of aerosols in the scene
-     integer :: num_aerosols = 0
-     !> Largest number of phase function moments, needed for allocation
-     integer :: max_pfmom = 0
-
-     !> The atmosphere of the scene
-     type(atmosphere) :: atm
-     !> Optical properties needed for RT
-     type(optical_properties) :: op
-     !> Date object
-     type(datetime) :: date
-     !> Epoch (Year, Month, Day, Hour, Minute, Second, Millisecond)
-     integer :: epoch(7)
-     !> Longitude
-     double precision :: lon
-     !> Latitude
-     double precision :: lat
-     !> Altitude at surface
-     double precision :: alt
-     !> Solar zenith angle
-     double precision :: SZA
-     !> Cosine of solar zenith angle
-     double precision :: mu0
-     !> Viewing zenith angle
-     double precision :: VZA
-     !> Cosine of viewing zenith angle
-     double precision :: mu
-     !> Solar azimuth angle
-     double precision :: SAA
-     !> Viewing azimuth angle
-     double precision :: VAA
-  end type scene
 
   !> This structure contains the result data that will be stored in the output HDF file.
   type result_container
@@ -298,6 +156,7 @@ contains
     integer :: aer_idx
 
     double precision, allocatable :: aer_sca_left(:,:), aer_sca_right(:,:)
+    double precision, allocatable :: aer_ext_left(:,:), aer_ext_right(:,:)
     double precision :: denom
     double precision :: left_wl, right_wl
     double precision :: wl
@@ -337,8 +196,15 @@ contains
        allocate(aer_sca_left(n_layers, scn%num_aerosols))
        allocate(aer_sca_right(n_layers, scn%num_aerosols))
 
+       allocate(aer_ext_left(n_layers, scn%num_aerosols))
+       allocate(aer_ext_right(n_layers, scn%num_aerosols))
+
        aer_sca_left(:,:) = scn%op%aer_sca_tau(1,1:n_layers,:)
        aer_sca_right(:,:) = scn%op%aer_sca_tau(size(scn%op%wl),1:n_layers,:)
+
+       aer_ext_left(:,:) = scn%op%aer_ext_tau(1,1:n_layers,:)
+       aer_ext_right(:,:) = scn%op%aer_ext_tau(size(scn%op%wl),1:n_layers,:)
+
     else
        call logger%debug(fname, "No aerosols present. Just grabbing band edge wavelengths.")
        left_wl = scn%op%wl(1)
@@ -347,17 +213,20 @@ contains
 
     call logger%debug(fname, "Calculating coefficients at left edge")
     call compute_coef_at_wl(scn, SV, left_wl, n_mom, n_derivs, &
-         scn%op%ray_tau(1,:), aer_sca_left, coef_left, lcoef_left)
+         scn%op%ray_tau(1,:), aer_sca_left, aer_ext_left, coef_left, lcoef_left)
 
     call logger%debug(fname, "Calculating coefficients at right edge")
     call compute_coef_at_wl(scn, SV, right_wl, n_mom, n_derivs, &
-         scn%op%ray_tau(size(scn%op%wl),:), aer_sca_right, coef_right, lcoef_right)
+         scn%op%ray_tau(size(scn%op%wl),:), aer_sca_right, aer_ext_right, coef_right, lcoef_right)
 
     if (constant_coef) then
        n_coefs = 1
     else
-       n_coefs = size(coef_left, 1)
+       n_coefs = size(scn%op%wl)
     end if
+
+    ! This array might turn out to be huge, and the code will crash
+    ! if it is too large for the operating system to handle.
 
     allocate(coef(size(coef_left, 1), &
          size(coef_left, 2), size(coef_left, 3), n_coefs))
@@ -380,6 +249,7 @@ contains
        ! This here is a heinously slow operation
 
        call logger%debug(fname, "Creating big coef and lcoef arrays (SLOW).")
+
        do i = 1, size(scn%op%wl)
           wl = scn%op%wl(i)
 
@@ -396,7 +266,8 @@ contains
   end subroutine precompute_all_coef
 
 
-  subroutine compute_coef_at_wl(scn, SV, wl, n_mom, n_derivs, ray_tau, aer_sca_tau, coef, lcoef)
+  subroutine compute_coef_at_wl(scn, SV, wl, n_mom, n_derivs, ray_tau, &
+       aer_sca_tau, aer_ext_tau, coef, lcoef)
 
     type(scene), intent(in) :: scn
     type(statevector), intent(in) :: SV
@@ -405,23 +276,26 @@ contains
     integer, intent(in) :: n_derivs
     double precision, intent(in) :: ray_tau(:)
     double precision, allocatable, intent(in) :: aer_sca_tau(:,:)
+    double precision, allocatable, intent(in) :: aer_ext_tau(:,:)
     double precision, allocatable, intent(inout) :: coef(:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
 
     integer :: n_layer
     integer :: n_aer
     integer :: n_pfmom
-    integer :: a, l, p, i
+    integer :: a, l, p, i, k
     integer :: aer_idx
     integer :: aer_sv_idx
-    integer :: l_aod_idx
+    integer :: l_aero_idx
+
+    double precision, allocatable :: aer_fac(:)
 
     double precision :: fac
     double precision :: denom
-    !double precision, allocatable :: numer(:)
+    double precision, allocatable :: aer_height_sum(:,:)
+
     double precision, allocatable :: ray_coef(:,:)
     double precision, allocatable :: aerpmom(:,:,:,:)
-
 
     n_layer = scn%num_active_levels - 1
     n_aer = scn%num_aerosols
@@ -472,7 +346,7 @@ contains
 
           do p = 1, n_mom
              ! Add aerosol contributions here
-             coef(:, p, l) = aerpmom(a, :, p, l) * aer_sca_tau(l, a)
+             coef(:, p, l) = coef(:, p, l) + aerpmom(a, :, p, l) * aer_sca_tau(l, a)
           end do
 
        end do
@@ -493,15 +367,45 @@ contains
           ! TODO: this is a bit hacky, would be nice to have some global
           ! dictionary where one can look these up
 
-          l_aod_idx = SV%num_gas + SV%num_temp + SV%num_albedo + i
+          l_aero_idx = SV%num_gas + SV%num_temp + SV%num_albedo + i
           ! Which aerosol belongs to SV index 'i'?
-          aer_sv_idx = SV%aerosol_idx_lookup(i)
+          aer_sv_idx = SV%aerosol_aod_idx_lookup(i)
           ! What is the corresponding aerosol in the MCS?
           aer_idx = scn%op%aer_mcs_map(aer_sv_idx)
 
-          ! And calculate dBeta/dAOD for layer l
-          lcoef(:,:,l_aod_idx,l) =  aer_sca_tau(l, aer_sv_idx) / scn%op%reference_aod(aer_sv_idx) * &
+          ! And calculate dBeta/dAOD
+          lcoef(:,:,l_aero_idx,l) = aer_sca_tau(l, aer_sv_idx) / scn%op%reference_aod(aer_sv_idx) * &
                (aerpmom(aer_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
+
+       end do
+
+       ! Aerosol heights
+       do i = 1, SV%num_aerosol_height
+
+          allocate(aer_fac(n_layer))
+
+          ! The position of the AOD derivative inputs must essentially
+          ! match the SV structure, and we are generally using this ordering
+          ! TODO: this is a bit hacky, would be nice to have some global
+          ! dictionary where one can look these up
+
+          l_aero_idx = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + i
+          ! Which aerosol belongs to SV index 'i'?
+          aer_sv_idx = SV%aerosol_height_idx_lookup(i)
+          ! What is the corresponding aerosol in the MCS?
+          aer_idx = scn%op%aer_mcs_map(aer_sv_idx)
+
+          call calculate_aero_height_factors( &
+               scn%atm%altitude_layers(1:n_layer), &
+               SV%svsv(SV%idx_aerosol_height(i)), &
+               MCS%aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
+               aer_fac)
+
+          ! And calculate dBeta/dAerosolHeight for layer l
+          lcoef(:,:,l_aero_idx,l) = aer_sca_tau(l, aer_sv_idx) * aer_fac(l) * &
+               (aerpmom(aer_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
+
+          deallocate(aer_fac)
 
        end do
 
@@ -570,6 +474,7 @@ contains
     ! Loop variable
     integer :: i
 
+    scn%atm%altitude_layers(:) = 0.0d0
     ! Set altitudes to zero, and the lowest level to the altitude
     scn%atm%altitude_levels(:) = 0.0d0
     scn%atm%altitude_levels(scn%num_levels) = scn%alt
@@ -599,6 +504,13 @@ contains
        !-----------------------------------------------------
 
     end do
+
+    ! Some calculations want the layer altitude, so might as well compute them
+    ! here and store them.
+    do i = 1, scn%num_levels - 1
+       scn%atm%altitude_layers(i) = 0.5d0 * (scn%atm%altitude_levels(i) + scn%atm%altitude_levels(i+1))
+    end do
+
 
   end subroutine scene_altitude
 
@@ -657,14 +569,14 @@ contains
     double precision, parameter  :: shc = 1.6235d-3
 
     ! Convert from geodetic latitude (GDLAT) to geocentric latitude (GCLAT).
-    gclat=atan(tan(DEG2RAD*gdlat)/(1+con))  ! radians
+    gclat = atan(tan(DEG2RAD*gdlat)/(1+con))  ! radians
     ! On computers which crash at the poles try the following expression
     ! gclat=d2r*gdlat-con*sin(d2r*gdlat)*cos(d2r*gdlat)/(1+con*cos(d2r*gdlat)**2)
-    radius= altit + EARTH_EQUATORIAL_RADIUS/sqrt(1.0d0+con*sin(gclat)**2)
-    ff=(radius/ EARTH_EQUATORIAL_RADIUS)**2
-    hh=radius*omega**2
-    ge=gm/ EARTH_EQUATORIAL_RADIUS**2                       ! = gravity at Re
-    gravity=(ge*(1-shc*(3.0d0*sin(gclat)**2-1.0d0)/ff)/ff-hh*cos(gclat)**2) &
+    radius = altit + EARTH_EQUATORIAL_RADIUS/sqrt(1.0d0+con*sin(gclat)**2)
+    ff = (radius/ EARTH_EQUATORIAL_RADIUS)**2
+    hh = radius*omega**2
+    ge = gm / EARTH_EQUATORIAL_RADIUS**2                       ! = gravity at Re
+    gravity = (ge*(1-shc*(3.0d0*sin(gclat)**2-1.0d0)/ff)/ff-hh*cos(gclat)**2) &
          *(1.0d0+0.5d0*(sin(gclat)*cos(gclat)*(hh/ge+2.0d0*shc/ff**2))**2)
 
   end function jpl_gravity
@@ -826,6 +738,7 @@ contains
           if (allocated(atm%gas_index)) deallocate(atm%gas_index)
           if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
           if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
+          if (allocated(atm%altitude_layers)) deallocate(atm%altitude_layers)
           if (allocated(atm%grav)) deallocate(atm%grav)
           if (allocated(atm%ndry)) deallocate(atm%ndry)
 
@@ -840,6 +753,7 @@ contains
           allocate(atm%gas_vmr(level_count, num_gases))
           allocate(atm%gas_index(num_gases))
           allocate(atm%altitude_levels(level_count))
+          allocate(atm%altitude_layers(level_count - 1))
           allocate(atm%grav(level_count))
           allocate(atm%ndry(level_count))
 
@@ -1122,8 +1036,17 @@ contains
        ! Retrieved aerosol AOD names
        do j=1, SV%num_aerosol_aod
           if (SV%idx_aerosol_aod(j) == i) then
-             lower_str = MCS%window(i_win)%aerosols(sv%aerosol_idx_lookup(j))%lower()
+             lower_str = MCS%window(i_win)%aerosols(sv%aerosol_aod_idx_lookup(j))%lower()
              write(tmp_str, '(A,A)') lower_str%chars(), "_aod"
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
+       ! Retrieved aerosol AOD names
+       do j=1, SV%num_aerosol_height
+          if (SV%idx_aerosol_height(j) == i) then
+             lower_str = MCS%window(i_win)%aerosols(sv%aerosol_height_idx_lookup(j))%lower()
+             write(tmp_str, '(A,A)') lower_str%chars(), "_height"
              results%sv_names(i) = trim(tmp_str)
           end if
        end do

@@ -2,12 +2,12 @@
 !> @file gas_tau.f90
 !> @author Peter Somkuti
 !>
-!! This module provides functions to calculate the gas optical depths for a given
-!! model atmosphere for one specific gas. There are essentially two functions:
-!! one to extract the cross section value from a given (wavelength,H2O,p,T)-coordinate
-!! via linear interpolation (get_CS_value_at). The other function (calculate_gas_tau)
-!! does the physics to calculate the layer and sub-layer ODs, and calls the other
-!! to grab the cross section values needed for the calculations.
+!> @detail This module provides functions to calculate the gas optical depths for a given
+!> model atmosphere for one specific gas. There are essentially two functions:
+!> one to extract the cross section value from a given (wavelength,H2O,p,T)-coordinate
+!> via linear interpolation (get_CS_value_at). The other function (calculate_gas_tau)
+!> does the physics to calculate the layer and sub-layer ODs, and calls the other
+!> to grab the cross section values needed for the calculations.
 
 module gas_tau_mod
 
@@ -213,11 +213,13 @@ contains
              ! the lower atmsophere bound. It's then 'reversed' via a minus
              ! sign when calculating the proper forward Jacobians.
              p_lower_pert = psurf - PSURF_PERTURB
+
              if (log_scaling) then
                 p_fac_pert = (log(p_lower_pert) - log(p(l-1))) / (log(p(l)) - log(p(l-1)))
              else
                 p_fac_pert = (p_lower_pert - p(l-1)) / (p(l) - p(l-1))
              end if
+
              T_lower_pert = (1.0d0 - p_fac_pert) * T(l-1) + p_fac_pert * T(l)
              sh_lower_pert = (1.0d0 - p_fac_pert) * sh(l-1) + p_fac_pert * sh(l)
              VMR_lower_pert = (1.0d0 - p_fac_pert) * gas_vmr(l-1) + p_fac_pert * gas_vmr(l)
@@ -382,8 +384,10 @@ contains
              else
                 H2O_corr = (1.0d0 - this_sh_pert)
              end if
+
              ! This calculates the gas OD, as a result of a perturbed surface pressure
-             C_tmp = 1.0d0 / (9.80665d0 * this_M) * NA * 0.1d0 * H2O_corr
+             ! I don't need this, right? It's the same as the value above .. ?
+             ! C_tmp = 1.0d0 / (this_grav * this_M) * NA * 0.1d0 * H2O_corr
 
              if (log_scaling) then
                 ! this_p_pert is already exponentiated here!!

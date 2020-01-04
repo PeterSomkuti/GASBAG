@@ -10,7 +10,8 @@ module XRTM_mod
   use Rayleigh_mod, only : calculate_rayleigh_scatt_matrix, calculate_rayleigh_depolf
   use statevector_mod
   use aerosols_mod
-  use physical_model_addon_mod, only : scene
+  use scene_mod
+  use physical_model_addon_mod
   
   ! Third-party modules
   use xrtm_int_f90
@@ -86,6 +87,11 @@ contains
              call logger%debug(fname, "Using XRTM in discrete-ordinate mode")
              num_solvers = num_solvers + 1
              xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_EIG_BVP)
+          else if (tmp_str == "MEM_BVP") then
+             ! Quadrature (LIDORT-like)
+             call logger%debug(fname, "Using XRTM in matrix exponential discrete-ordinate mode")
+             num_solvers = num_solvers + 1
+             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_MEM_BVP)
           else if (tmp_str == "SOS") then
              ! Pade approximation and adding
              call logger%debug(fname, "Using XRTM in successive-orders-of-scattering mode")
@@ -193,7 +199,7 @@ contains
 
 
   subroutine solve_RT_problem_XRTM(window, SV, scn, n_stokes, s_start, s_stop, &
-       radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, &
+       radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, &
        xrtm_success)
 
     type(CS_window), intent(in) :: window
@@ -207,6 +213,7 @@ contains
     double precision, allocatable, intent(inout) :: dI_dsurf(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dTemp(:,:)
     double precision, allocatable, intent(inout) :: dI_dAOD(:,:,:)
+    double precision, allocatable, intent(inout) :: dI_dAHeight(:,:,:)
 
     logical, intent(inout) :: xrtm_success
 
@@ -243,9 +250,11 @@ contains
     double precision, allocatable :: ltau(:,:,:)
     double precision, allocatable :: lomega(:,:,:)
     double precision, allocatable :: lsurf(:,:)
+
+    double precision, allocatable :: aero_fac(:)
     !
     double precision :: cpu_start, cpu_stop
-    integer :: i,j
+    integer :: i,j,k,l
     integer :: aer_idx
 
     ! Initialize success variable
@@ -286,7 +295,7 @@ contains
        ! RT model and options, we run through the entire band, point for point.
        ! --------------------------------------------------------------------
 
-       
+
        ! This function "translates" our verbose configuration file options
        ! into proper XRTM language and sets the corresponding options.
 
@@ -300,201 +309,245 @@ contains
             xrtm_kernels, &
             xrtm_success)
 
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to setup_XRTM unsuccessful.")
-             return
+       if (.not. xrtm_success) then
+          call logger%error(fname, "Call to setup_XRTM unsuccessful.")
+          return
+       end if
+
+       xrtm_n_derivs = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + SV%num_aerosol_height
+
+       ! --------------------------------------
+       ! Derive the number of quadrature points
+       !
+       ! If more than one was supplied by the user,
+       ! simply grab the first value and ignore the
+       ! rest for monochromatic calculations. At least
+       ! one value has to be present. Of course this
+       ! option is only required for RT solvers that
+       ! require some notion of "streams", such as
+       ! BVP.
+       !
+       ! --------------------------------------
+
+       if ( &
+            (iand(xrtm_solvers, XRTM_SOLVER_EIG_BVP) /= 0) .or. &
+            (iand(xrtm_solvers, XRTM_SOLVER_TWO_OS) /= 0) &
+            ) then
+
+          ! Is it even allocated?
+          if (.not. allocated(window%RT_streams)) then
+             call logger%fatal(fname, "You MUST supply a -rt_streams- option!")
+             stop 1
           end if
 
-          xrtm_n_derivs = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod
-
-          ! --------------------------------------
-          ! Derive the number of quadrature points
-          !
-          ! If more than one was supplied by the user,
-          ! simply grab the first value and ignore the
-          ! rest for monochromatic calculations. At least
-          ! one value has to be present. Of course this
-          ! option is only required for RT solvers that
-          ! require some notion of "streams", such as
-          ! BVP.
-          !
-          ! --------------------------------------
-
-          if ( &
-               (iand(xrtm_solvers, XRTM_SOLVER_EIG_BVP) /= 0) .or. &
-               (iand(xrtm_solvers, XRTM_SOLVER_TWO_OS) /= 0) &
-               ) then
-
-             ! Is it even allocated?
-             if (.not. allocated(window%RT_streams)) then
-                call logger%fatal(fname, "You MUST supply a -rt_streams- option!")
-                stop 1
-             end if
-
-             ! And if allocated, does it have the right size?
-             if (size(window%RT_streams) < 1) then
-                call logger%fatal(fname, "You need to supply at least one value for -rt_streams-")
-                stop 1
-             end if
-
-             ! And then finally it needs to have the right value
-             if (window%RT_streams(1) < 2) then
-                write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", window%RT_streams(1)
-                call logger%fatal(fname, trim(tmp_str))
-                stop 1
-             end if
-
-             xrtm_streams = window%RT_streams(1) / 2
-
-          else
-
-             call logger%debug(fname, "Setting RT streams to 1 per hemisphere.")
-             xrtm_streams = 1
-             
+          ! And if allocated, does it have the right size?
+          if (size(window%RT_streams) < 1) then
+             call logger%fatal(fname, "You need to supply at least one value for -rt_streams-")
+             stop 1
           end if
 
-
-          ! Precompute all  phase function coefficients and derivatives
-          call cpu_time(cpu_start)
-          call precompute_all_coef(scn, SV, n_stokes, xrtm_n_derivs, &
-               window%constant_coef, coef, lcoef)
-          call cpu_time(cpu_stop)
-
-          call create_XRTM( &
-               xrtm, & ! XRTM handler
-               xrtm_options, & ! XRTM options bitmask
-               xrtm_solvers, & ! XRTM solvers combined bitmask
-               max(3, scn%max_pfmom), & ! Max coef
-               xrtm_streams, & ! Quadrature points
-               n_stokes, & ! Number of stokes coeffs
-               xrtm_n_derivs, & ! Number of derivatives
-               num_lay, & ! Number of layers
-               1, & ! Number of surface kernels
-               50, & ! Number of kernel quadrature points
-               xrtm_kernels, & ! XRTM surface kernels
-               xrtm_success) ! Call successful?
-
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to create_XRTM unsuccessful.")
-             call xrtm_destroy_f90(xrtm, xrtm_error)
-             return
+          ! And then finally it needs to have the right value
+          if (window%RT_streams(1) < 2) then
+             write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", window%RT_streams(1)
+             call logger%fatal(fname, trim(tmp_str))
+             stop 1
           end if
 
-          ! Precompute the derivatives, so we do not need to deal with it
-          ! inside the radiance calculation code.
-          allocate(ltau(size(scn%op%wl), xrtm_n_derivs, num_lay))
-          allocate(lomega(size(scn%op%wl), xrtm_n_derivs, num_lay))
-          allocate(lsurf(size(scn%op%wl), xrtm_n_derivs))
+          xrtm_streams = window%RT_streams(1) / 2
 
-          ! Output weighting function container
-          allocate(weighting_functions(size(scn%op%wl), n_stokes, xrtm_n_derivs))
+       else
 
+          call logger%debug(fname, "Setting RT streams to 1 per hemisphere.")
+          xrtm_streams = 1
 
-          ltau(:,:,:) = 0.0d0
-          lomega(:,:,:) = 0.0d0
-          lsurf(:,:) = 0.0d0
-
-          do j=1, SV%num_gas
-             ltau(:, j, s_start(j):s_stop(j)-1) = &
-                  scn%op%gas_tau(:, s_start(j):s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
-
-             lomega(:, j, s_start(j):s_stop(j)-1) = &
-                  -scn%op%layer_omega(:,s_start(j):s_stop(j)-1) / scn%op%layer_tau(:,s_start(j):s_stop(j)-1) &
-                  * ltau(:, j, s_start(j):s_stop(j)-1)
-          end do
-
-          if (SV%num_temp > 0) then
-             j = SV%num_gas + 1
-
-             ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:num_lay,:), dim=3)
-             lomega(:,j,:) = -scn%op%layer_omega(:,:) / scn%op%layer_tau(:,:) * ltau(:,j,:)
-          end if
-
-          do j=1, SV%num_albedo
-             i = SV%num_gas + SV%num_temp + j
-
-             lsurf(:,i) = 1.0d0
-          end do
-
-          do j=1, SV%num_aerosol_aod
-             i = SV%num_gas + SV%num_temp + SV%num_albedo + j
-             aer_idx = SV%aerosol_idx_lookup(j)
-
-             ltau(:,i,:) = scn%op%aer_ext_tau(:,:,aer_idx) / scn%op%reference_aod(aer_idx)
-             lomega(:,i,:) = ltau(:,i,:) * (1.0d0 - scn%op%layer_omega(:,:) / scn%op%layer_tau(:,:))
-             ! lcoef is calculated within "precompute_all_coef"
-          end do
-
-          ! ------------------------------------------
-          ! Run the monochromatic radiance calculation
-          ! ------------------------------------------
+       end if
 
 
-          call calculate_XRTM_radiance( &
-               xrtm, & ! XRTM handler
-               xrtm_separate_solvers, & ! separate XRTM solvers
-               SV, & ! State vector structure - useful for decoding SV positions
-               scn%op%wl, & ! per pixel wavelength
-               scn%SZA, & ! solar zenith angle
-               scn%VZA, & ! viewing zenith angle
-               scn%SAA, & ! solar azimuth angle
-               scn%VAA, & ! viewing azimuth angle
-               scn%atm%altitude_levels, & ! per-level altitude
-               scn%op%albedo, & ! Surface albedo
-               scn%op%layer_tau, & ! per-wl per-layer optical depths
-               scn%op%layer_omega, & ! per-wl per-layer SSA
-               ltau, &
-               lomega, &
-               lsurf, &
-               coef, &
-               lcoef, &
-               n_stokes, & ! Number of Stokes parameters to calculate
-               xrtm_n_derivs, & ! Number of derivatives to be calculated
-               num_lay, & ! Number of atmospheric layers
-               radiance_calc_work_hi_stokes, &
-               weighting_functions, &
-               xrtm_success)
+       ! Precompute all  phase function coefficients and derivatives
+       call cpu_time(cpu_start)
+       call precompute_all_coef(scn, SV, n_stokes, xrtm_n_derivs, &
+            window%constant_coef, coef, lcoef)
+       call cpu_time(cpu_stop)
 
-          ! After calculations are done, we really don't need the XRTM object anymore,
-          ! so independent of the success, we can safely destroy it.
-          !
-          ! XRTM must be destroyed at some point, otherwise it will just keep
-          ! creating arrays and filling up memory (quickly!). Why not destroy
-          ! it right here - all the results are transferred to various arrays
-          ! so we do not really need the XRTM instance anymore.
-          ! If the calculation of radiances failed for whatever reason, the program
-          ! returns here anyway such that XRTM is destroyed as well.
+       call create_XRTM( &
+            xrtm, & ! XRTM handler
+            xrtm_options, & ! XRTM options bitmask
+            xrtm_solvers, & ! XRTM solvers combined bitmask
+            max(3, scn%max_pfmom), & ! Max coef
+            xrtm_streams, & ! Quadrature points
+            n_stokes, & ! Number of stokes coeffs
+            xrtm_n_derivs, & ! Number of derivatives
+            num_lay, & ! Number of layers
+            1, & ! Number of surface kernels
+            50, & ! Number of kernel quadrature points
+            xrtm_kernels, & ! XRTM surface kernels
+            xrtm_success) ! Call successful?
+
+       if (.not. xrtm_success) then
+          call logger%error(fname, "Call to create_XRTM unsuccessful.")
           call xrtm_destroy_f90(xrtm, xrtm_error)
+          return
+       end if
 
-          if (.not. xrtm_success) then
-             call logger%error(fname, "Call to calculate_XRTM_radiance unsuccessful.")
-             return
+       ! Precompute the derivatives, so we do not need to deal with it
+       ! inside the radiance calculation code.
+       allocate(ltau(size(scn%op%wl), xrtm_n_derivs, num_lay))
+       allocate(lomega(size(scn%op%wl), xrtm_n_derivs, num_lay))
+       allocate(lsurf(size(scn%op%wl), xrtm_n_derivs))
+
+       ! Output weighting function container
+       allocate(weighting_functions(size(scn%op%wl), n_stokes, xrtm_n_derivs))
+
+       ! Initialize all derivatives with zero
+       ltau(:,:,:) = 0.0d0
+       lomega(:,:,:) = 0.0d0
+       lsurf(:,:) = 0.0d0
+
+       ! Gas sub-column derivatives
+       do j = 1, SV%num_gas
+          ltau(:, j, s_start(j):s_stop(j)-1) = &
+               scn%op%gas_tau(:, s_start(j):s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
+
+          lomega(:, j, s_start(j):s_stop(j)-1) = &
+               -scn%op%layer_omega(:,s_start(j):s_stop(j)-1) / scn%op%layer_tau(:,s_start(j):s_stop(j)-1) &
+               * ltau(:, j, s_start(j):s_stop(j)-1)
+       end do
+
+       ! Temperature derivative
+       if (SV%num_temp > 0) then
+          j = SV%num_gas + 1
+
+          ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:num_lay,:), dim=3)
+          lomega(:,j,:) = -scn%op%layer_omega(:,1:num_lay) / scn%op%layer_tau(:,1:num_lay) * ltau(:,j,:)
+       end if
+
+       ! Surface albedo coefficient derivatives
+       do j = 1, SV%num_albedo
+          i = SV%num_gas + SV%num_temp + j
+
+          lsurf(:,i) = 1.0d0
+       end do
+
+       ! Aerosol AOD derivatives
+       do j = 1, SV%num_aerosol_aod
+          i = SV%num_gas + SV%num_temp + SV%num_albedo + j
+          aer_idx = SV%aerosol_aod_idx_lookup(j)
+
+          ltau(:,i,:) = scn%op%aer_ext_tau(:,:,aer_idx) / scn%op%reference_aod(aer_idx)
+          ! This should be tau_aer_ext / AOD * (omega_a/tau - omega/tau)
+          lomega(:,i,:) = ltau(:,i,:) * ( &
+               (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
+               - scn%op%layer_omega(:,1:num_lay)) / scn%op%layer_tau(:,1:num_lay) &
+               )
+          ! lcoef is calculated within "precompute_all_coef"
+       end do
+
+       ! Aerosol height derivatives
+       ! NOTE / TODO
+       ! This is also a bit hacky since we take the aerosol width from the MCS, making this
+       ! code a bit messy. It also works because right now, we can't change the aerosol
+       ! layer width at this point in time.
+
+       do j = 1, SV%num_aerosol_height
+
+          allocate(aero_fac(num_lay))
+
+          i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j
+          aer_idx = SV%aerosol_height_idx_lookup(j)
+
+          ! This factor is required for the aerosol height Jacobians
+          call calculate_aero_height_factors(scn%atm%altitude_layers(:), &
+               SV%svsv(SV%idx_aerosol_height(j)), &
+               MCS%aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
+               aero_fac)
+
+          do l = 1, num_lay
+             ltau(:,i,l) = scn%op%aer_ext_tau(:,l,aer_idx) * aero_fac(l)
+          end do
+
+          lomega(:,i,:) = ltau(:,i,:) * ( &
+               (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
+               - scn%op%layer_omega(:,1:num_lay)) / scn%op%layer_tau(:,1:num_lay) &
+               )
+
+          deallocate(aero_fac)
+       end do
+
+       ! ------------------------------------------
+       !
+       ! Run the monochromatic radiance calculation
+       !
+       ! ------------------------------------------
+
+       call calculate_XRTM_radiance( &
+            xrtm, & ! XRTM handler
+            xrtm_separate_solvers, & ! separate XRTM solvers
+            SV, & ! State vector structure - needed for decoding SV positions
+            scn%op%wl, & ! per pixel wavelength
+            scn%SZA, & ! solar zenith angle
+            scn%VZA, & ! viewing zenith angle
+            scn%SAA, & ! solar azimuth angle
+            scn%VAA, & ! viewing azimuth angle
+            scn%atm%altitude_levels, & ! per-level altitude
+            scn%op%albedo, & ! Surface albedo
+            scn%op%layer_tau, & ! per-wl per-layer optical depths
+            scn%op%layer_omega, & ! per-wl per-layer SSA
+            ltau, & ! per-wl per layer optical depth derivatives
+            lomega, & ! per-wl per layer SSA derivatives
+            lsurf, & ! per-wl surface derivatives
+            coef, & ! per-wl phasefunction coefficients
+            lcoef, & ! per-wl phasefunction derivatives
+            n_stokes, & ! Number of Stokes parameters to calculate
+            xrtm_n_derivs, & ! Number of derivatives to be calculated
+            num_lay, & ! Number of atmospheric layers
+            radiance_calc_work_hi_stokes, & ! Output radiances
+            weighting_functions, & ! Output weighting functions
+            xrtm_success) ! Success indicator
+
+       ! After calculations are done, we really don't need the XRTM object anymore,
+       ! so independent of the success, we can safely destroy it.
+       !
+       ! XRTM must be destroyed at some point, otherwise it will just keep
+       ! creating arrays and filling up memory (quickly!). Why not destroy
+       ! it right here - all the results are transferred to various arrays
+       ! so we do not really need the XRTM instance anymore.
+       ! If the calculation of radiances failed for whatever reason, the program
+       ! returns here anyway such that XRTM is destroyed as well.
+       call xrtm_destroy_f90(xrtm, xrtm_error)
+
+       if (.not. xrtm_success) then
+          call logger%error(fname, "Call to calculate_XRTM_radiance unsuccessful.")
+          return
+       end if
+
+       ! Recover the Jacobians from the XRTM container
+       ! Store gas subcolumn derivatives
+       do j=1, SV%num_gas
+          dI_dgas(:,j,:) = weighting_functions(:,:,j)
+       end do
+
+       ! Store the temperature offset Jacobian if needed
+       if (SV%num_temp > 0) then
+          dI_dTemp(:,:) = weighting_functions(:,:,SV%num_gas + 1)
+       end if
+
+       ! Store surface jacobian
+       do j=1, SV%num_albedo
+          dI_dsurf(:,j,:) = weighting_functions(:,:,SV%num_gas + SV%num_temp + j)
+       end do
+
+       do j=1, SV%num_aerosol_aod
+          dI_dAOD(:,j,:) = weighting_functions(:,:,SV%num_gas + SV%num_temp + SV%num_albedo + j)
+          ! If this AOD retrieval is in log-space, we need to multiply by
+          ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
+          if (window%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
+             dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
           end if
+       end do
 
-          ! Recover the Jacobians from the XRTM container
-          ! Store gas subcolumn derivatives
-          do j=1, SV%num_gas
-             dI_dgas(:,j,:) = weighting_functions(:,:,j)
-          end do
-
-          ! Store the temperature offset Jacobian if needed
-          if (SV%num_temp > 0) then
-             dI_dTemp(:,:) = weighting_functions(:,:,SV%num_gas + 1)
-          end if
-
-          ! Store surface jacobian
-          do j=1, SV%num_albedo
-             dI_dsurf(:,j,:) = weighting_functions(:,:,SV%num_gas + SV%num_temp + j)
-          end do
-
-          do j=1, SV%num_aerosol_aod
-             dI_dAOD(:,j,:) = weighting_functions(:,:,SV%num_gas + SV%num_temp + SV%num_albedo + j)
-             ! If this AOD retrieval is in log-space, we need to multiply by
-             ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
-             if (window%aerosol_retrieve_aod_log(SV%aerosol_idx_lookup(j))) then
-                dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * (-exp(SV%svsv(SV%idx_aerosol_aod(j))))
-             end if
-          end do
+       do j=1, SV%num_aerosol_height
+          dI_dAHeight(:,j,:) = weighting_functions(:,:,SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j)
+       end do
 
     else
 
@@ -712,6 +765,15 @@ contains
        return
     end if
 
+
+    if (size(coef, 4) == 1) then
+       ! Spectrally flat scattering properties, this operation then only
+       ! needs to be done once for the entire RT procedure
+       this_coef(:,:,:) = coef(:,:,:,1)
+       this_lcoef(:,:,:,:) = lcoef(:,:,:,:,1)
+    end if
+
+
     ! -----------------------------------------------------------------------------------
     ! Then, loop through the wavelengths and stick in wavelength-dependent quantities,
     ! i.e. coefficients, optical depths and single-scattering albedos etc., and call
@@ -783,10 +845,6 @@ contains
           ! Spectrally varying scattering properties
           this_coef(:,:,:) = coef(:,:,:,i)
           this_lcoef(:,:,:,:) = lcoef(:,:,:,:,i)
-       else
-          ! Spectrally flat scattering properties
-          this_coef(:,:,:) = coef(:,:,:,1)
-          this_lcoef(:,:,:,:) = lcoef(:,:,:,:,1)
        end if
 
        call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)

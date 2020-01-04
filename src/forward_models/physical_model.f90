@@ -14,6 +14,7 @@
 module physical_model_mod
 
   ! User modules
+  use scene_mod
   use physical_model_addon_mod
 
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
@@ -198,6 +199,8 @@ contains
     integer :: retr_count, total_number_todo
     ! Return value of physical_fm, tells us whether this one has converged or not
     logical :: this_converged
+    ! Number of iterations used by physical_fm
+    integer :: this_iterations
     ! File unit for debugging only..
     integer :: funit
     ! CPU time stamps and mean duration for performance analysis
@@ -541,6 +544,8 @@ contains
        ! Solar shift and stretch
        ! Gas scalar factor defined on level ranges
        ! ILS stretch/squeeze, arbitrary (?) polynomial order
+       ! Aerosol AOD
+       ! Aerosol height
        ! Temperature offset
 
        ! Parsing the statevector string, that was passed in the window
@@ -1018,6 +1023,7 @@ contains
     double precision, allocatable :: dI_dTemp(:,:)
     ! (spectral, aerosol, stokes)
     double precision, allocatable :: dI_dAOD(:,:,:)
+    double precision, allocatable :: dI_dAHeight(:,:,:)
 
     ! Radiative transfer models - which one are we using?
     integer :: RT_model
@@ -1165,7 +1171,8 @@ contains
     ! chi2 calculated from a linear prediction, and the chi2 ratio needed
     ! to adjust lm_gamma and determine a divergent step.
     double precision :: old_chi2, this_chi2, &
-         linear_prediction_chi2, chi2_ratio, chi2_rel_change
+         linear_prediction_chi2, chi2_ratio, chi2_rel_change, &
+         last_successful_chi2
 
     ! Iteration-related
     ! Current iteration number (starts at 1), number of divergent steps allowed.
@@ -1252,7 +1259,7 @@ contains
     ! Use user-supplied value for convergence critertion
     dsigma_scale = MCS%window(i_win)%dsigma_scale
     if (dsigma_scale < 0.0d0) then
-       call logger%debug(fname, "Requested dsigma_scale is < 0, setting to 1.0.")
+       call logger%warning(fname, "Requested dsigma_scale is < 0, setting to 1.0.")
        dsigma_scale = 1.0d0
     end if
 
@@ -1350,6 +1357,8 @@ contains
     ! The "instrument doppler shift" is caused by the relative velocity
     ! between the point on the surface and the spacecraft. Obviously, this
     ! contribution is zero for space-solar geometries.
+
+    call logger%debug(fname, "Calculating initial solar Doppler shift.")
     solar_doppler = 0.0d0
     if (MCS%algorithm%observation_mode == "downlooking") then
        instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
@@ -1387,6 +1396,7 @@ contains
 
 
     ! Allocate OE-related matrices here
+    call logger%debug(fname, "Allocating and initializing OE matrices.")
     allocate(Sa(N_sv, N_sv))
     allocate(Sa_inv(N_sv, N_sv))
     allocate(Shat_inv(N_sv, N_sv))
@@ -1463,42 +1473,51 @@ contains
     ! ------------------------------------------
     ! We can now populate the prior state vector
     ! ------------------------------------------
+    call logger%debug(fname, "Populating the state vector with priors.")
 
     ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
     if (SV%num_albedo > 0) then
+       call logger%debug(fname, ".. albedo priors")
        SV%svap(SV%idx_albedo(1)) = albedo_apriori
        do i=2, SV%num_albedo
           SV%svap(SV%idx_albedo(i)) = 0.0d0
        end do
     end if
 
+
     ! Solar shift is set to zero
     if (SV%num_solar_shift == 1) then
+       call logger%debug(fname, ".. solar shift priors")
        SV%svap(SV%idx_solar_shift(1)) = 0.0d0
     end if
 
     ! Solar stretch factor is set to one
     if (SV%num_solar_stretch == 1) then
+       call logger%debug(fname, ".. solar stretch priors")
        SV%svap(SV%idx_solar_stretch(1)) = 1.0d0
     end if
 
     ! Start SIF with zero
     if (SV%num_sif > 0) then
+       call logger%debug(fname, ".. SIF priors")
        SV%svap(SV%idx_sif(1)) = 0.0d0
     end if
 
     ! ZLO starts with zero too
     if (SV%num_zlo > 0) then
+       call logger%debug(fname, ".. ZLO priors")
        SV%svap(SV%idx_zlo(1)) = 0.0d0
     end if
 
     ! Temperature offset starts with zero
     if (SV%num_temp > 0) then
+       call logger%debug(fname, ".. temperature shift priors")
        SV%svap(SV%idx_temp(1)) = 0.0d0
     end if
 
     ! Dispersion prior is taken from L1B
     if (SV%num_dispersion > 0) then
+       call logger%debug(fname, ".. dispersion priors")
        ! Start with the L1b dispersion values as priors
        do i = 1, SV%num_dispersion
           SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i, i_fp, band)
@@ -1507,6 +1526,7 @@ contains
 
     ! ILS stretch - we assume the L1B is unstretched
     if (SV%num_ils_stretch > 0) then
+       call logger%debug(fname, ".. ILS stretch priors")
        ! Set the first coefficient to 1.0d0, i.e. no stretch
        SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
        do i = 2, SV%num_ils_stretch
@@ -1517,20 +1537,32 @@ contains
 
     ! Surface pressure is taken from the MET data
     if (SV%num_psurf == 1) then
+       call logger%debug(fname, ".. surface pressure priors")
        SV%svap(SV%idx_psurf(1)) = met_psurf(i_fp, i_fr)
     end if
 
     ! Aerosol AOD taken from SV string
     if (SV%num_aerosol_aod > 0) then
+       call logger%debug(fname, ".. aerosol AOD priors")
        do i = 1, SV%num_aerosol_aod
-          if (MCS%window(i_win)%aerosol_retrieve_aod(sv%aerosol_idx_lookup(i))) then
-             SV%svap(SV%idx_aerosol_aod(i)) = MCS%window(i_win)%aerosol_prior_aod(i)
+          if (MCS%window(i_win)%aerosol_retrieve_aod(SV%aerosol_aod_idx_lookup(i))) then
+             SV%svap(SV%idx_aerosol_aod(i)) = MCS%window(i_win)%aerosol_prior_aod(SV%aerosol_aod_idx_lookup(i))
+          end if
+       end do
+    end if
+
+    if (SV%num_aerosol_height > 0) then
+       call logger%debug(fname, ".. aerosol height priors")
+       do i = 1, SV%num_aerosol_height
+          if (MCS%window(i_win)%aerosol_retrieve_height(SV%aerosol_height_idx_lookup(i))) then
+             SV%svap(SV%idx_aerosol_height(i)) = MCS%window(i_win)%aerosol_prior_height(SV%aerosol_height_idx_lookup(i))
           end if
        end do
     end if
 
     ! Gases. Scale factors are set to one in the beginning.
     if (SV%num_gas > 0) then
+       call logger%debug(fname, ".. gas scale factor priors")
        do i = 1, SV%num_gas
           if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,1)) = mean(scale_first_guess(:))
@@ -1549,8 +1581,12 @@ contains
     num_divergent_steps = 0
     keep_iterating = .true.
     divergent_step = .false.
+
     allocate(old_sv(size(SV%svsv)))
     allocate(last_successful_sv(size(SV%svsv)))
+
+
+    call logger%debug(fname, "Starting iteration loop.")
 
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
@@ -1599,6 +1635,8 @@ contains
 
           ! And get the T and SH MET profiles onto our new atmosphere grid. We are
           ! sampling it on a log(p) grid.
+
+          call logger%debug(fname, "Resampling MET profiles.")
 
           call pwl_value_1d( &
                size(met_P_levels, 1), &
@@ -1664,11 +1702,13 @@ contains
           ! Here we set up quantities that need to be done
           ! for the very first iteration.
 
+          call logger%debug(fname, "First iteration - setting some initial values.")
           divergent_step = .false.
           ! Initialise Chi2 and related vars with an insanely large value
           this_chi2 = 9.9d9
           old_chi2 = 9.9d10
           linear_prediction_chi2 = 9.9d9
+          last_successful_chi2 = this_chi2
 
           ! For the first iteration, we want to use the prior albedo
           scn%op%albedo(:) = albedo_apriori
@@ -1684,10 +1724,11 @@ contains
 
           ! Save the old state vector (iteration - 1'st state vector)
           if (divergent_step) then
+             old_chi2 = last_successful_chi2
              old_sv(:) = last_successful_sv(:)
              SV%svsv(:) = old_sv(:)
           else
-             old_sv = SV%svsv
+             old_sv(:) = SV%svsv(:)
           end if
 
           ! If this is not the first iteration, we grab forward model values from the
@@ -1761,6 +1802,8 @@ contains
 
        if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
 
+
+          call logger%debug(fname, "Gases present in atmosphere - starting gas calculations.")
           call cpu_time(cpu_gas_start)
 
           allocate(this_vmr_profile(num_levels, num_gases))
@@ -1771,12 +1814,30 @@ contains
 
           ! Allocate these containers only if XRTM is used
           if (RT_model == RT_XRTM) then
+
+             ! When the statevector returns us a negative or zero
+             ! surface albedo - we can terminate right here, as XRTM
+             ! is not going to allow a calculation anyway. It'll save
+             ! us some time as we don't have to go into the gas
+             ! calculations or further.
+             ! Same goes for albedo > 1.0
+
+             if (count(scn%op%albedo(:) < 0.0) > 0) then
+                call logger%error(fname, "Negative surface albedo. XRTM does not allow that.")
+                return
+             end if
+
+             if (count(scn%op%albedo(:) > 1.0d0) > 0) then
+                call logger%error(fname, "Surface albedo > 1.0. XRTM does not allow that.")
+                return
+             end if
              
              ! For dI/dtau and dI/domega, we need one element for
              ! a) Every retrieved gas subcolumn
              ! b) Temperature jacobian
              ! c) Every retrieved albedo parameter
-             ! d) Surface pressure [NOT IMPLEMENTED YET]
+             ! d) Aerosol AOD
+             ! e) Aerosol height
              
              allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
 
@@ -1790,6 +1851,10 @@ contains
 
              if (SV%num_aerosol_aod > 0) then
                 allocate(dI_dAOD(N_hires, SV%num_aerosol_aod, n_stokes))
+             end if
+
+             if (SV%num_aerosol_height > 0) then
+                allocate(dI_dAHeight(N_hires, SV%num_aerosol_height, n_stokes))
              end if
           end if
 
@@ -1948,21 +2013,37 @@ contains
           ! enter the RT calculations
           if (scn%num_aerosols > 0) then
              ! Initialize first (calculate layer-independent quantities)
-             call aerosol_init(scn)
+             call aerosol_init(scn, i_win)
 
-             this_aerosol_aod = 0.0d0
-             do i=1, SV%num_aerosol_aod
-                if (MCS%window(i_win)%aerosol_retrieve_aod_log(SV%aerosol_idx_lookup(i))) then
+             ! Get the aerosol parameters from default settings, if available, and
+             do i = 1, scn%num_aerosols
+
+                ! Note that these values are all in real space, not in log-space!!
+                this_aerosol_aod(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_aod
+                this_aerosol_height(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_height
+                this_aerosol_width(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_width
+
+             end do
+
+
+             ! If any of the aerosol parameters are retrieved, replace those values here
+             ! with those coming from the state vector.
+             do i = 1, SV%num_aerosol_aod
+                if (MCS%window(i_win)%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(i))) then
                    ! AOD supplied in log-space
-                   this_aerosol_aod(i) = exp(SV%svsv(SV%idx_aerosol_aod(i)))
+                   this_aerosol_aod(SV%aerosol_aod_idx_lookup(i)) = exp(SV%svsv(SV%idx_aerosol_aod(i)))
                 else
                    ! AOD supplied in linear space
-                   this_aerosol_aod(i) = SV%svsv(SV%idx_aerosol_aod(i))
+                   this_aerosol_aod(SV%aerosol_aod_idx_lookup(i)) = SV%svsv(SV%idx_aerosol_aod(i))
                 end if
              end do
 
+             do i = 1, SV%num_aerosol_height
+                this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = SV%svsv(SV%idx_aerosol_height(i))
+             end do
+
              ! Distribute aerosols in atmosphere
-             call aerosol_gauss_shape(scn, this_aerosol_aod)
+             call aerosol_gauss_shape(scn, this_aerosol_aod, this_aerosol_height, this_aerosol_width)
 
           end if
 
@@ -2091,7 +2172,7 @@ contains
                s_start, & ! sub-column start indices
                s_stop, & ! sub_column stop indices
                radiance_calc_work_hi_stokes, & ! Results
-               dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, & ! Jacobian results
+               dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, & ! Jacobian results
                xrtm_success &
                )
 
@@ -2247,6 +2328,22 @@ contains
              end do
           case default
              call logger%error(fname, "AOD Jacobian not implemented " &
+                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+             stop 1
+          end select
+       end if
+
+       if (SV%num_aerosol_height > 0) then
+          select case (RT_model)
+          case (RT_XRTM)
+             do i=1, SV%num_aerosol_height
+                do q=1, n_stokes
+                   K_hi_stokes(:, SV%idx_aerosol_height(i), q) = this_solar(:,2) * dI_dAHeight(:,i,q)
+                end do
+             end do
+             
+          case default
+             call logger%error(fname, "Aerosol height Jacobian not implemented " &
                   // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
              stop 1
           end select
@@ -2508,17 +2605,16 @@ contains
           SV%svsv = old_sv + tmp_v2
 
        else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
-
-          ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
-          tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
+          ! Levenberg-Marquardt extension to Gauss-Newton
 
           ! K^T Se^-1 K
           KtSeK(:,:) = matmul(matmul(transpose(K), Se_inv), K)
+          ! (1+gamma) * Sa^-1 + (K^T Se^-1 K)
+          tmp_m1 = (1.0d0 + lm_gamma) * Sa_inv + KtSeK
 
-          tmp_m1 = Sa_inv + KtSeK
           call invert_matrix(tmp_m1, tmp_m2, success_inv_mat)
           if (.not. success_inv_mat) then
-             call logger%error(fname, "Failed to invert K^T Se K")
+             call logger%error(fname, "Failed to invert (1+gamma) * Sa^-1 + K^T Se K")
              return
           end if
 
@@ -2578,24 +2674,28 @@ contains
             noise_work, N_spec - N_sv)
 
        chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
-       ! Now we check for convergence!
+
+       ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
-            (dsigma_sq < dble(N_sv) * dsigma_scale) .or. &
-            (iteration > MCS%window(i_win)%max_iterations) .or. &
-            (chi2_rel_change < 0.01) .or. &
-            (num_divergent_steps > 1) &
+            (dsigma_sq < dble(N_sv) * dsigma_scale) .or. & ! Dsigma squire criterion is fulfilled
+            (iteration > MCS%window(i_win)%max_iterations) .or. & ! Number of iterations reach max value
+            ((chi2_rel_change < 0.01) .and. (chi2_rel_change >= 0.0d0)) .or. & ! Relative change in CHI2 is smaller than some value
+            (num_divergent_steps > 1) & ! Number of divergent steps is reached
             ) then
+
+          call logger%debug(fname, "Halting iterations!")
 
           ! Stop iterating - we've either coverged or exeeded the max. number of
           ! iterations or max. number of divergences.
           keep_iterating = .false.
 
-          if (iteration <= MCS%window(i_win)%max_iterations) then
-             converged = .true.
-             results%converged(i_fp, i_fr) = 1
-          else
+          if (num_divergent_steps > 1) then
+             call logger%debug(fname, "Exceeded max. allowed number of divergent steps.")
              converged = .false.
              results%converged(i_fp, i_fr) = 0
+          else if (iteration <= MCS%window(i_win)%max_iterations) then
+             converged = .true.
+             results%converged(i_fp, i_fr) = 1
           end if
 
           ! Calculate the Gain matrix
@@ -2787,6 +2887,7 @@ contains
                 ! If we have a successful iteration, we want to store the last
                 ! successful one here as well.
                 last_successful_sv(:) = SV%svsv(:)
+                last_successful_chi2 = this_chi2
              else if ((chi2_ratio < 0.25d0) .and. (chi2_ratio > 1.0d-4)) then
                 ! Fit is not as good as predicted so increase gamma
                 lm_gamma = lm_gamma * 10.0d0
@@ -2794,8 +2895,9 @@ contains
                 ! If we have a successful iteration, we want to store the last
                 ! successful one here as well.
                 last_successful_sv(:) = SV%svsv(:)
+                last_successful_chi2 = this_chi2
              else if (chi2_ratio <= 1.0d-4) then
-                ! We consider this a divergence!
+                ! We consider this a divergence, since the new CHI2 is worse than the old one.
                 divergent_step = .true.
                 num_divergent_steps = num_divergent_steps + 1
 
@@ -2824,6 +2926,8 @@ contains
 
           call logger%debug(fname, "---------------------------------")
           write(tmp_str, '(A,G0.1,A,G0.1)') "Frame: ", i_fr, ", Footprint: ", i_fp
+          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A, F10.3)') "SNR: ", mean(radiance_meas_work / noise_work)
           call logger%debug(fname, trim(tmp_str))
 
           ! Gain matrix and AK are normally just calculated after convergence, so
@@ -2909,7 +3013,7 @@ contains
 
           call logger%debug(fname, "---------------------------------")
 
-          write(tmp_str, '(A,G0.1)') "Iteration: ", iteration
+          write(tmp_str, '(A,G0.1,A,G0.1)') "Iteration: ", iteration, " / divergent: ", num_divergent_steps
           call logger%debug(fname, trim(tmp_str))
 
           if ((iteration == 1) .and. allocated(scale_first_guess)) then
@@ -2936,10 +3040,10 @@ contains
           write(tmp_str, '(A,F10.3)') "Chi2 (linear prediction): ", linear_prediction_chi2
           call logger%debug(fname, trim(tmp_str))
 
-          call logger%debug(fname, " ----- ")
+          call logger%debug(fname, "---------------------------")
           write(tmp_str, '(A,F10.3)') "Chi2 (this iteration):    ", this_chi2
           call logger%debug(fname, trim(tmp_str))
-          call logger%debug(fname, " ----- ")
+          call logger%debug(fname, "---------------------------")
 
           write(tmp_str, '(A,F10.3)') "Chi2 (last iteration):    ", old_chi2
           call logger%debug(fname, trim(tmp_str))
@@ -2950,8 +3054,8 @@ contains
                dsigma_sq, ' / ', dble(N_sv) * dsigma_scale
 
           call logger%debug(fname, trim(tmp_str))
-          if (MCS%window(i_win)%allow_divergences) then
-             write(tmp_str, '(A,F10.3)') "LM-gamma: ", lm_gamma
+          if (MCS%window(i_win)%inverse_method%lower() == "lm") then
+             write(tmp_str, '(A,ES15.5)') "LM-gamma: ", lm_gamma
              call logger%debug(fname, trim(tmp_str))
 
              write(tmp_str, '(A,F10.3)') "Chi2 ratio (R): ", chi2_ratio
@@ -2985,6 +3089,7 @@ contains
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
        if (allocated(dI_dTemp)) deallocate(dI_dTemp)
        if (allocated(dI_dAOD)) deallocate(dI_dAOD)
+       if (allocated(dI_dAHeight)) deallocate(dI_dAHeight)
 
        if (.not. divergent_step) then
           ! Make sure we keep the 'old' Chi2 only from a valid iteration
@@ -3076,9 +3181,17 @@ contains
 
     ! Aerosol AOD covariances come from MCS
     do i = 1, SV%num_aerosol_aod
-       if (MCS%window(i_win)%aerosol_retrieve_aod(sv%aerosol_idx_lookup(i))) then
+       if (MCS%window(i_win)%aerosol_retrieve_aod(sv%aerosol_aod_idx_lookup(i))) then
           Sa(SV%idx_aerosol_aod(i), SV%idx_aerosol_aod(i)) = &
-               MCS%window(i_win)%aerosol_aod_cov(sv%aerosol_idx_lookup(i)) ** 2
+               MCS%window(i_win)%aerosol_aod_cov(sv%aerosol_aod_idx_lookup(i)) ** 2
+       end if
+    end do
+
+    ! Aerosol height covariances come from MCS
+    do i = 1, SV%num_aerosol_height
+       if (MCS%window(i_win)%aerosol_retrieve_height(sv%aerosol_height_idx_lookup(i))) then
+          Sa(SV%idx_aerosol_height(i), SV%idx_aerosol_height(i)) = &
+               MCS%window(i_win)%aerosol_height_cov(sv%aerosol_height_idx_lookup(i)) ** 2
        end if
     end do
 

@@ -73,24 +73,30 @@ module physical_model_addon_mod
 contains
 
 
+  !> @brief Calculates mid-layer pressures, taking into account surface pressure
+  !> @param scn Scene object
   subroutine calculate_layer_pressure(scn)
     type(scene), intent(inout) :: scn
 
+    ! Loop variable
     integer :: l
 
+    ! Get rid of any existing mid-layer pressures
     if (allocated(scn%atm%p_layers)) deallocate(scn%atm%p_layers)
-
+    ! Construct a new array
     allocate(scn%atm%p_layers(scn%num_active_levels - 1))
 
     scn%atm%p_layers(:) = -1.0d0
 
+    ! Loop over all layers and compute mid-layer pressure
     do l = 1, scn%num_active_levels - 1
        if (l < scn%num_active_levels - 2) then
           scn%atm%p_layers(l) = 0.5d0 * (scn%atm%p(l) + scn%atm%p(l+1))
        else
+          ! For bottom-most layer, use surface pressure instead
+          ! of the last active pressure level
           scn%atm%p_layers(l) = 0.5d0 * (scn%atm%p(l) + scn%atm%psurf)
        end if
-       write(*,*) l, scn%atm%p_layers(l)
     end do
 
 

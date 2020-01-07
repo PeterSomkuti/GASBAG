@@ -425,179 +425,6 @@ contains
 
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
 
-
-!!$       ! THIS SHOULD BE ALL IN A SUBROUTINE
-!!$       ! XRTM_MONOCHROMATIC
-!!$
-!!$       ! Precompute the derivatives, so we do not need to deal with it
-!!$       ! inside the radiance calculation code.
-!!$       allocate(ltau(size(scn%op%wl), xrtm_n_derivs, num_lay))
-!!$       allocate(lomega(size(scn%op%wl), xrtm_n_derivs, num_lay))
-!!$       allocate(lsurf(size(scn%op%wl), xrtm_n_derivs))
-!!$
-!!$       ! Output weighting function container
-!!$       allocate(weighting_functions(size(scn%op%wl), n_stokes, xrtm_n_derivs))
-!!$
-!!$       ! Initialize all derivatives with zero
-!!$       ltau(:,:,:) = 0.0d0
-!!$       lomega(:,:,:) = 0.0d0
-!!$       lsurf(:,:) = 0.0d0
-!!$
-!!$
-!!$       deriv_counter = 0
-!!$
-!!$       ! Gas sub-column derivatives
-!!$       do j = 1, SV%num_gas
-!!$          ltau(:, j, s_start(j):s_stop(j)-1) = &
-!!$               scn%op%gas_tau(:, s_start(j):s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
-!!$
-!!$          lomega(:, j, s_start(j):s_stop(j)-1) = &
-!!$               -scn%op%layer_omega(:,s_start(j):s_stop(j)-1) / scn%op%layer_tau(:,s_start(j):s_stop(j)-1) &
-!!$               * ltau(:, j, s_start(j):s_stop(j)-1)
-!!$
-!!$          deriv_counter = deriv_counter + 1
-!!$          write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": gas sub-column #", j
-!!$          call logger%debug(fname, trim(tmp_str))
-!!$       end do
-!!$
-!!$       ! Temperature derivative
-!!$       if (SV%num_temp > 0) then
-!!$          j = SV%num_gas + 1
-!!$
-!!$          ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:num_lay,:), dim=3)
-!!$          lomega(:,j,:) = -scn%op%layer_omega(:,1:num_lay) / scn%op%layer_tau(:,1:num_lay) * ltau(:,j,:)
-!!$
-!!$          deriv_counter = deriv_counter + 1
-!!$          write(tmp_str, '(A, G0.1, A)') "Derivative #", deriv_counter, ": temperature"
-!!$          call logger%debug(fname, trim(tmp_str))
-!!$       end if
-!!$
-!!$       ! Surface albedo coefficient derivatives
-!!$       do j = 1, SV%num_albedo
-!!$          i = SV%num_gas + SV%num_temp + j
-!!$
-!!$          !lsurf(:,i) = 1.0d0
-!!$          lsurf(:,i) = (scn%op%wl(:) - scn%op%wl(int(size(scn%op%wl) / 2)))**(dble(j-1))
-!!$
-!!$          deriv_counter = deriv_counter + 1
-!!$          write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": albedo parameter #", j
-!!$          call logger%debug(fname, trim(tmp_str))
-!!$       end do
-!!$
-!!$       ! Aerosol AOD derivatives
-!!$       do j = 1, SV%num_aerosol_aod
-!!$          i = SV%num_gas + SV%num_temp + SV%num_albedo + j
-!!$          aer_idx = SV%aerosol_aod_idx_lookup(j)
-!!$
-!!$          ltau(:,i,:) = scn%op%aer_ext_tau(:,:,aer_idx) / scn%op%reference_aod(aer_idx)
-!!$          ! This should be tau_aer_ext / AOD * (omega_a/tau - omega/tau)
-!!$          lomega(:,i,:) = ltau(:,i,:) * ( &
-!!$               (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
-!!$               - scn%op%layer_omega(:,1:num_lay)) / scn%op%layer_tau(:,1:num_lay) &
-!!$               )
-!!$          ! lcoef is calculated within "precompute_all_coef"
-!!$          deriv_counter = deriv_counter + 1
-!!$          write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol OD #", j
-!!$          call logger%debug(fname, trim(tmp_str))
-!!$       end do
-!!$
-!!$       ! Aerosol height derivatives
-!!$       ! NOTE / TODO
-!!$       ! This is also a bit hacky since we take the aerosol width from the MCS, making this
-!!$       ! code a bit messy. It also works because right now, we can't change the aerosol
-!!$       ! layer width at this point in time.
-!!$
-!!$       do j = 1, SV%num_aerosol_height
-!!$
-!!$          allocate(aero_fac(num_lay))
-!!$
-!!$          i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j
-!!$          aer_idx = SV%aerosol_height_idx_lookup(j)
-!!$
-!!$          ! This factor is required for the aerosol height Jacobians
-!!$          call calculate_aero_height_factors( &
-!!$               scn%atm%altitude_layers(:), &
-!!$               SV%svsv(SV%idx_aerosol_height(j)), &
-!!$               MCS%aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
-!!$               aero_fac)
-!!$
-!!$          do l = 1, num_lay
-!!$             ltau(:,i,l) = scn%op%aer_ext_tau(:,l,aer_idx) * aero_fac(l)
-!!$          end do
-!!$
-!!$          lomega(:,i,:) = ltau(:,i,:) * ( &
-!!$               (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
-!!$               - scn%op%layer_omega(:,1:num_lay)) / scn%op%layer_tau(:,1:num_lay) &
-!!$               )
-!!$
-!!$          deallocate(aero_fac)
-!!$
-!!$          deriv_counter = deriv_counter + 1
-!!$          write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol height #", j
-!!$          call logger%debug(fname, trim(tmp_str))
-!!$       end do
-!!$
-!!$       ! Calculate coef and lcoef at band edges
-!!$       call compute_coef_at_wl(scn, SV, scn%op%wl(1), n_mom, xrtm_n_derivs, &
-!!$            scn%op%ray_tau(1,:), scn%op%aer_sca_tau(1,:,:), &
-!!$            scn%op%aer_ext_tau(1,:,:), &
-!!$            coef_left, lcoef_left)
-!!$
-!!$       call compute_coef_at_wl(scn, SV, scn%op%wl(num_wl), n_mom, xrtm_n_derivs, &
-!!$            scn%op%ray_tau(num_wl,:), scn%op%aer_sca_tau(num_wl,:,:), &
-!!$            scn%op%aer_ext_tau(num_wl,:,:), &
-!!$            coef_right, lcoef_right)
-!!$
-!!$       ! Precompute all  phase function coefficients and derivatives
-!!$       !call cpu_time(cpu_start)
-!!$       !call precompute_all_coef(scn, SV, n_stokes, xrtm_n_derivs, &
-!!$       !     window%constant_coef, coef, lcoef)
-!!$       !call cpu_time(cpu_stop)
-!!$       !write(*,*) "COEF CALCULATION TIME: ", cpu_stop - cpu_start
-!!$
-!!$
-!!$
-!!$
-!!$
-!!$       ! ------------------------------------------
-!!$       !
-!!$       ! Run the monochromatic radiance calculation
-!!$       !
-!!$       ! ------------------------------------------
-!!$
-!!$       ! We pass all per-wavelength quantities to the function which then
-!!$       ! calculates all per-wavelength radiances as well as per-wavelength
-!!$       ! Jacobians.
-!!$
-!!$       call calculate_XRTM_radiance( &
-!!$            xrtm, & ! XRTM handler
-!!$            xrtm_separate_solvers, & ! separate XRTM solvers
-!!$            SV, & ! State vector structure - needed for decoding SV positions
-!!$            scn%op%wl, & ! per pixel wavelength
-!!$            scn%SZA, & ! solar zenith angle
-!!$            scn%VZA, & ! viewing zenith angle
-!!$            scn%SAA, & ! solar azimuth angle
-!!$            scn%VAA, & ! viewing azimuth angle
-!!$            scn%atm%altitude_levels, & ! per-level altitude
-!!$            scn%op%albedo, & ! Surface albedo
-!!$            scn%op%layer_tau, & ! per-wl per-layer optical depths
-!!$            scn%op%layer_omega, & ! per-wl per-layer SSA
-!!$            ltau, & ! per-wl per layer optical depth derivatives
-!!$            lomega, & ! per-wl per layer SSA derivatives
-!!$            lsurf, & ! per-wl surface derivatives
-!!$            n_stokes, & ! Number of Stokes parameters to calculate
-!!$            xrtm_n_derivs, & ! Number of derivatives to be calculated
-!!$            num_lay, & ! Number of atmospheric layers
-!!$            n_coef, & ! Number of per-layer coefficients to be used by XRTM
-!!$            window%constant_coef, & ! Keep coefficients constant along window?
-!!$            radiance_calc_work_hi_stokes, & ! Output radiances
-!!$            weighting_functions, & ! Output weighting functions
-!!$            xrtm_success, & ! Success indicator
-!!$            coef_left=coef_left, & ! per-wl phasefunction coefficients
-!!$            lcoef_left=lcoef_left, & ! per-wl phasefunction derivatives
-!!$            coef_right=coef_right, & ! per-wl phasefunction coefficients
-!!$            lcoef_right=lcoef_right)! per-wl phasefunction derivatives
-
        ! After calculations are done, we really don't need the XRTM object anymore,
        ! so independent of the success, we can safely destroy it.
        !
@@ -614,6 +441,7 @@ contains
           return
        end if
 
+       call logger%debug(fname, "Mapping weighting functions back to Jacobians.")
        ! Recover the Jacobians from the XRTM container
        ! Store gas subcolumn derivatives
        do j=1, SV%num_gas
@@ -640,8 +468,11 @@ contains
        end do
 
        do j=1, SV%num_aerosol_height
-          dI_dAHeight(:,j,:) = monochr_weighting_functions(:,:,&
+          dI_dAHeight(:,j,:) = monochr_weighting_functions(:,:, &
                SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j)
+          if (window%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
+             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) * exp(SV%svsv(SV%idx_aerosol_height(j)))
+          end if
        end do
 
     else
@@ -826,13 +657,13 @@ contains
 
        ! This factor is required for the aerosol height Jacobians
        call calculate_aero_height_factors( &
-            scn%atm%altitude_layers(:), &
-            SV%svsv(SV%idx_aerosol_height(j)), &
+            scn%atm%p_layers(:), &
+            exp(SV%svsv(SV%idx_aerosol_height(j))) * scn%atm%psurf, &
             MCS%aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
             aero_fac)
 
        do l = 1, n_layers
-          ltau(:,i,l) = scn%op%aer_ext_tau(:,l,aer_idx) * aero_fac(l)
+          ltau(:,i,l) = scn%op%aer_ext_tau(:,l,aer_idx) * aero_fac(l) * scn%atm%psurf
        end do
 
        lomega(:,i,:) = ltau(:,i,:) * ( &
@@ -1047,8 +878,6 @@ contains
        stop 1
     end if
 
-
-
     xrtm_options = xrtm_get_options_f90(xrtm)
     xrtm_solvers = xrtm_get_solvers_f90(xrtm)
 
@@ -1075,6 +904,7 @@ contains
        ! needs to be done once for the entire RT procedure
 
        if (keep_coef_constant) then
+          ! Choose band center
           wl_fac = 0.5d0
           this_coef(:,:,:) = (1.0d0 - wl_fac) * coef(:,:,:,1) + wl_fac * coef(:,:,:,size(coef, 4))
           this_lcoef(:,:,:,:) = (1.0d0 - wl_fac) * lcoef(:,:,:,:,1) + wl_fac * lcoef(:,:,:,:,size(lcoef, 5))
@@ -1215,12 +1045,14 @@ contains
        single_lsurf(:) = lsurf(i,:)
 
        ! Interpolate phasefunction coefficients at wavelength, but only if
-       ! requested by the user.
+       ! requested by the user. 
+       ! WARNING
+       ! This is a fairly slow section of the code and can increase processing
+       ! time by a couple of factors easily!
        if (.not. keep_coef_constant) then
           if (present(coef_left)) then
 
              wl_fac = (wavelengths(i) - wavelengths(1)) / (wavelengths(N_spec) - wavelengths(1))
-
              this_coef(:,:,:) = (1.0d0 - wl_fac) * coef_left(:,:,:) + wl_fac * coef_right(:,:,:)
              this_lcoef(:,:,:,:) = (1.0d0 - wl_fac) * lcoef_left(:,:,:,:) + wl_fac * lcoef_right(:,:,:,:)
 
@@ -1296,6 +1128,8 @@ contains
           return
        end if
 
+       ! DEBUG
+       ! cycle
 
        ! XRTM has been initialized with whatever number of solvers are stored in
        ! "xrtm_solvers", however only one is executed at a time (ask Greg?).

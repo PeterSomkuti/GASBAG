@@ -25,6 +25,8 @@ module scene_mod
      double precision, allocatable :: T(:)
      !> Model atmosphere pressure
      double precision, allocatable :: p(:)
+     !> Model atmosphere mid-layer pressure
+     double precision, allocatable :: p_layers(:)
      !> Model atmosphere specific humidity
      double precision, allocatable :: sh(:)
      !> Model atmosphere gravity at pressure levels

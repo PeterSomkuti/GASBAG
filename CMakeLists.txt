@@ -73,6 +73,7 @@ set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
 set(CMAKE_CXX_FLAGS "-O3 -mtune=native")
+#set(CMAKE_CXX_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.

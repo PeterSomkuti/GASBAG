@@ -611,6 +611,9 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
+       !frame_start = 3500
+       !frame_stop = 3600
+
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged, this_iterations)
        do i_fr=frame_start, frame_stop, frame_skip
@@ -1606,7 +1609,7 @@ contains
        scn%num_gases = scn%atm%num_gases
        scn%num_aerosols = MCS%window(i_win)%num_aerosols
        scn%num_stokes = n_stokes
-       
+
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, num_gases)
        ! Put hires grid into scene container for easy access later on
@@ -1689,6 +1692,10 @@ contains
           num_active_levels = 0
           
        end if
+
+       ! Calculate some layer quantities
+       call calculate_layer_pressure(scn)
+
 
        if (num_levels < 0) then
           call logger%error(fname, "Error in calculating the total number of atmospheric levels.")
@@ -2024,7 +2031,7 @@ contains
 
                 ! Note that these values are all in real space, not in log-space!!
                 this_aerosol_aod(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_aod
-                this_aerosol_height(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_height
+                this_aerosol_height(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_height * scn%atm%psurf
                 this_aerosol_width(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_width
 
              end do
@@ -2043,10 +2050,25 @@ contains
              end do
 
              do i = 1, SV%num_aerosol_height
-                this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = SV%svsv(SV%idx_aerosol_height(i))
+                if (MCS%window(i_win)%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(i))) then
+                   this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = exp(SV%svsv(SV%idx_aerosol_height(i)))
+                else
+                   this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = SV%svsv(SV%idx_aerosol_height(i))
+                end if
+                ! Aerosol height is given as fraction of psurf
+                this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = &
+                     this_aerosol_height(SV%aerosol_height_idx_lookup(i)) * scn%atm%psurf
              end do
 
              ! Distribute aerosols in atmosphere
+             do i = 1, scn%num_aerosols
+                write(tmp_str, '(A,A,A,ES15.5,A,ES15.5,A,ES15.5)') "Aerosol ", MCS%window(i_win)%aerosols(i)%chars(), &
+                     " - AOD: ", this_aerosol_aod(i), &
+                     " Height: ", this_aerosol_height(i), &
+                     " Width: ", this_aerosol_width(i)
+                call logger%debug(fname, trim(tmp_str))
+             end do
+
              call aerosol_gauss_shape(scn, this_aerosol_aod, this_aerosol_height, this_aerosol_width)
 
           end if

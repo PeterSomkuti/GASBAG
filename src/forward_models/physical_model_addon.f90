@@ -73,6 +73,30 @@ module physical_model_addon_mod
 contains
 
 
+  subroutine calculate_layer_pressure(scn)
+    type(scene), intent(inout) :: scn
+
+    integer :: l
+
+    if (allocated(scn%atm%p_layers)) deallocate(scn%atm%p_layers)
+
+    allocate(scn%atm%p_layers(scn%num_active_levels - 1))
+
+    scn%atm%p_layers(:) = -1.0d0
+
+    do l = 1, scn%num_active_levels - 1
+       if (l < scn%num_active_levels - 2) then
+          scn%atm%p_layers(l) = 0.5d0 * (scn%atm%p(l) + scn%atm%p(l+1))
+       else
+          scn%atm%p_layers(l) = 0.5d0 * (scn%atm%p(l) + scn%atm%psurf)
+       end if
+       write(*,*) l, scn%atm%p_layers(l)
+    end do
+
+
+  end subroutine calculate_layer_pressure
+
+
   subroutine allocate_optical_properties(scn, N_hires, N_gases)
 
     type(scene), intent(inout) :: scn
@@ -293,7 +317,7 @@ contains
     double precision :: fac
     double precision :: denom
     double precision, allocatable :: aer_height_sum(:,:)
-
+    double precision :: this_aero_height
     double precision, allocatable :: ray_coef(:,:)
     double precision, allocatable :: aerpmom(:,:,:,:)
 
@@ -395,9 +419,11 @@ contains
           ! What is the corresponding aerosol in the MCS?
           aer_idx = scn%op%aer_mcs_map(aer_sv_idx)
 
+          this_aero_height = exp(SV%svsv(SV%idx_aerosol_height(i))) * scn%atm%psurf
+
           call calculate_aero_height_factors( &
-               scn%atm%altitude_layers(1:n_layer), &
-               SV%svsv(SV%idx_aerosol_height(i)), &
+               scn%atm%p_layers(1:n_layer), &
+               this_aero_height, &
                MCS%aerosol(scn%op%aer_mcs_map(aer_sv_idx))%default_width, &
                aer_fac)
 

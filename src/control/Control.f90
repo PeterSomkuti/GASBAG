@@ -156,6 +156,8 @@ module control_mod
      double precision, allocatable :: aerosol_aod_cov(:)
      !> Do we retrieve height from this aerosol?
      logical, allocatable :: aerosol_retrieve_height(:)
+     !> Do we retrieve  height in log-space?
+     logical, allocatable :: aerosol_retrieve_height_log(:)
      !> Prior aerosol height from SV string
      double precision, allocatable :: aerosol_prior_height(:)
      !> Prior covariance from SV string
@@ -913,11 +915,14 @@ contains
              allocate(MCS%window(window_nr)%aerosol_aod_cov(size(fini_string_array)))
 
              allocate(MCS%window(window_nr)%aerosol_retrieve_height(size(fini_string_array)))
+             allocate(MCS%window(window_nr)%aerosol_retrieve_height_log(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_prior_height(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_height_cov(size(fini_string_array)))
 
              MCS%window(window_nr)%aerosol_retrieve_aod(:) = .false.
              MCS%window(window_nr)%aerosol_retrieve_aod_log(:) = .false.
+             MCS%window(window_nr)%aerosol_retrieve_height(:) = .false.
+             MCS%window(window_nr)%aerosol_retrieve_height_log(:) = .false.
 
              do i=1, size(fini_string_array)
                 MCS%window(window_nr)%aerosols(i) = fini_string_array(i)

@@ -508,7 +508,8 @@ contains
                       write(tmp_str, *) split_svval_string(2)%chars()
                       read(tmp_str, *) MCS%window(i_win)%aerosol_aod_cov(k)
 
-                   else if (check_sv_retr_type == 'height') then
+                   else if ((check_sv_retr_type == 'height') .or. &
+                        (check_sv_retr_type == 'height-log')) then
 
                       write(tmp_str, '(A, A)') "We are retrieving the layer height from aerosol: ", &
                            check_sv_name%chars()
@@ -516,6 +517,11 @@ contains
 
                       MCS%window(i_win)%aerosol_retrieve_height(k) = .true.
                       num_aerosol_height_parameters = num_aerosol_height_parameters + 1
+
+                      if (check_sv_retr_type == 'height-log') then
+                         call logger%debug(fname, ".. in log-space.")
+                         MCS%window(i_win)%aerosol_retrieve_height_log(k) = .true.
+                      end if
 
                       call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
 
@@ -531,7 +537,7 @@ contains
 
                    else
                       call logger%fatal(fname, "Aerosol state vector needs to be stated as " &
-                           // "[aerosol]|aod")
+                           // "[aerosol]|height(-log)")
                       call logger%fatal(fname, " .. instead I got: " // split_string(i)%chars())
                       stop 1
                    end if

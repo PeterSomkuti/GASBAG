@@ -223,8 +223,6 @@ contains
     double precision, intent(in) :: aero_height(:)
     double precision, intent(in) :: aero_width(:)
 
-
-    double precision, allocatable :: layer_height(:)
     double precision :: aod_norm
     integer :: aer
     integer :: wl
@@ -233,13 +231,6 @@ contains
     character(len=*), parameter :: fname = "aerosol_gauss_shape"
     character(len=999) :: tmp_str
 
-    allocate(layer_height(scn%num_levels - 1))
-
-    ! Get layer heights in advance (mean height between two levels)
-    do lay = 1, scn%num_levels - 1
-       layer_height(lay) = 0.5d0 * (scn%atm%altitude_levels(lay) &
-            + scn%atm%altitude_levels(lay+1))
-    end do
 
     do aer = 1, scn%num_aerosols
 
@@ -251,13 +242,14 @@ contains
        ! Comes in handy when we need to calculate jacobians.
        scn%op%reference_aod(aer) = aero_aod(aer)
 
-       aod_norm = sum(exp(-((layer_height(:) - aero_height(aer))**2) &
+       aod_norm = sum(exp(-((scn%atm%p_layers(:) - aero_height(aer))**2) &
                   / (2 * aero_width(aer) * aero_width(aer))))
 
        do wl = 1, 2
 
-          do lay = 1, scn%num_levels - 1
-             scn%op%aer_ext_tau_edge(wl,lay,aer) = exp(-((layer_height(lay) - aero_height(aer))**2) &
+          do lay = 1, scn%num_active_levels - 1
+             scn%op%aer_ext_tau_edge(wl,lay,aer) = exp( &
+                  -((scn%atm%p_layers(lay) - aero_height(aer))**2) &
                   / (2 * aero_width(aer) * aero_width(aer))) * aero_aod(aer) / aod_norm
           end do
 
@@ -298,8 +290,9 @@ contains
        ! Now do it for all wavelengths in our hires grid
        do wl = 1, size(scn%op%wl)
 
-          do lay = 1, scn%num_levels - 1
-             scn%op%aer_ext_tau(wl,lay,aer) = exp(-((layer_height(lay) - aero_height(aer))**2) &
+          do lay = 1, scn%num_active_levels - 1
+             scn%op%aer_ext_tau(wl,lay,aer) = exp( &
+                  -((scn%atm%p_layers(lay) - aero_height(aer))**2) &
                   / (2 * aero_width(aer) * aero_width(aer))) * aero_aod(aer) / aod_norm
           end do
 
@@ -314,14 +307,14 @@ contains
        end do
 
     end do
-    
+
   end subroutine aerosol_gauss_shape
 
 
-  subroutine calculate_aero_height_factors(layer_height, aero_height, aero_width, &
+  subroutine calculate_aero_height_factors(layer_p, aero_height, aero_width, &
        factor)
 
-    double precision, intent(in) :: layer_height(:)
+    double precision, intent(in) :: layer_p(:)
     double precision, intent(in) :: aero_height
     double precision, intent(in) :: aero_width
     double precision, intent(inout) :: factor(:)
@@ -329,16 +322,16 @@ contains
     double precision, allocatable :: aero_shape(:)
     integer :: i, j
 
-    allocate(aero_shape(size(layer_height)))
+    allocate(aero_shape(size(layer_p)))
 
     aero_shape(:) = 0.0d0
     factor(:) = 0.0d0
 
-    aero_shape(:) = exp(-(layer_height(:) - aero_height)**2 / (2 * aero_width**2))
-    factor(:) = (layer_height(:) - aero_height) / (aero_width**2)
+    aero_shape(:) = exp(-(layer_p(:) - aero_height)**2 / (2 * aero_width**2))
+    factor(:) = (layer_p(:) - aero_height) / (aero_width**2)
 
-    do i = 1, size(layer_height)
-       factor(i) = factor(i) - sum(aero_shape(:) * (layer_height(:) - aero_height) / (aero_width**2)) / sum(aero_shape)
+    do i = 1, size(layer_p)
+       factor(i) = factor(i) - sum(aero_shape(:) * (layer_p(:) - aero_height) / (aero_width**2)) / sum(aero_shape)
     end do
 
   end subroutine calculate_aero_height_factors

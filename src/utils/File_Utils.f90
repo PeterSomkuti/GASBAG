@@ -672,7 +672,7 @@ contains
        end if
     end do
 
-    max_coef = max_coef + 1
+    max_coef = max_coef
 
     write(dummy, '(A, G0.1)') "Mom file has this many wavelengths: ", wl_count
     call logger%debug(fname, trim(dummy))
@@ -684,8 +684,19 @@ contains
     ! "6" is hardcoded here, but I guess we don't expect physics
     ! to change all that much..
     allocate(coefs(max_coef, 6, wl_count))
-    coefs(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     allocate(wavelengths(wl_count))
+
+
+    ! NOTE
+    ! MOM files are organized in a strange way: for a band, the
+    ! number of expansion coefficients at one band edge might
+    ! different from the coefficients at the other band edge for
+    ! the same band! Here, we fill them up with some small value,
+    ! hoping that it will not impact the calculations. Otherwise,
+    ! the RT code is prone to produce garbage if you leave these
+    ! values as NaNs.
+
+    coefs(:,:,:) = 1.0d-10 !IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     wavelengths(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
     ! Do a second sweep through the file, this time

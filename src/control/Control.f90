@@ -724,6 +724,11 @@ contains
                    write(tmp_str, '(I2, A, I10)') i, ": ", MCS%window(window_nr)%RT_streams(i)
                    call logger%info(fname, trim(tmp_str))
 
+                   if (mod(MCS%window(window_nr)%RT_streams(i), 2) /= 0) then
+                      call logger%fatal(fname, "Sorry - Stream numbers must be > 2 and even.")
+                      stop 1
+                   end if
+
                 end do
 
                 deallocate(fini_string_array)

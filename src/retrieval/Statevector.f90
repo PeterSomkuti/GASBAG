@@ -45,10 +45,14 @@ module statevector_mod
 
      integer, allocatable :: idx_gas(:,:)
 
+     ! These are the scale start/stop AS GIVEN BY THE CONFIG
      double precision, allocatable :: gas_retrieve_scale_start(:)
      double precision, allocatable :: gas_retrieve_scale_stop(:)
      double precision, allocatable :: gas_retrieve_scale_cov(:)
 
+     ! These are the scale start/stop positions within the model atmosphere
+     integer, allocatable :: s_start(:)
+     integer, allocatable :: s_stop(:)
 
      ! State vector (current), state vector a priori
      double precision, dimension(:), allocatable :: svsv, svap, sver
@@ -90,9 +94,13 @@ contains
 
     if (allocated(SV%idx_gas)) deallocate(SV%idx_gas)
     if (allocated(SV%gas_idx_lookup)) deallocate(SV%gas_idx_lookup)
+
     if (allocated(SV%gas_retrieve_scale_start)) deallocate(SV%gas_retrieve_scale_start)
     if (allocated(SV%gas_retrieve_scale_stop)) deallocate(SV%gas_retrieve_scale_stop)
     if (allocated(SV%gas_retrieve_scale_cov)) deallocate(SV%gas_retrieve_scale_cov)
+
+    if (allocated(SV%s_start)) deallocate(SV%s_start)
+    if (allocated(SV%s_stop)) deallocate(SV%s_stop)
 
     SV%num_albedo = -1
     SV%num_sif = -1
@@ -233,6 +241,7 @@ contains
        if (.not. SV_found) then
           call logger%fatal(fname, "This SV element was not recognized: " // &
                trim(split_string(i)%chars()))
+          call logger%fatal(fname, "Make sure your SV gases and aerosols are present in the window!")
           stop 1
        else
           call logger%info(fname, "SV element recognized: " // &
@@ -811,12 +820,16 @@ contains
        allocate(sv%gas_retrieve_scale_start(count_gas))
        allocate(sv%gas_retrieve_scale_stop(count_gas))
        allocate(sv%gas_retrieve_scale_cov(count_gas))
+       allocate(sv%s_start(count_gas))
+       allocate(sv%s_stop(count_gas))
 
        sv%idx_gas(:,:) = -1
        sv%gas_idx_lookup(:) = -1
        sv%gas_retrieve_scale_start(:) = -1.0d0
        sv%gas_retrieve_scale_stop(:) = -1.0d0
        sv%gas_retrieve_scale_cov(:) = -1.0d0
+       sv%s_start(:) = -1.0d0
+       sv%s_stop(:) = -1.0d0
 
        write(tmp_str, '(A,G0.1)') "Number of gas SV elements: ", count_gas
        call logger%info(fname, trim(tmp_str))

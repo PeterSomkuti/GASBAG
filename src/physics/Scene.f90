@@ -122,6 +122,8 @@ module scene_mod
      integer :: num_aerosols = 0
      !> Largest number of phase function moments, needed for allocation
      integer :: max_pfmom = 0
+     !> Number of Stokes coefficients used in RT calculations
+     integer :: num_stokes = 0
 
      !> The atmosphere of the scene
      type(atmosphere) :: atm

@@ -53,7 +53,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # have to turn those warnings off.
   #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
   set(warnings "-Wall -Wextra -Wpedantic")
-  set(opt "-O3 -ftree-vectorize -mtune=native")
+  set(opt "-O3 -mtune=native")
   set(bounds "-fbounds-check")
 
 else()
@@ -72,7 +72,7 @@ set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g ${bounds} -fcheck=all -fbacktrace -fno-omi
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
-set(CMAKE_CXX_FLAGS "-O3 -mtune=native -ftree-vectorize")
+set(CMAKE_CXX_FLAGS "-O3 -mtune=native")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.

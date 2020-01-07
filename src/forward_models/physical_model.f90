@@ -612,7 +612,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
-       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged)
+       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged, this_iterations)
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
@@ -632,7 +632,7 @@ contains
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
-             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band)
+             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band, this_iterations)
              ! ---------------------------------------------------------------------
 
 #ifdef _OPENMP
@@ -651,11 +651,11 @@ contains
                   (cpu_time_stop - cpu_time_start) / (retr_count+1)
 
              if (mod(retr_count, 1) == 0) then
-                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1)') &
+                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
-                     (cpu_time_stop - cpu_time_start), ' sec. - Converged: ', &
-                     this_converged
+                     (cpu_time_stop - cpu_time_start), " sec. - Converged: ", &
+                     this_converged, ", # Iterations: ", this_iterations
                 call logger%info(fname, trim(tmp_str))
              end if
 
@@ -989,12 +989,13 @@ contains
   !> it converged or not. It accesses all the L1B/MET arrays defined in the module
   !> for fast readout and processing. The OE scheme is based on Rodgers (2000),
   !> and so far we are doing the LM-modification to the Gauss-Newton scheme.
-  function physical_FM(my_instrument, i_fp, i_fr, i_win, band) result(converged)
+  function physical_FM(my_instrument, i_fp, i_fr, i_win, band, this_iterations) result(converged)
 
     implicit none
 
     class(generic_instrument), intent(in) :: my_instrument
     integer, intent(in) :: i_fr, i_fp, i_win, band
+    integer, intent(inout) :: this_iterations
     logical :: converged
 
     ! HDF file id handlers for L1B and output file
@@ -1202,6 +1203,7 @@ contains
 
     ! Initialize
     converged = .false.
+    this_iterations = 0
 
     ! Grab a copy of the state vector for local use
     SV = global_SV
@@ -1598,15 +1600,17 @@ contains
        ! Copy over the initial atmosphere
        scn%atm = initial_atm
 
+       ! Keep some useful values in the scene object, so we don't
+       ! have to pass them through the entire program all the time
        scn%num_levels = scn%atm%num_levels
        scn%num_gases = scn%atm%num_gases
        scn%num_aerosols = MCS%window(i_win)%num_aerosols
+       scn%num_stokes = n_stokes
        
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, num_gases)
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
-
        scn%num_active_levels = -1
 
        if (num_gases > 0) then
@@ -2360,8 +2364,8 @@ contains
           case (RT_XRTM)
              do i=1, SV%num_albedo
                 do q=1, n_stokes
-                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,i,q) &
-                        * (scn%op%wl(:) - scn%op%wl(center_pixel_hi))**(dble(i-1))
+                   K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,i,q)
+                   !     * (scn%op%wl(:) - scn%op%wl(center_pixel_hi))**(dble(i-1))
                 end do
              end do
           case default
@@ -3096,6 +3100,9 @@ contains
           old_chi2 = this_chi2
        end if
 
+       ! Keeping track of performed iterations (valid or not)
+       this_iterations = this_iterations + 1
+
     end do
 
 
@@ -3227,7 +3234,7 @@ contains
   subroutine set_gas_scale_levels(SV, gas_idx, i_win, atm, psurf, &
        s_start, s_stop, do_gas_jac, success)
 
-    type(statevector), intent(in) :: SV
+    type(statevector), intent(inout) :: SV
     integer, intent(in) :: gas_idx
     integer, intent(in) :: i_win
     type(atmosphere), intent(in) :: atm
@@ -3263,9 +3270,13 @@ contains
              s_start(i) = searchsorted_dp((atm%p), &
                   SV%gas_retrieve_scale_start(i) * (psurf), .true.)
              s_start(i) = max(1, s_start(i))
+
              s_stop(i) = searchsorted_dp((atm%p), &
                   SV%gas_retrieve_scale_stop(i) * (psurf), .true.) + 1
              s_stop(i) = min(size(atm%p), s_stop(i))
+
+             SV%s_start(i) = s_start(i)
+             SV%s_stop(i) = s_stop(i)
 
           end if
        end if
@@ -3284,6 +3295,7 @@ contains
 
           if (s_start(i) == s_stop(l)) then
              s_start(i) = s_start(i) + 1
+             SV%s_start(i) = SV%s_start(i) + 1
           end if
        end do
     end do

@@ -272,16 +272,16 @@ contains
     type(scene), intent(in) :: scn
     type(statevector), intent(in) :: SV
     double precision, intent(in) :: wl
-    integer, intent(in) :: n_mom
+    integer, intent(in) :: n_mom ! 1 for scalar, 6 for vector
     integer, intent(in) :: n_derivs
     double precision, intent(in) :: ray_tau(:)
-    double precision, allocatable, intent(in) :: aer_sca_tau(:,:)
-    double precision, allocatable, intent(in) :: aer_ext_tau(:,:)
+    double precision, intent(in) :: aer_sca_tau(:,:)
+    double precision, intent(in) :: aer_ext_tau(:,:)
     double precision, allocatable, intent(inout) :: coef(:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
 
-    integer :: n_layer
     integer :: n_aer
+    integer :: n_layer
     integer :: n_pfmom
     integer :: a, l, p, i, k
     integer :: aer_idx
@@ -340,17 +340,17 @@ contains
           ! should be either 0 or 1, and essentially just use the numbers as they are
           ! stored in the file.
 
-          aerpmom(a,1:MCS%aerosol(aer_idx)%max_n_coef,:,l) = &
-               (1.0d0 - fac) * MCS%aerosol(aer_idx)%coef(:,1:n_mom,scn%op%aer_wl_idx_l(a)) &
-               + fac * MCS%aerosol(aer_idx)%coef(:,1:n_mom,scn%op%aer_wl_idx_r(a))
-
           do p = 1, n_mom
+             aerpmom(a,1:MCS%aerosol(aer_idx)%max_n_coef,p,l) = &
+               (1.0d0 - fac) * MCS%aerosol(aer_idx)%coef(:,p,scn%op%aer_wl_idx_l(a)) &
+               + fac * MCS%aerosol(aer_idx)%coef(:,p,scn%op%aer_wl_idx_r(a))
+
              ! Add aerosol contributions here
              coef(:, p, l) = coef(:, p, l) + aerpmom(a, :, p, l) * aer_sca_tau(l, a)
           end do
 
        end do
-
+       
        ! And add Rayleigh contributions here (after partial aerosol sum)
        coef(1:3, :, l) = coef(1:3, :, l) + ray_coef(:, :) * ray_tau(l)
        ! and divide the entire layer-moments by the denominator
@@ -375,7 +375,7 @@ contains
 
           ! And calculate dBeta/dAOD
           lcoef(:,:,l_aero_idx,l) = aer_sca_tau(l, aer_sv_idx) / scn%op%reference_aod(aer_sv_idx) * &
-               (aerpmom(aer_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
+               (aerpmom(aer_sv_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
 
        end do
 
@@ -398,12 +398,12 @@ contains
           call calculate_aero_height_factors( &
                scn%atm%altitude_layers(1:n_layer), &
                SV%svsv(SV%idx_aerosol_height(i)), &
-               MCS%aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
+               MCS%aerosol(scn%op%aer_mcs_map(aer_sv_idx))%default_width, &
                aer_fac)
 
           ! And calculate dBeta/dAerosolHeight for layer l
           lcoef(:,:,l_aero_idx,l) = aer_sca_tau(l, aer_sv_idx) * aer_fac(l) * &
-               (aerpmom(aer_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
+               (aerpmom(aer_sv_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
 
           deallocate(aer_fac)
 

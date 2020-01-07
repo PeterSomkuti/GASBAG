@@ -110,9 +110,12 @@ contains
 
     call read_DP_hdf_dataset(absco_file_id, "Wavenumber", gas%wavelength, dset_dims)
     ! ABSCO comes in wavenumber, but we'd rather work in wavelengths [microns], so let's convert
-    gas%wavelength = 1.0d4 / gas%wavelength
+    gas%wavelength(:) = 1.0d4 / gas%wavelength(:)
     ! We also have to re-arrange the arrays
     N_wl = size(gas%wavelength)
+
+    write(tmp_str, '(A,G0.1,A)') "There are ", N_wl, " spectral points in this ABSCO file."
+    call logger%debug(fname, trim(tmp_str))
 
     call logger%debug(fname, "Re-arranging spectroscopy arrays.")
     gas%wavelength(:) = gas%wavelength(N_wl:1:-1)

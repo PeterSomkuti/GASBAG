@@ -1,6 +1,4 @@
-# GeoCARBSIF
-
-This is the preliminary name for the new single-band retrieval algorithm originally intended for the SIF retrieval from GeoCCARB, OCO-2, OCO-2 and other spaced-based instruments.
+# GASBAG
 
 ## About and contact
 

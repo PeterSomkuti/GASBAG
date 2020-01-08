@@ -400,7 +400,6 @@ contains
        end if
 
        ! Similarly, find the aerosols which the user wants for this window
-       
 
 
        ! The currently used band / spectrometer number
@@ -616,6 +615,7 @@ contains
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged, this_iterations)
+
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
 
@@ -659,6 +659,7 @@ contains
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
                      (cpu_time_stop - cpu_time_start), " sec. - Converged: ", &
                      this_converged, ", # Iterations: ", this_iterations
+
                 call logger%info(fname, trim(tmp_str))
              end if
 
@@ -1412,10 +1413,17 @@ contains
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
+<<<<<<< HEAD
     allocate(radiance_calc_work_hi(N_spec_hi))
     allocate(radiance_calc_work_hi_stokes(N_spec_hi, n_stokes))
     allocate(radiance_tmp_hi_nosif_nozlo(N_spec_hi, n_stokes))
     allocate(albedo(N_spec_hi))
+=======
+    allocate(radiance_calc_work_hi(size(this_solar, 1)))
+    allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
+    allocate(albedo(size(radiance_calc_work_hi)))
+
+>>>>>>> master
 
     Sa_inv(:,:) = 0.0d0
     Sa(:,:) = 0.0d0
@@ -1435,6 +1443,7 @@ contains
     type is (oco2_instrument)
 
        allocate(solar_irrad(N_hires))
+
        if (MCS%algorithm%solar_type == "toon") then
           ! Allocate Solar continuum (irradiance) array. We do this here already,
           ! since it's handy to have it for estimating the albedo
@@ -2233,6 +2242,7 @@ contains
 
           solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
           this_solar(:,2) = solar_spectrum_regular(:,2) * solar_irrad(:)
+
        end if
 
        ! If we retrieve either solar shift or stretch (or both), then we

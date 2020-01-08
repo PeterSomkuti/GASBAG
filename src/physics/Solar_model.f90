@@ -210,12 +210,16 @@ contains
     call read_DP_hdf_dataset(solar_file_id, trim(dset_name), tmp_array2, solar_shape)
     tmp_array2(:) = tmp_array2(size(tmp_array2):1:-1)
 
+    ! Make sure to close this file
+    call h5fclose_f(solar_file_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error closing solar HDF file: " // trim(filename))
+
     ! How many data points do we have for the solar continuum?
     ! (this is needed for the allocation of the LAPACK work arrays)
     num_used = size(tmp_array)
 
     ! Had a quick look - for OCO-type HDF spectra, looks like you want
-    ! a fifth-order polynomial at least.ls
+    ! a fifth-order polynomial at least.
     Npoly = 5
     allocate(adata(num_used, Npoly))
     allocate(bdata(num_used, 1))
@@ -254,9 +258,8 @@ contains
 
     ! Construct the solar irradiance as function of the polynomial coefficients
     do j=0, Npoly-1
-       solar_irrad(:,2)  = solar_irrad(:,2) + bdata(j+1,1) * solar_spectrum(:,1)**j
+       solar_irrad(:,2)  = solar_irrad(:,2) + bdata(j+1,1) * (solar_spectrum(:,1)**j)
     end do
-
 
   end subroutine read_oco_hdf_solar_spectrum
 

@@ -1413,17 +1413,10 @@ contains
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
-<<<<<<< HEAD
     allocate(radiance_calc_work_hi(N_spec_hi))
     allocate(radiance_calc_work_hi_stokes(N_spec_hi, n_stokes))
     allocate(radiance_tmp_hi_nosif_nozlo(N_spec_hi, n_stokes))
     allocate(albedo(N_spec_hi))
-=======
-    allocate(radiance_calc_work_hi(size(this_solar, 1)))
-    allocate(radiance_tmp_hi_nosif_nozlo(size(this_solar, 1)))
-    allocate(albedo(size(radiance_calc_work_hi)))
-
->>>>>>> master
 
     Sa_inv(:,:) = 0.0d0
     Sa(:,:) = 0.0d0

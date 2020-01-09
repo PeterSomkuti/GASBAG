@@ -1128,9 +1128,6 @@ contains
           return
        end if
 
-       ! DEBUG
-       ! cycle
-
        ! XRTM has been initialized with whatever number of solvers are stored in
        ! "xrtm_solvers", however only one is executed at a time (ask Greg?).
        ! Thus, we need to loop over the possible bitmask positions.

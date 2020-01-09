@@ -140,9 +140,12 @@ module control_mod
      double precision, allocatable :: smart_scale_first_guess_wl_out(:)
      double precision, allocatable :: smart_scale_first_guess_delta_tau(:)
      !> Aerosols used in this window
-     type(string), allocatable :: aerosols(:)
+     type(string), allocatable :: aerosol(:)
      !> Number of aerosols used in this window
      integer :: num_aerosols
+     !> Aerosol distribution shape (gauss? other?) NOTE that we can only define the
+     !> shape for the entire retrieval window (no mixing of different shapes)
+     type(string) :: aerosol_distribution_shape
      !> This gas_index variable holds the information about which aerosol-section
      !> (CS_aerosol) index corresponds to the aerosol that is stored in 'aerosols'
      integer, allocatable :: aerosol_index(:)
@@ -170,9 +173,6 @@ module control_mod
      double precision :: dsigma_scale
      !> Number of iterations after which the rerieval is stopped
      integer :: max_iterations
-     !> Do we use the less-accurate, but faster FFT convolution with an
-     !> averaged ILS kernel? (DEPRECATED)
-     logical :: fft_convolution
      !> Location of the atmosphere file which must contain the gases mentioned
      !> in the 'gases' line
      type(string) :: atmosphere_file
@@ -906,7 +906,13 @@ contains
 
           if (allocated(fini_string_array)) then
 
-             allocate(MCS%window(window_nr)%aerosols(size(fini_string_array)))
+             ! If aerosols are considered in this window, one MUST specify an aerosol
+             ! type.
+
+             call fini_extract(fini, win_str, 'aerosol_distribution_shape', .true., fini_char)
+             MCS%window(window_nr)%aerosol_distribution_shape = trim(fini_char)
+
+             allocate(MCS%window(window_nr)%aerosol(size(fini_string_array)))
              allocate(MCS%window(window_nr)%aerosol_index(size(fini_string_array)))
 
              allocate(MCS%window(window_nr)%aerosol_retrieve_aod(size(fini_string_array)))
@@ -925,7 +931,7 @@ contains
              MCS%window(window_nr)%aerosol_retrieve_height_log(:) = .false.
 
              do i=1, size(fini_string_array)
-                MCS%window(window_nr)%aerosols(i) = fini_string_array(i)
+                MCS%window(window_nr)%aerosol(i) = fini_string_array(i)
                 MCS%window(window_nr)%num_aerosols = MCS%window(window_nr)%num_aerosols + 1
              end do
 
@@ -1120,7 +1126,7 @@ contains
     ! so might as well just return.
     if (window(i_win)%num_aerosols == 0) return
 
-    do i=1, size(window(i_win)%aerosols)
+    do i=1, size(window(i_win)%aerosol)
        ! Loop over all gases specified in the retrieval window
 
        ! Skip unused retrieval windows
@@ -1128,10 +1134,10 @@ contains
 
        aerosol_found = .false.
        do j=1, MAX_AEROSOLS
-          if (window(i_win)%aerosols(i) == aerosol(j)%name) then
+          if (window(i_win)%aerosol(i) == aerosol(j)%name) then
              aerosol_found = .true.
              write(tmp_str, '(A, A, A, G0.1, A)')  "Aerosol found: ",  &
-                  window(i_win)%aerosols(i)%chars(), " (aerosol-", j, ")"
+                  window(i_win)%aerosol(i)%chars(), " (aerosol-", j, ")"
              call logger%info(fname, trim(tmp_str))
              ! And also store which gas section corresponds to this particular
              ! aerosol in the window aerosol definition.
@@ -1145,7 +1151,7 @@ contains
        ! for a gas being specified in a retrieval window, and that gas then not being defined
        ! in a 'gas'-section.
        if (.not. aerosol_found) then
-          write(tmp_str, '(A, A, A, G0.1)') "Sorry - aerosol '", window(i_win)%aerosols(i)%chars(), &
+          write(tmp_str, '(A, A, A, G0.1)') "Sorry - aerosol '", window(i_win)%aerosol(i)%chars(), &
                "' was not found in window-", dble(i_win)
           call logger%fatal(fname, trim(tmp_str))
           stop 1

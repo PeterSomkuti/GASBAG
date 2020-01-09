@@ -1068,7 +1068,7 @@ contains
        ! Retrieved aerosol AOD names
        do j=1, SV%num_aerosol_aod
           if (SV%idx_aerosol_aod(j) == i) then
-             lower_str = MCS%window(i_win)%aerosols(sv%aerosol_aod_idx_lookup(j))%lower()
+             lower_str = MCS%window(i_win)%aerosol(sv%aerosol_aod_idx_lookup(j))%lower()
              write(tmp_str, '(A,A)') lower_str%chars(), "_aod"
              results%sv_names(i) = trim(tmp_str)
           end if
@@ -1077,7 +1077,7 @@ contains
        ! Retrieved aerosol AOD names
        do j=1, SV%num_aerosol_height
           if (SV%idx_aerosol_height(j) == i) then
-             lower_str = MCS%window(i_win)%aerosols(sv%aerosol_height_idx_lookup(j))%lower()
+             lower_str = MCS%window(i_win)%aerosol(sv%aerosol_height_idx_lookup(j))%lower()
              write(tmp_str, '(A,A)') lower_str%chars(), "_height"
              results%sv_names(i) = trim(tmp_str)
           end if

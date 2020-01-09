@@ -198,6 +198,8 @@ contains
        ! When calculating phase function coefficients - do we keep them constant for the window?
        ! Or do we allow for wavelength dependence
        valid_options(this_idx,40) = "keep_scattering_constant"
+       ! How do we distribute aerosols in the scene? Gaussian?
+       valid_options(this_idx,31) = "aerosol_distribution_shape"
 
     end do
 

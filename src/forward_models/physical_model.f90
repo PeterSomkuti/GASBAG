@@ -2,14 +2,15 @@
 !> @file physical_model.f90
 !> @author Peter Somkuti
 !>
-!! These are the subroutines required to do a physics-based retrieval. Just like the
-!! guanter_model_mod, this module sets up some module-wide variables, and then loops
-!! over all specified windows to perform the retrievals for all soundings according to
-!! the retrieval options from the config file. All these module-wide variables are
-!! then being accessed buy the physical_fm (physical forward model) subroutine. Obviously
-!! this requires all the L1b and MET data (apart from the spectra) to be read into
-!! memory, so the memory footprint is going to be a few GB. However, this makes it also
-!! fairly fast.
+!> @detail
+!> These are the subroutines required to do a physics-based retrieval. Just like the
+!> guanter_model_mod, this module sets up some module-wide variables, and then loops
+!> over all specified windows to perform the retrievals for all soundings according to
+!> the retrieval options from the config file. All these module-wide variables are
+!> then being accessed buy the physical_fm (physical forward model) subroutine. Obviously
+!> this requires all the L1b and MET data (apart from the spectra) to be read into
+!> memory, so the memory footprint is going to be a few GB. However, this makes it also
+!> fairly fast.
 
 module physical_model_mod
 
@@ -613,6 +614,14 @@ contains
        !frame_start = 3500
        !frame_stop = 3600
 
+       ! For OpenMP, we set some private and shared variables, as well as set the
+       ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
+       ! soundings to each thread is constantly re-visited. It probably takes a tiny
+       ! performance hit compared to a static scheduling, however we probably regain
+       ! the lost time later on. With static scheduling, some threads might finish
+       ! earlier (less total iterations to process) and will then just sit idle, whereas
+       ! those threads can be assigned new soundings with dynamic scheduling.
+
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged, this_iterations)
 
@@ -1009,14 +1018,14 @@ contains
     ! the TOA radiances for high and low-res calculations. And then
     ! some 'temp' arrays to hold radiances from e.g. perturbation or
     ! linear prediction.
-    double precision, allocatable :: radiance_l1b(:), &
-         radiance_tmp_work(:), &
-         radiance_meas_work(:), &
-         radiance_calc_work(:), &
-         radiance_tmp_hi_nosif_nozlo(:,:), & ! This has Stokes parameters
-         radiance_calc_work_hi(:), &
-         radiance_calc_work_hi_stokes(:,:), & ! This has Stokes parameters
-         noise_work(:)
+    double precision, allocatable :: radiance_l1b(:)
+    double precision, allocatable :: radiance_tmp_work(:)
+    double precision, allocatable :: radiance_meas_work(:)
+    double precision, allocatable :: radiance_calc_work(:)
+    double precision, allocatable :: radiance_tmp_hi_nosif_nozlo(:,:) ! This has Stokes parameters
+    double precision, allocatable :: radiance_calc_work_hi(:)
+    double precision, allocatable :: radiance_calc_work_hi_stokes(:,:) ! This has Stokes parameters
+    double precision, allocatable :: noise_work(:)
 
     ! Number of stokes elements
     integer :: n_stokes
@@ -1040,8 +1049,6 @@ contains
     ! Sounding time stuff
     type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
-    ! Sounding location variables
-    !double precision :: mu0, mu ! cos(sza) and cos(vza)
     ! Epoch, which is just the date split into an integer array
     integer :: epoch(7)
 
@@ -1126,9 +1133,8 @@ contains
     double precision, allocatable :: scale_first_guess(:)
 
     ! Aerosols (num_aero)
-    double precision, allocatable :: this_aerosol_aod(:)
-    double precision, allocatable :: this_aerosol_height(:)
-    double precision, allocatable :: this_aerosol_width(:)
+    ! Generic type for aerosol
+    class(generic_aerosol), allocatable :: scene_aerosols(:)
 
     ! Retrieval quantities
     type(statevector) :: SV
@@ -1175,9 +1181,12 @@ contains
     ! Chi2-related variables. Chi2 of last and this current iteration,
     ! chi2 calculated from a linear prediction, and the chi2 ratio needed
     ! to adjust lm_gamma and determine a divergent step.
-    double precision :: old_chi2, this_chi2, &
-         linear_prediction_chi2, chi2_ratio, chi2_rel_change, &
-         last_successful_chi2
+    double precision :: old_chi2
+    double precision :: this_chi2
+    double precision :: linear_prediction_chi2
+    double precision :: chi2_ratio
+    double precision :: chi2_rel_change
+    double precision :: last_successful_chi2
 
     ! Iteration-related
     ! Current iteration number (starts at 1), number of divergent steps allowed.
@@ -1229,11 +1238,6 @@ contains
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
 
-    ! For convenience, calculate cos(sza) and cos(vza) here
-    !mu0 = cos(DEG2RAD * SZA(i_fp, i_fr))
-    !mu = cos(DEG2RAD * VZA(i_fp, i_fr))
-
-
     ! Set the used radiative transfer model
     if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
@@ -1275,7 +1279,7 @@ contains
        ! Read the L1B spectrum for this one measurement in normal mode!
        call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
             MCS%general%N_spec(band), radiance_l1b)
-       
+
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
             scn%date, success_time_convert)
@@ -1353,12 +1357,6 @@ contains
     ! Allocate the micro-window bounded solar arrays
     allocate(this_solar(N_hires, 2))
     allocate(dsolar_dlambda(N_hires))
-
-    if (MCS%window(i_win)%num_aerosols > 0) then
-       allocate(this_aerosol_aod(MCS%window(i_win)%num_aerosols))
-       allocate(this_aerosol_height(MCS%window(i_win)%num_aerosols))
-       allocate(this_aerosol_width(MCS%window(i_win)%num_aerosols))
-    end if
 
     ! The "instrument doppler shift" is caused by the relative velocity
     ! between the point on the surface and the spacecraft. Obviously, this
@@ -1692,11 +1690,8 @@ contains
           ! potential problems .. nasty segfaults etc.
           scn%num_active_levels = 0
           num_active_levels = 0
-          
-       end if
 
-       ! Calculate some layer quantities
-       call calculate_layer_pressure(scn)
+       end if
 
 
        if (num_levels < 0) then
@@ -1784,15 +1779,17 @@ contains
           end if
        endif
 
+       ! Calculate mid-layer pressures
+       call calculate_layer_pressure(scn)
        ! Calculate the scene gravity and altitude for levels
        call scene_altitude(scn)
+
+       K_hi(:,:) = 0.0d0
+       K_hi_stokes(:,:,:) = 0.0d0
 
        ! NOTE
        ! SIF and ZLO are (right now) exactly the same, i.e. an additive radiance
        ! contribution that is constant w.r.t. wavelength.
-
-       K_hi(:,:) = 0.0d0
-       K_hi_stokes(:,:,:) = 0.0d0
 
        ! SIF is a radiance, and we want to keep the value for this given
        ! iteration handy for calculations.
@@ -1844,15 +1841,17 @@ contains
                 call logger%error(fname, "Surface albedo > 1.0. XRTM does not allow that.")
                 return
              end if
-             
+
              ! For dI/dtau and dI/domega, we need one element for
              ! a) Every retrieved gas subcolumn
              ! b) Temperature jacobian
              ! c) Every retrieved albedo parameter
              ! d) Aerosol AOD
              ! e) Aerosol height
-             
-             allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
+
+             if (SV%num_gas > 0) then
+                allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
+             end if
 
              if (SV%num_albedo > 0) then
                 allocate(dI_dsurf(N_hires, SV%num_albedo, n_stokes))
@@ -2017,61 +2016,41 @@ contains
                scn%op%ray_tau, scn%op%ray_depolf)
 
           ! ---------------------------------------------------------------
-          ! If there are aerosols in the scene, calculate the optical depth
-          ! profiles here.
+          ! If there are aerosols in the scene, calculate the aerosol
+          ! extinction and scattering profiles here. This section contains
+          ! more 'type-selection' bits, hoping that one day it will be
+          ! easy enough to extend it to incorporate more aerosol distribution
+          ! shapes (triangle, block, some other profiles?)
           ! ---------------------------------------------------------------
 
 
           ! Calculate vertical distribution and optical depths that
           ! enter the RT calculations
           if (scn%num_aerosols > 0) then
-             ! Initialize first (calculate layer-independent quantities)
+
+             ! Initialize first
+
+             ! Calculate layer-independent quantities, which don't depend on the
+             ! aerosol distribution type. This mainly parses e.g. the miemom contents
+             ! and puts them into the context of the retrieval window.
              call aerosol_init(scn, i_win)
 
-             ! Get the aerosol parameters from default settings, if available, and
-             do i = 1, scn%num_aerosols
+             ! Let us allocate the scene aerosol type according to the type
+             ! supplied on the configuration file.
 
-                ! Note that these values are all in real space, not in log-space!!
-                this_aerosol_aod(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_aod
-                this_aerosol_height(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_height * scn%atm%psurf
-                this_aerosol_width(i) = MCS%aerosol(scn%op%aer_mcs_map(i))%default_width
+             if (allocated(scene_aerosols)) deallocate(scene_aerosols)
 
-             end do
+             if (MCS%window(i_win)%aerosol_distribution_shape%lower() == "gauss") then
+                allocate(gauss_aerosol :: scene_aerosols(scn%num_aerosols))
+             else
+                call logger%fatal(fname, "Unknown aerosol distribution shape: " &
+                     // MCS%window(i_win)%aerosol_distribution_shape%chars())
+                call logger%fatal(fname, "Only known: gauss")
+                stop 1
+             end if
 
-
-             ! If any of the aerosol parameters are retrieved, replace those values here
-             ! with those coming from the state vector.
-             do i = 1, SV%num_aerosol_aod
-                if (MCS%window(i_win)%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(i))) then
-                   ! AOD supplied in log-space
-                   this_aerosol_aod(SV%aerosol_aod_idx_lookup(i)) = exp(SV%svsv(SV%idx_aerosol_aod(i)))
-                else
-                   ! AOD supplied in linear space
-                   this_aerosol_aod(SV%aerosol_aod_idx_lookup(i)) = SV%svsv(SV%idx_aerosol_aod(i))
-                end if
-             end do
-
-             do i = 1, SV%num_aerosol_height
-                if (MCS%window(i_win)%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(i))) then
-                   this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = exp(SV%svsv(SV%idx_aerosol_height(i)))
-                else
-                   this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = SV%svsv(SV%idx_aerosol_height(i))
-                end if
-                ! Aerosol height is given as fraction of psurf
-                this_aerosol_height(SV%aerosol_height_idx_lookup(i)) = &
-                     this_aerosol_height(SV%aerosol_height_idx_lookup(i)) * scn%atm%psurf
-             end do
-
-             ! Distribute aerosols in atmosphere
-             do i = 1, scn%num_aerosols
-                write(tmp_str, '(A,A,A,ES15.5,A,ES15.5,A,ES15.5)') "Aerosol ", MCS%window(i_win)%aerosols(i)%chars(), &
-                     " - AOD: ", this_aerosol_aod(i), &
-                     " Height: ", this_aerosol_height(i), &
-                     " Width: ", this_aerosol_width(i)
-                call logger%debug(fname, trim(tmp_str))
-             end do
-
-             call aerosol_gauss_shape(scn, this_aerosol_aod, this_aerosol_height, this_aerosol_width)
+             ! This section can be outsourced as:
+             call insert_aerosols_in_scene(scn, scene_aerosols, SV, i_win)
 
           end if
 
@@ -2370,7 +2349,7 @@ contains
                    K_hi_stokes(:, SV%idx_aerosol_height(i), q) = this_solar(:,2) * dI_dAHeight(:,i,q)
                 end do
              end do
-             
+
           case default
              call logger%error(fname, "Aerosol height Jacobian not implemented " &
                   // "for RT Model: " // MCS%window(i_win)%RT_model%chars())

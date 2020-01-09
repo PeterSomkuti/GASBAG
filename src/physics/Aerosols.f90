@@ -10,14 +10,52 @@ module aerosols_mod
   use file_utils_mod, only: read_mom_file, read_mie_file
   use control_mod, only: MCS, CS_aerosol
   use math_utils_mod
-  
+  use statevector_mod
+
   ! Third-party modules
   use stringifor
   use logger_mod, only: logger => master_logger
 
-  public :: ingest_aerosol_files, aerosol_init
+  !> Generic aerosol type
+  type, abstract :: generic_aerosol
+     ! Aerosol name (corresponding to MCS%aerosol(..)%name)
+     type(string) :: name
+  end type generic_aerosol
+
+  !> Gaussian aerosol type
+  type, extends(generic_aerosol) :: gauss_aerosol
+     !> Total column aerosol optical depth, can be either in
+     !> log or linear space.
+     double precision :: AOD
+     !> Center height of the aerosol Gaussian (in Pascal)
+     double precision :: height
+     !> Width of the aerosol Gaussian (in Pascal)
+     double precision :: width
+   contains
+     procedure, pass(self) :: print_info => print_my_gauss_info
+  end type gauss_aerosol
 
 contains
+
+  !> @brief Print a status message about which type of aerosol this is.
+  !> @param aer gauss_aerosol type object
+  subroutine print_my_gauss_info(self)
+    class(gauss_aerosol), intent(in) :: self
+
+    character(len=*), parameter :: fname = "print_my_gauss_info"
+    character(len=999) :: tmp_str
+
+    call logger%debug(fname, "___________________________________")
+    call logger%debug(fname, "| Gauss-type aerosol: " // self%name)
+    write(tmp_str, '(A, F10.4)') "| Total column OD: ", self%AOD
+    call logger%debug(fname, trim(tmp_str))
+    write(tmp_str, '(A, F10.1, A)') "| Layer height: ", self%height, " Pa"
+    call logger%debug(fname, trim(tmp_str))
+    write(tmp_str, '(A, F10.1, A)') "| Layer width : ", self%width, " Pa"
+    call logger%debug(fname, trim(tmp_str))
+    call logger%debug(fname, "___________________________________") 
+
+  end subroutine print_my_gauss_info
 
 
   !> @brief Feed in the aerosol data, given a mom/mie file combination
@@ -86,6 +124,7 @@ contains
 
   !> @brief Initialize the required aerosol data
   !> @param scn Scene object
+  !> @param i_win Retrieval window index
   subroutine aerosol_init(scn, i_win)
 
     type(scene), intent(inout) :: scn
@@ -130,7 +169,7 @@ contains
 
        do i = 1, size(MCS%aerosol)
 
-          if (MCS%window(i_win)%aerosols(j) /= MCS%aerosol(i)%name) cycle
+          if (MCS%window(i_win)%aerosol(j) /= MCS%aerosol(i)%name) cycle
 
 
           ! Find out which wavelength regions of the
@@ -215,14 +254,91 @@ contains
   end subroutine destroy_aerosol
 
 
-
-  subroutine aerosol_gauss_shape(scn, aero_aod, aero_height, aero_width)
+  subroutine insert_aerosols_in_scene(scn, scn_aer, SV, i_win)
 
     type(scene), intent(inout) :: scn
-    double precision, intent(in) :: aero_aod(:)
-    double precision, intent(in) :: aero_height(:)
-    double precision, intent(in) :: aero_width(:)
+    class(generic_aerosol), intent(inout) :: scn_aer(:)
+    type(statevector), intent(in) :: SV
+    integer :: i_win
 
+    character(len=*), parameter :: fname = "insert_aerosols_in_scene"
+    integer :: i
+
+    select type(scn_aer)
+
+    !------------------------------------------
+    !
+    !   GAUSSIAN AEROSOL DISTRIBUTION
+    !
+    !------------------------------------------
+    type is (gauss_aerosol)
+
+       do i = 1, scn%num_aerosols
+
+          scn_aer(i)%name = MCS%window(i_win)%aerosol(i)
+
+          ! Feed in the default values into the aerosol distribution objects
+          ! Note that these values are supposed to be in real-space (no log!)
+          scn_aer(i)%AOD = MCS%aerosol(scn%op%aer_mcs_map(i))%default_aod
+          scn_aer(i)%height = MCS%aerosol(scn%op%aer_mcs_map(i))%default_height * scn%atm%psurf
+          scn_aer(i)%width = MCS%aerosol(scn%op%aer_mcs_map(i))%default_width
+
+       end do
+
+       ! If any of the aerosol parameters are retrieved, replace those values here
+       ! with those coming from the state vector.
+
+       do i = 1, SV%num_aerosol_aod
+          if (MCS%window(i_win)%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(i))) then
+             ! AOD supplied in log-space
+             scn_aer(SV%aerosol_aod_idx_lookup(i))%AOD = exp(SV%svsv(SV%idx_aerosol_aod(i)))
+          else
+             ! AOD supplied in linear space
+             scn_aer(SV%aerosol_aod_idx_lookup(i))%AOD = SV%svsv(SV%idx_aerosol_aod(i))
+          end if
+       end do
+
+       do i = 1, SV%num_aerosol_height
+          if (MCS%window(i_win)%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(i))) then
+             ! Aerosol height supplied in log-space
+             scn_aer(SV%aerosol_height_idx_lookup(i))%height = exp(SV%svsv(SV%idx_aerosol_height(i)))
+          else
+             ! Aerosol height supplied in linear space
+             scn_aer(SV%aerosol_height_idx_lookup(i))%height = SV%svsv(SV%idx_aerosol_height(i))
+          end if
+          ! Aerosol height is given as fraction of psurf
+          scn_aer(SV%aerosol_height_idx_lookup(i))%height = &
+               scn_aer(SV%aerosol_height_idx_lookup(i))%height * scn%atm%psurf
+       end do
+
+       ! This function distributes the aerosols according to the data given in
+       ! the scn_aer object.
+       call aerosol_gauss_shape(scn, scn_aer)
+
+       ! Print some debug information on each aerosol used in the scene.
+       do i = 1, scn%num_aerosols
+          call scn_aer(i)%print_info()
+       end do
+
+    !------------------------------------------
+    !
+    !   DEFAULT CASE WHICH TERMINATES THE PROGRAM
+    !
+    !------------------------------------------
+    class default
+       call logger%fatal(fname, "NOT SUPPORTED AEROSOL DISTRIBUTION TYPE. MAJOR CODE PROBLEM.")
+       stop 1
+    end select
+
+
+  end subroutine insert_aerosols_in_scene
+
+
+  subroutine aerosol_gauss_shape(scn, scn_aer)
+
+    type(scene), intent(inout) :: scn
+    type(gauss_aerosol), intent(inout) :: scn_aer(:)
+    
     double precision :: aod_norm
     integer :: aer
     integer :: wl
@@ -240,17 +356,18 @@ contains
 
        ! We also store the reference AOD for this scene (iteration) for this aerosol type.
        ! Comes in handy when we need to calculate jacobians.
-       scn%op%reference_aod(aer) = aero_aod(aer)
+       scn%op%reference_aod(aer) = scn_aer(aer)%AOD
 
-       aod_norm = sum(exp(-((scn%atm%p_layers(:) - aero_height(aer))**2) &
-                  / (2 * aero_width(aer) * aero_width(aer))))
+       aod_norm = sum(exp(-((scn%atm%p_layers(:) - scn_aer(aer)%height)**2) &
+                  / (2 * scn_aer(aer)%width * scn_aer(aer)%width)))
 
        do wl = 1, 2
 
           do lay = 1, scn%num_active_levels - 1
              scn%op%aer_ext_tau_edge(wl,lay,aer) = exp( &
-                  -((scn%atm%p_layers(lay) - aero_height(aer))**2) &
-                  / (2 * aero_width(aer) * aero_width(aer))) * aero_aod(aer) / aod_norm
+                  -((scn%atm%p_layers(lay) - scn_aer(aer)%height)**2) &
+                  / (2 * scn_aer(aer)%width * scn_aer(aer)%width)) &
+                  * scn_aer(aer)%AOD / aod_norm
           end do
 
           ! We are grabbing the left and right hand side SSAs from the file to compute
@@ -292,8 +409,9 @@ contains
 
           do lay = 1, scn%num_active_levels - 1
              scn%op%aer_ext_tau(wl,lay,aer) = exp( &
-                  -((scn%atm%p_layers(lay) - aero_height(aer))**2) &
-                  / (2 * aero_width(aer) * aero_width(aer))) * aero_aod(aer) / aod_norm
+                  -((scn%atm%p_layers(lay) - scn_aer(aer)%height)**2) &
+                  / (2 * scn_aer(aer)%width * scn_aer(aer)%width)) &
+                  * scn_aer(aer)%AOD / aod_norm
           end do
 
           scn%op%aer_sca_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) * scn%op%aer_ssa(wl, aer)

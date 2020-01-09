@@ -2,12 +2,13 @@
 !> @file GASBAG_main.f90
 !> @author Peter Somkuti
 !>
-!! This is where it all starts. This main program calls functions to read in
-!! the command-line input via FLAP as well as setting up the configuration through
-!! the text file via FINER. The instrument is set and initialized right here, and
-!! the program goes straight into the perform_retrieval subroutine.
-!! After the retrievals are done, the remaining open HDF files are closed, and the
-!! program terminates with a zero exit code.
+!> @detail
+!> This is where it all starts. This main program calls functions to read in
+!> the command-line input via FLAP as well as setting up the configuration through
+!> the text file via FINER. The instrument is set and initialized right here, and
+!> the program goes straight into the perform_retrieval subroutine.
+!> After the retrievals are done, the remaining open HDF files are closed, and the
+!> program terminates with a zero exit code.
 
 program GASBAG
 
@@ -44,10 +45,10 @@ program GASBAG
 
   ! Greet the user and display information about the build itself.
   write(*,'(A)') "========================================="
-  write(*,'(A)') " / ___|  / \  / ___|| __ )  / \  / ___|  "
+  write(*,'(A)') " / ___|   / \  / ___|| __ )  / \  / ___| "
   write(*,'(A)') " | |  _  / _ \ \___ \|  _ \ / _ \| |  _  "
   write(*,'(A)') " | |_| |/ ___ \ ___) | |_) / ___ | |_| | "
-  write(*,'(A)') " \____/_/   \_|____/|____/_/   \_\____|  "
+  write(*,'(A)') " \_____/_/   \_|____/|____/_/   \_\____| "
   write(*,'(A)') "========================================="
 
   write(*,'(A)') "Version [" // git_branch // " " // git_commit_hash // &

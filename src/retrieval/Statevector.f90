@@ -195,7 +195,7 @@ contains
 
     ! Do the same for aerosols
     do i=1, MCS%window(i_win)%num_aerosols
-       known_SV(last_known + i) = MCS%window(i_win)%aerosols(i)
+       known_SV(last_known + i) = MCS%window(i_win)%aerosol(i)
        is_aerosol_SV(last_known + i) = .true.
     end do
 
@@ -479,7 +479,7 @@ contains
                 ! If this aerosol isn't used, then simply skip
                 if (.not. MCS%aerosol(aero_index)%used) cycle
 
-                if (MCS%window(i_win)%aerosols(k) == check_sv_name) then
+                if (MCS%window(i_win)%aerosol(k) == check_sv_name) then
 
                    if ((check_sv_retr_type == 'aod') .or. &
                         (check_sv_retr_type == 'aod-log')) then

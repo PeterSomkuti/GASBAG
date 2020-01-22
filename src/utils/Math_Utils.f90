@@ -89,7 +89,7 @@ contains
   !> @param vrms Volume mixing ratio array for this gas
   !> @param pwgts Pressure weights
   !
-  !> @detail For details of the calculation go and read O'Dell et al. (2012 ACOS paper)
+  !> @details For details of the calculation go and read O'Dell et al. (2012 ACOS paper)
   subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
     implicit none
     double precision, intent(in) :: p_levels(:)
@@ -261,28 +261,32 @@ contains
   !> @param wl_output Requested wavelength grid for convolved radiance
   !> @param output Convolved radiance
   !> @param success Did it all go well?
+  !> @note
+  !> I've experimented a bit with making this function faster, since the convolution
+  !> and the gas OD calculation are essentially the top two time-consuming portions
+  !> of the physical algorithm in Beer-Lambert mode. Another way of doing this was to
+  !> re-grid all ILS tables to a common high-resolution grid, so that we would not need to
+  !> interpolate the ILS onto the high-res grid of the current pixel. This however seemed to
+  !> create issues when the chosen high-res spacing was not fine enough, since the ILS wl spacing
+  !> getsfiner the closer you are at the center (at least for OCO-2/3). Hence I reverted to
+  !> this particular option, where the ILS is interpolated to the high-res wavelength grid
+  !> for every pixel at every calculation. While this makes it somewhat slower, it also
+  !> seemed to have eliminated the issue of bad results. These bad results were non-trivially
+  !> seen as stripy patterns which were  related to time-of-day and doppler shift.
+  !> Since the doppler shift changes the wavelength grid, one can end up with misaligned
+  !> spectra if the ILS convolution (however it is done) does work accordingly and shifts
+  !> the line cores around..
+  !> @todo
+  !> There is an allocation of a 1D array inside the pixel loop, which probably
+  !> eats up a good chunk of cycles. Find a smart way of guessing
+  !> the maximal size that this array needs to be, and only use a smaller section
+  !> of the array via slicing/indexing.
   subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
        wl_output, output, success)
 
     ! This is an implementation of the OCO-type ILS application, which ins't
     ! quite a convolution since we have to treat every pixel with a different
     ! ILS. wl_output is the DESIRED output wavelength grid
-
-    ! Notes Peter Somkuti:
-    ! I've experimented a bit with making this function faster, since the convolution
-    ! and the gas OD calculation are essentially the top two time-consuming portions
-    ! of the physical algorithm. Another way of doing this was to re-grid all ILS tables
-    ! to a common high-resolution grid, so that we would not need to interpolate the ILS
-    ! onto the high-res grid of the current pixel. This however seemed to create issues
-    ! when the chosen high-res spacing was not fine enough, since the ILS wl spacing gets
-    ! finer the closer you are at the center (at least for OCO-2/3). Hence I reverted to
-    ! this particular option, where the ILS is interpolated to the high-res wavelength grid
-    ! for every pixel at every calculation. While this makes it somewhat slower, it also
-    ! seemed to have eliminated the issue of bad results. These bad results were non-trivially
-    ! seen as stripy patterns which were somewhat related to time-of-day and doppler shift.
-    ! Since the doppler shift changes the wavelength grid, one can end up with misaligned
-    ! spectra if the ILS convolution (however it is done) does work accordingly and shifts
-    ! the line cores around..
 
     ! High-resolution bits
     double precision, intent(in) :: wl_input(:), input(:)
@@ -365,6 +369,7 @@ contains
 
 
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min
+
        allocate(ILS_upsampled(N_this_wl + 1))
        ILS_upsampled = 0.0d0
 

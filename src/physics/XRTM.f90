@@ -755,7 +755,7 @@ contains
 
 
 
-  !> @detail Phasefunction expansion coefficients can be provided in two ways: either supply directly the
+  !> @details Phasefunction expansion coefficients can be provided in two ways: either supply directly the
   !> (coef, lcoef) arrays which have a wavelength dimension. Alternatively, supply the (coef_left, lcoef_left)
   !> and (coef_right, lcoef_right) arrays without a wavelength dimension, and linear interpolation will be used
   !> to obtain the values at each wavelength.

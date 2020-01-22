@@ -2,11 +2,10 @@
 !> @file Startup.f90
 !> @author Peter Somkuti
 !>
-!> @detail
-!! Startup module. Routines in here are called during the startup-phase of the
-!! program, where we also check if the config/inputs are sane. At this point, the
-!! logger is not yet initialized, so the various messages do not have the usual
-!! formatting as the messages later on.
+!> @details Startup module. Routines in here are called during the startup-phase of the
+!> program, where we also check if the config/inputs are sane. At this point, the
+!> logger is not yet initialized, so the various messages do not have the usual
+!> formatting as the messages later on.
 
 module startup_mod
 
@@ -69,7 +68,7 @@ module startup_mod
       ! Initialize the CLI interface - we only really need that one option,
       ! which is the location to the configuration file. Everything else
       ! should be contained within that text file.
-      call cli%init(description = 'GeoCARBSIF Retrieval Algorithm', &
+      call cli%init(description = 'Generic Algorithm for Single-Band Acquisition of Gases', &
            authors='Peter Somkuti (CSU/CIRA)', &
            version=version_string%chars())
 

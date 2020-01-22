@@ -23,7 +23,7 @@ contains
   !> @param SZA Solar zenith angle
   !> @param VZA Viewing zenith angle
   !> @param scale_first_guess Estimated first-guess for the scale factor
-  !> @detail The first guess works in the following way. For a non-scattering scene,
+  !> @details The first guess works in the following way. For a non-scattering scene,
   !> Beer-Lambert holds somewhat reasonably, so the radiance can be written like
   !> I = I_o * albedo * mu0 / PI * exp(-tau/mu0 - tau/mu). Let's now take two
   !> wavelengths, wl_in (inside line core) and wl_out (continuum), and calculate the

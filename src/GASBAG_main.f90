@@ -2,7 +2,7 @@
 !> @file GASBAG_main.f90
 !> @author Peter Somkuti
 !>
-!> @detail
+!> @details
 !> This is where it all starts. This main program calls functions to read in
 !> the command-line input via FLAP as well as setting up the configuration through
 !> the text file via FINER. The instrument is set and initialized right here, and

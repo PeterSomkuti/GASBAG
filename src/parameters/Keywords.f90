@@ -31,7 +31,7 @@ module keywords_mod
 contains
 
   !> @brief Populate the "valid sections/options" that the code accepts
-  !> @detail If you want to extend the code by a section or option, the
+  !> @details If you want to extend the code by a section or option, the
   !> new names must be put into this list below. Upon starting, the code
   !> checks all entries in the config file against this list, and exits
   !> if there is a section or option that is not known. This should prevent

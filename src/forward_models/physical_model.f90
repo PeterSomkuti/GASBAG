@@ -2,7 +2,7 @@
 !> @file physical_model.f90
 !> @author Peter Somkuti
 !>
-!> @detail
+!> @details
 !> These are the subroutines required to do a physics-based retrieval. Just like the
 !> guanter_model_mod, this module sets up some module-wide variables, and then loops
 !> over all specified windows to perform the retrievals for all soundings according to

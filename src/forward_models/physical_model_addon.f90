@@ -494,7 +494,7 @@ contains
   end subroutine calculate_active_levels
 
   !> @brief Calculate altitude levels, gravity levels and ndry
-  !> @detail This code is borrowed from MS3 (O'Brien, O'Dell et al.)
+  !> @details This code is borrowed from MS3 (O'Brien, O'Dell et al.)
   !> @param scn Scene object
   subroutine scene_altitude(scn)
     type(scene), intent(inout) :: scn
@@ -629,7 +629,7 @@ contains
   !> @param Array of 'strings' containing names of required gases
   !> @param Atmosphere object that will be populated by this function
   !>
-  !> @detail We supply here a filename, a list of gas strings and the
+  !> @details We supply here a filename, a list of gas strings and the
   !> atmosphere-object. The function checks whether all required gases
   !> are present in the atmosphere file, and will throw a fatal error if
   !> that is not the case.

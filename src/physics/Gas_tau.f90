@@ -2,7 +2,7 @@
 !> @file gas_tau.f90
 !> @author Peter Somkuti
 !>
-!> @detail This module provides functions to calculate the gas optical depths for a given
+!> @details This module provides functions to calculate the gas optical depths for a given
 !> model atmosphere for one specific gas. There are essentially two functions:
 !> one to extract the cross section value from a given (wavelength,H2O,p,T)-coordinate
 !> via linear interpolation (get_CS_value_at). The other function (calculate_gas_tau)

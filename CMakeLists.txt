@@ -89,6 +89,7 @@ file(GLOB_RECURSE sources src/*.?90)
 file(GLOB_RECURSE third-party third-party/*.?90)
 # Add generated files to the list
 file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
+
 # Add Greg's XRTM
 # This is a little bit of a manual hackjob, and one can argue that
 # using Greg's makefile setup might be nice. One would compile XRTM

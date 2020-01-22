@@ -423,6 +423,11 @@ contains
             monochr_weighting_functions, &
             xrtm_success)
 
+       if (.not. xrtm_success) then
+          call logger%error(fname, "Call to XRTM_monochromatic unsuccessful.")
+          return
+       end if
+
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
 
        ! After calculations are done, we really don't need the XRTM object anymore,
@@ -749,6 +754,11 @@ contains
          lcoef_right=lcoef_right)! per-wl phasefunction derivatives
 
 
+    if (.not. xrtm_success) then
+       call logger%error(fname, "Call to calculate_XRTM_radiance unsuccessful.")
+       return
+    end if
+
     success = .true.
 
   end subroutine XRTM_monochromatic
@@ -1044,9 +1054,40 @@ contains
        single_lomega(:,:) = lomega(i,:,:)
        single_lsurf(:) = lsurf(i,:)
 
+       if (any(ieee_is_nan(tau))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for TAU at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       if (any(ieee_is_nan(omega))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for OMEGA at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       if (any(ieee_is_nan(single_ltau))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for L_TAU at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       if (any(ieee_is_nan(single_lomega))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for L_OMEGA at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       if (any(ieee_is_nan(single_lsurf))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for L_SURF at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+
        ! Interpolate phasefunction coefficients at wavelength, but only if
        ! requested by the user. 
-       ! WARNING
+       ! NOTE WARNING
        ! This is a fairly slow section of the code and can increase processing
        ! time by a couple of factors easily!
        if (.not. keep_coef_constant) then
@@ -1064,6 +1105,17 @@ contains
           end if
        end if
 
+       if (any(ieee_is_nan(this_coef))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for COEF at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+
+       if (any(ieee_is_nan(this_lcoef))) then
+          write(tmp_str, '(A, G0.1)') "NaN(s) found for L_COEF at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
 
        ! Plug in surface property
        call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
@@ -1131,6 +1183,9 @@ contains
        ! XRTM has been initialized with whatever number of solvers are stored in
        ! "xrtm_solvers", however only one is executed at a time (ask Greg?).
        ! Thus, we need to loop over the possible bitmask positions.
+       ! The contributions from each solver are added up at the end. So if the user
+       ! asks for e.g. SINGLE + 2OS, then you get the radiances and derivatives
+       ! of both, summed.
 
        do l=1, size(xrtm_separate_solvers)
           ! Calculate TOA radiance!
@@ -1149,16 +1204,31 @@ contains
              return
           end if
 
-          ! Store radiances
+          if (any(ieee_is_nan(I_p))) then
+             write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for radiances " &
+                  // "at wavelength index: ", i
+             call logger%error(fname, trim(tmp_str))
+             return
+          end if
+
+          if (any(ieee_is_nan(K_p))) then
+             write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for weighting functions " &
+                  // "at wavelength index: ", i
+             call logger%error(fname, trim(tmp_str))
+             return
+          end if
+
+          ! Store radiances into wavelength-indexed array
           radiance(i,:) = radiance(i,:) + I_p(:,1,1,1)
 
-          ! Store derivatives
+          ! Store derivatives into wavelength-indexed array
           derivs(i,:,:) = derivs(i,:,:) + K_p(:,1,1,:,1)
 
 
           ! Format string for derivative debug output
-          if (i == 1) then
-             call logger%debug(fname, "--- First wavelength ----------------------------------")
+          ! .. but only go into this branch when debug is requested
+          if ((i == 1) .and. (MCS%general%loglevel <= 10)) then
+             call logger%debug(fname, "--- First wavelength ----------------------------------------------")
 
              ! Write XRTM inputs
              call logger%debug(fname, "-------------------------------------------------------------------")

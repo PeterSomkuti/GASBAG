@@ -23,6 +23,7 @@ program GASBAG
   !! Third party modules
   use logger_mod, only: logger => master_logger
   use finer, only: file_ini
+  use datetime_module
 
   !! System modules
   use iso_fortran_env
@@ -35,6 +36,16 @@ program GASBAG
   class(generic_instrument), allocatable :: my_instrument ! The used instrument type
   integer :: hdferr ! HDF error variable
 
+
+  type(datetime) :: gasbag_start
+  type(datetime) :: gasbag_stop
+  type(timedelta) :: duration
+
+
+  ! Start measuring the total program execution time in real
+  ! machine clock.
+  gasbag_start = gasbag_start%now()
+  write(*, '(A, A)') "Started GASBAG at " // gasbag_start%isoformat()
 
   ! Initilize the HDF5 library program-wide
   call h5open_f(hdferr)
@@ -68,7 +79,7 @@ program GASBAG
   ! a (sadly maybe cumbersome) SELECT TYPE statement - but this is just how
   ! Fortran works with run-time polymorphism.
 
-  if (MCS%input%instrument_name == 'oco2') then
+  if (MCS%input%instrument_name%lower() == 'oco2') then
      allocate(oco2_instrument :: my_instrument)
      call logger%info("Main", "Using instrument: OCO-2")
   else
@@ -118,5 +129,15 @@ program GASBAG
 
   ! Say goodbye
   call logger%info("Main", "That's all, folks!")
+
+  ! Let the user know how long it took
+  gasbag_stop = gasbag_stop%now()
+  write(*, '(A, A)') "Finished GASBAG at " // gasbag_stop%isoformat()
+
+  duration = gasbag_stop - gasbag_start
+  write(*,'(A, ES15.5)') "Total duration in seconds: ", duration%total_seconds()
+  write(*, '(G0.1, A, G0.1, A, G0.1, A, G0.1, A)') &
+       duration%getDays(), "d ", duration%getHours(), "h ", &
+       duration%getMinutes(), "m ", duration%getSeconds(), "s"
 
 end program GASBAG

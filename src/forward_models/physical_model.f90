@@ -611,8 +611,8 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       !frame_start = 3500
-       !frame_stop = 3600
+       frame_start = 685
+       frame_stop = 800
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -623,7 +623,8 @@ contains
        ! those threads can be assigned new soundings with dynamic scheduling.
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
-       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, this_thread, this_converged, this_iterations)
+       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, &
+       !$OMP         this_thread, this_converged, this_iterations)
 
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
@@ -636,15 +637,15 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-             !write(*,*) land_fraction(i_fp, i_fr)
-             if (land_fraction(i_fp, i_fr) == 0) then
+             if (land_fraction(i_fp, i_fr) == 0.0d0) then
                 call logger%debug(fname, "Skipping water scene.")
                 cycle
              end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
-             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band, this_iterations)
+             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band, &
+                  this_iterations)
              ! ---------------------------------------------------------------------
 
 #ifdef _OPENMP
@@ -653,7 +654,7 @@ contains
              call cpu_time(cpu_time_stop)
 #endif
 
-             ! Store the processing time
+             ! Store the processing time in seconds
              results%processing_time(i_fp, i_fr) = cpu_time_stop - cpu_time_start
 
              ! Increase the rerival count tracker and compute the average processing
@@ -675,7 +676,6 @@ contains
           end do
        end do
        !$OMP END PARALLEL DO
-
 
 
        !---------------------------------------------------------------------
@@ -752,24 +752,31 @@ contains
        end do
 
        ! Save the dry air mass (molecules / cm2)
-       do i=1, global_SV%num_gas
-          if (MCS%window(i_win)%gas_retrieve_scale(global_SV%gas_idx_lookup(i))) then
+       write(tmp_str, "(A,A,A,A)") trim(group_name) // "/dry_air_mass_", &
+            MCS%general%code_name
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, trim(tmp_str), &
+            results%ndry(:,:), out_dims2d, -9999.99d0)
 
-             ! This is a scale-type jacobian
-             do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(global_SV%gas_idx_lookup(i),:))
 
-                if (global_SV%gas_idx_lookup(i) == j) then
-                   write(tmp_str, "(A,A,A,A)") trim(group_name) // "/", &
-                        results%SV_names(global_SV%idx_gas(i,1))%chars(), &
-                        "_ndry_", MCS%general%code_name
-                   call logger%info(fname, "Writing out: " // trim(tmp_str))
-                   call write_DP_hdf_dataset(output_file_id, &
-                        trim(tmp_str), &
-                        results%ndry(:,:,i), out_dims2d, -9999.99d0)
-                end if
-             end do
-          end if
-       end do
+!!$       do i=1, global_SV%num_gas
+!!$          if (MCS%window(i_win)%gas_retrieve_scale(global_SV%gas_idx_lookup(i))) then
+!!$
+!!$             ! This is a scale-type jacobian
+!!$             do j=1, size(MCS%window(i_win)%gas_retrieve_scale_start(global_SV%gas_idx_lookup(i),:))
+!!$
+!!$                if (global_SV%gas_idx_lookup(i) == j) then
+!!$                   write(tmp_str, "(A,A,A,A)") trim(group_name) // "/", &
+!!$                        results%SV_names(global_SV%idx_gas(i,1))%chars(), &
+!!$                        "_ndry_", MCS%general%code_name
+!!$                   call logger%info(fname, "Writing out: " // trim(tmp_str))
+!!$                   call write_DP_hdf_dataset(output_file_id, &
+!!$                        trim(tmp_str), &
+!!$                        results%ndry(:,:,i), out_dims2d, -9999.99d0)
+!!$                end if
+!!$             end do
+!!$          end if
+!!$       end do
 
        ! Here we re-set the output dimensions for 3D fields, needed
        ! for column AKs
@@ -784,7 +791,6 @@ contains
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
             results%pressure_levels(:,:,:), out_dims3d, -9999.99d0)
-
 
        do i=1,MCS%window(i_win)%num_gases
           if (MCS%window(i_win)%gas_retrieved(i)) then
@@ -1238,6 +1244,7 @@ contains
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
 
+
     ! Set the used radiative transfer model
     if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
@@ -1602,6 +1609,7 @@ contains
 
        ! Copy over the initial atmosphere
        scn%atm = initial_atm
+       scn%atm%ndry(:) = 0.0d0
 
        ! Keep some useful values in the scene object, so we don't
        ! have to pass them through the entire program all the time
@@ -1738,6 +1746,14 @@ contains
           else
              old_sv(:) = SV%svsv(:)
           end if
+
+          ! We MUST check for NaNs in the state vector
+          ! If a NaN appears here, something went terribly wrong
+          if (any(ieee_is_nan(SV%svsv))) then
+             call logger%error(fname, "NaNs found in state vector. Skipping this scene.")
+             return
+          end if
+
 
           ! If this is not the first iteration, we grab forward model values from the
           ! current state vector.
@@ -2716,6 +2732,10 @@ contains
 
           if (SV%num_gas > 0) then
 
+             ! We also want to have the corresponding number of molecules of dry air
+             ! for the various sections of the atmopshere.
+             results%ndry(i_fp, i_fr) = sum(scn%atm%ndry)
+
              ! Allocate array for pressure weights
              allocate(pwgts(num_active_levels))
 
@@ -2746,9 +2766,6 @@ contains
                            prior_vmr_profile(s_start(i):s_stop(i),j) &
                            * SV%svap(SV%idx_gas(i,1))
 
-                      ! We also want to have the corresponding number of molecules of dry air
-                      ! for the various sections of the atmopshere.
-                      results%ndry(i_fp, i_fr, i) = sum(scn%atm%ndry(s_start(i):s_stop(i)-1))
                    end if
                 end do
 

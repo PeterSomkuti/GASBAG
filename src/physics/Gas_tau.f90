@@ -66,6 +66,7 @@ contains
     double precision, intent(inout) :: gas_tau(:,:)
     double precision, intent(inout) :: gas_tau_dpsurf(:,:)
     double precision, intent(inout) :: gas_tau_dvmr(:,:,:)
+
     logical, intent(inout) :: success
 
 
@@ -117,7 +118,7 @@ contains
     ! "N_sub", the number of sublayers used for the integration. We don't want the
     ! user to have to think too much, we convert these numbers accordingly.
     ! If the user says: Nsub=5, then we supply N=(N_sub+1)/2=3 to the function,
-    ! which gives us 3 GK points (including 0), which is then later on mirrored
+    ! which gives us 3 GK knots (including 0), which is then later on mirrored
     ! to obtain back our requested 5.
 
     ! These three are the placeholders for GK knots (abscissae) and weights
@@ -247,6 +248,12 @@ contains
        end if
 
 
+       ! -------------------------
+       !
+       ! Gauss - Kronrod portion
+       !
+       ! -------------------------
+
        ! Map the GK abscissae and weights from [0,1] to symmetric [-1,1] by mirroring. This section
        ! seems a bit excessive - maybe a shorter way of doing it?
 
@@ -294,6 +301,12 @@ contains
           call kronrod_adjust(p_higher, p_lower, N_sub-1, &
                GK_abscissae_f, GK_weights_f, G_weights_f)
        end if
+
+       ! -------------------------
+       !
+       ! Sub-layer loop
+       !
+       ! -------------------------
 
        do k=1, N_sub
 
@@ -347,7 +360,7 @@ contains
           ! ----------------------------------------------------------------------------------------------
           gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry * this_CS_value(:) * this_VMR)
           ! Jacobians of tau w.r.t. changes in level VMR. Layer gas tau can change in two
-          ! ways: either change the VRM at the level above (index 1, higher), or below (index 2, lower)
+          ! ways: either change the VMR at the level above (index 1, higher), or below (index 2, lower)
 
           ! "Higher" (i.e. closer to TOA)
           gas_tau_dvmr(:,l-1,1) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (this_p_fac))
@@ -357,6 +370,7 @@ contains
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
+
           if (need_psurf_jac .and. (l == num_active_levels)) then
 
              this_p_pert = GK_abscissae_f_pert(k)
@@ -415,6 +429,7 @@ contains
        end if
     end do
 
+    ! When all completed nicely, mark it as successful
     success = .true.
 
   end subroutine calculate_gas_tau
@@ -623,7 +638,6 @@ contains
           ! For pre-gridded cross sections, we do not need to interpolate along
           ! the wavelength dimension, and the requested wavelength wl(i) corresponds
           ! to the cross section wavelength at that index i.
-
           C3(0,0,0) = gas%cross_section(i, idx_l_H2O, idx_ll_T, idx_l_p)
           C3(1,0,0) = gas%cross_section(i, idx_r_H2O, idx_ll_T, idx_l_p)
           C3(0,1,0) = gas%cross_section(i, idx_l_H2O, idx_lr_T, idx_l_p)

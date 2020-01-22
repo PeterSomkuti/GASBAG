@@ -117,6 +117,7 @@ contains
     ! and give them explicit numbers!
     window_start = 6
     do window_nr=1, MAX_WINDOWS
+
        write(tmp_str, '(A, G0.1)') "window-", window_nr
        this_idx = window_start + window_nr
 
@@ -199,7 +200,7 @@ contains
        ! Or do we allow for wavelength dependence
        valid_options(this_idx,40) = "keep_scattering_constant"
        ! How do we distribute aerosols in the scene? Gaussian?
-       valid_options(this_idx,31) = "aerosol_distribution_shape"
+       valid_options(this_idx,41) = "aerosol_distribution_shape"
 
     end do
 

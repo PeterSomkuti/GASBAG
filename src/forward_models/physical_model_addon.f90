@@ -8,6 +8,7 @@ module physical_model_addon_mod
   use Rayleigh_mod
   use scene_mod
   use aerosols_mod
+  use file_utils_mod
 
   ! Third-party modules
   use stringifor
@@ -15,6 +16,7 @@ module physical_model_addon_mod
   use logger_mod, only: logger => master_logger
 
   ! System modules
+  use HDF5
   use ISO_FORTRAN_ENV
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
@@ -60,11 +62,8 @@ module physical_model_addon_mod
      double precision, allocatable :: continuum(:,:)
      !> Single-sounding retrieval processing time
      double precision, allocatable :: processing_time(:,:)
-     !> Number of moles of dry air per m2 for various sections
-     !> of the model atmosphere - corresponding to retrieved
-     !> gas scale factors.
-     double precision, allocatable :: ndry(:,:,:)
-
+     !> Number of moles of dry air per m2
+     double precision, allocatable :: ndry(:,:)
   end type result_container
 
 
@@ -509,20 +508,30 @@ contains
     scn%atm%altitude_layers(:) = 0.0d0
     ! Set altitudes to zero, and the lowest level to the altitude
     scn%atm%altitude_levels(:) = 0.0d0
-    scn%atm%altitude_levels(scn%num_levels) = scn%alt
+    scn%atm%altitude_levels(scn%num_active_levels) = scn%alt
     scn%atm%grav(scn%num_levels) = jpl_gravity(scn%lat, scn%alt)
     scn%atm%ndry(:) = 0.0d0
 
     ! Loop through layers, starting with the bottom-most (surface) one
-    do i = scn%num_levels - 1, 1, -1
+    do i = scn%num_active_levels - 1, 1, -1
 
-       SH_layer = (scn%atm%sh(i) + scn%atm%sh(i+1)) * 0.5d0
+       if (i == scn%num_active_levels - 1) then
+          ! Surface level
+          p_layer = (scn%atm%p(i) + scn%atm%psurf) * 0.5d0
+          dP = scn%atm%psurf - scn%atm%p(i)
+          logratio = log(scn%atm%psurf / scn%atm%p(i))
+       else
+          ! Any other level
+          p_layer = (scn%atm%p(i) + scn%atm%p(i+1)) * 0.5d0
+          dP = scn%atm%p(i+1) - scn%atm%p(i)
+          logratio = log(scn%atm%p(i+1) / scn%atm%p(i))
+       end if
+
        g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1))
-       p_layer = (scn%atm%p(i) + scn%atm%p(i+1)) * 0.5d0
-       dP = scn%atm%p(i+1) - scn%atm%p(i)
+       SH_layer = (scn%atm%sh(i) + scn%atm%sh(i+1)) * 0.5d0
        T_layer = (scn%atm%T(i) + scn%atm%T(i+1)) * 0.5d0
        Tv = T_layer * (1.0d0 + SH_layer * (1.0d0 - EPSILON) / EPSILON)
-       logratio = log(scn%atm%p(i+1) / scn%atm%p(i))
+
        dz = logratio * Tv * Rd / g_layer
        g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1) + 0.5d0 * dz)
        dz = logratio * Tv * Rd / g_layer
@@ -912,7 +921,7 @@ contains
     allocate(results%num_iterations(num_fp, num_frames))
     allocate(results%converged(num_fp, num_frames))
 
-    allocate(results%ndry(num_fp, num_frames, num_gas))
+    allocate(results%ndry(num_fp, num_frames))
 
     results%sv_names = "NONE"
 
@@ -936,6 +945,7 @@ contains
     results%SNR_std = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%continuum = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
     results%processing_time = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+    results%ndry = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
     results%num_iterations = -1
     results%converged = -1
@@ -1109,6 +1119,289 @@ contains
 
   end subroutine assign_SV_names_to_result
 
+
+  !> @brief Writes global result arrays into the output HDF file
+  subroutine write_results_into_hdf_output( &
+       i_win, &
+       output_file_id, &
+       results, &
+       met_psurf, &
+       final_radiance, &
+       measured_radiance, &
+       noise_radiance, &
+       wavelength_radiance)
+
+    integer, intent(in) :: i_win
+    integer(hid_t), intent(in) :: output_file_id
+    type(result_container), intent(in) :: results
+    double precision, allocatable, intent(in) :: met_psurf(:,:)
+    double precision, allocatable, intent(in) :: final_radiance(:,:,:)
+    double precision, allocatable, intent(in) :: measured_radiance(:,:,:)
+    double precision, allocatable, intent(in) :: noise_radiance(:,:,:)
+    double precision, allocatable, intent(in) :: wavelength_radiance(:,:,:)
+
+    ! Function name
+    character(len=*), parameter :: fname = "write_results_into_hdf_output"
+    ! HDF error variable
+    integer :: hdferr
+    ! Group ID for result group
+    integer(hid_t) :: result_gid
+    ! Group name for results
+    character(len=999) :: group_name
+    ! Temporary string
+    character(len=999) :: tmp_str
+    ! Another temporary string
+    type(string) :: lower_str
+    ! Containers for 1d, 2d, 3d, and 4d output array dimensions
+    integer(hsize_t) :: out_dims1d(1)
+    integer(hsize_t) :: out_dims2d(2)
+    integer(hsize_t) :: out_dims3d(3)
+    integer(hsize_t) :: out_dims4d(4)
+    ! How many SV elements do we have?
+    integer :: N_SV
+    ! Loop variable
+    integer :: i
+
+    N_SV = size(results%sv_prior, 3)
+
+    !---------------------------------------------------------------------
+    ! HDF OUTPUT
+    ! Here, we write out the various arrays into HDF datasets
+    !---------------------------------------------------------------------
+    !
+    ! The general idea is to
+    ! a) Create a string that corresponds to the output HDF dataset, like
+    !    RetrievalResults/physical/ch4/reduced_chi_squared_gbg
+    ! b) (optional) re-assign the dataset dimensions needed to write the
+    !    arrays into the HDF file using write_*_hdf_dataset
+    ! c) Call the write_*_hdf_dataset, usually using the results%** array
+    !    to store those values into the HDF file
+    !
+    !---------------------------------------------------------------------
+
+    ! Create an HDF group for all windows separately
+    group_name = "RetrievalResults/physical/" // trim(MCS%window(i_win)%name%chars())
+    call h5gcreate_f(output_file_id, trim(group_name), result_gid, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not create group: " &
+         // trim(group_name))
+
+    ! Set the dimensions of the arrays for saving them into the HDF file
+    out_dims2d(1) = MCS%general%n_fp
+    out_dims2d(2) = MCS%general%n_frame
+
+    ! Save the processing time
+    call logger%info(fname, "Writing out: " // trim(group_name) // &
+         "/processing_time_" // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/processing_time_", MCS%general%code_name
+    call write_DP_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%processing_time(:,:), out_dims2d, -9999.99d0)
+
+    ! Writing out the prior surface pressure, but obviously only if allocated
+    if (allocated(met_psurf)) then
+       call logger%info(fname, "Writing out: " // trim(group_name) // &
+            "/surface_pressure_apriori_" // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/surface_pressure_apriori_", &
+            MCS%general%code_name
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
+    end if
+
+    ! Save the prior state vectors
+    do i=1, N_SV
+       write(tmp_str, '(A,A,A,A,A)') trim(group_name) , "/", &
+            results%sv_names(i)%chars() , "_apriori_", MCS%general%code_name
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%sv_prior(:,:,i), out_dims2d, -9999.99d0)
+    end do
+
+    ! Save the retrieved state vectors
+    do i=1, N_SV
+       write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", results%sv_names(i)%chars(), &
+            "_", MCS%general%code_name
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%sv_retrieved(:,:,i), out_dims2d, -9999.99d0)
+    end do
+
+    ! Save the retrieved state vector uncertainties
+    do i=1, N_SV
+       write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+            results%sv_names(i)%chars() , "_uncertainty_", MCS%general%code_name
+       call logger%info(fname, "Writing out: " // trim(tmp_str))
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), &
+            results%sv_uncertainty(:,:,i), out_dims2d, -9999.99d0)
+    end do
+
+
+    ! Here we re-set the output dimensions for 3D fields, needed
+    ! for column AKs
+
+    out_dims3d(1) = MCS%general%n_fp
+    out_dims3d(2) = MCS%general%n_frame
+    out_dims3d(3) = size(results%col_AK, 4)
+
+    do i=1,MCS%window(i_win)%num_gases
+       if (MCS%window(i_win)%gas_retrieved(i)) then
+
+          ! Save XGAS for each gas
+          lower_str = MCS%window(i_win)%gases(i)%lower()
+
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+               lower_str%chars(), "_", MCS%general%code_name
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               results%xgas(:,:,i), out_dims2d, -9999.99d0)
+
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+               lower_str%chars(), "_apriori_", MCS%general%code_name
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               results%xgas_prior(:,:,i), out_dims2d, -9999.99d0)
+
+          if (MCS%output%gas_averaging_kernels) then
+             ! These variables only need to be saved if the user requested
+             ! column averaging kernels. They add quite a bit to the output
+             ! file size, hence you want to make sure that you really need
+             ! them.
+
+             write(tmp_str, '(A,A,A,A)') trim(group_name), "/pressure_levels", &
+                  "_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%pressure_levels(:,:,:), out_dims3d, -9999.99d0)
+
+             if (MCS%output%gas_averaging_kernels) then
+                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                     lower_str%chars(), "_column_ak_", MCS%general%code_name
+                call logger%info(fname, "Writing out: " // trim(tmp_str))
+                call write_DP_hdf_dataset(output_file_id, &
+                     trim(tmp_str), &
+                     results%col_AK(:,:,i,:), out_dims3d, -9999.99d0)
+             end if
+
+             if (MCS%output%pressure_weights) then
+                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+                     lower_str%chars(), "_pressure_weights_", MCS%general%code_name
+                call logger%info(fname, "Writing out: " // trim(tmp_str))
+                call write_DP_hdf_dataset(output_file_id, &
+                     trim(tmp_str), &
+                     results%pwgts(:,:,i,:), out_dims3d, -9999.99d0)
+             end if
+
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+                  lower_str%chars(), "_profile_apriori_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%vmr_prior(:,:,i,:), out_dims3d, -9999.99d0)
+
+             write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
+                  lower_str%chars(), "_profile_retrieved_", MCS%general%code_name
+             call logger%info(fname, "Writing out: " // trim(tmp_str))
+             call write_DP_hdf_dataset(output_file_id, &
+                  trim(tmp_str), &
+                  results%vmr_retrieved(:,:,i,:), out_dims3d, -9999.99d0)
+
+          end if
+
+       end if
+    end do
+
+    ! Save number of iterations
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/num_iterations_", MCS%general%code_name
+    call write_INT_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%num_iterations(:,:), out_dims2d, -9999)
+
+    ! Save converged status
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/converged_flag_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/converged_flag_", MCS%general%code_name
+    call write_INT_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%converged(:,:), out_dims2d, -9999)
+
+    ! Retrieved CHI2
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/reduced_chi_squared_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_", MCS%general%code_name
+    call write_DP_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
+
+    ! Residual RMS
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/residual_rms_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/residual_rms_", MCS%general%code_name
+    call write_DP_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%residual_rms(:,:), out_dims2d, -9999.99d0)
+
+    ! Dsigma_sq
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/final_dsigma_sq_", MCS%general%code_name
+    call write_DP_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
+
+    ! Signal-to-noise ratio (mean)
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/snr_", MCS%general%code_name
+    call write_DP_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%SNR, out_dims2d)
+
+    call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum_level_radiance_" &
+         // MCS%general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/continuum_level_radiance_", MCS%general%code_name
+    call write_DP_hdf_dataset(output_file_id, &
+         trim(tmp_str), results%continuum, out_dims2d)
+
+    ! Save the radiances, only on user request (non-default)
+    if (MCS%output%save_radiances) then
+
+       out_dims3d = shape(final_radiance)
+
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", MCS%general%code_name
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), final_radiance, out_dims3d)
+
+       out_dims3d = shape(measured_radiance)
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/measured_radiance_", MCS%general%code_name
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), measured_radiance, out_dims3d)
+
+       out_dims3d = shape(noise_radiance)
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/noise_radiance_", MCS%general%code_name
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), noise_radiance, out_dims3d)
+
+       out_dims3d = shape(wavelength_radiance)
+       call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength_" &
+            // MCS%general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/wavelength_", MCS%general%code_name
+       call write_DP_hdf_dataset(output_file_id, &
+            trim(tmp_str), wavelength_radiance, out_dims3d)
+
+    end if
+
+
+
+
+  end subroutine write_results_into_hdf_output
+
+
   !> @begin Wrapper to replace prior VMRs with special functions
   subroutine replace_prior_VMR(scn, prior_types)
 
@@ -1127,8 +1420,6 @@ contains
 
     do i=1, size(prior_types)
 
-
-
        ! Nothing to do if this string is empty
        if (prior_types(i) == "") cycle
 
@@ -1136,6 +1427,9 @@ contains
        if (prior_types(i) == "SC4C2018") then
           ! Max Reuter / Oliver Schneising
           ! CH4 profiles as derived from a climatology file
+
+          call logger%debug(fname, "Using Reuter/Schneising SC4C2018 model for CH4.")
+
 
 
        else

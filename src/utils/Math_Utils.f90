@@ -303,6 +303,9 @@ contains
     double precision :: cpu_start, cpu_stop
     character(len=999) :: tmp_str
 
+    double precision, external :: ddot
+    double precision, external :: dasum
+
     call cpu_time(cpu_start)
 
     N_wl = size(wl_input)
@@ -374,8 +377,13 @@ contains
             N_this_wl, &
             wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(:))
 
-       output(idx_pix) = dot_product(ILS_upsampled(:), input(idx_hires_ILS_min:idx_hires_ILS_max)) &
-            / sum(ILS_upsampled)
+       !output(idx_pix) = dot_product(ILS_upsampled(:), input(idx_hires_ILS_min:idx_hires_ILS_max)) &
+       !     / sum(ILS_upsampled)
+
+       ! Use BLAS for dot product and sum. Not really faster at this point..
+       output(idx_pix) = ddot(N_this_wl + 1, &
+            ILS_upsampled, 1, input(idx_hires_ILS_min:idx_hires_ILS_max), 1) &
+            / dasum(N_this_wl + 1, ILS_upsampled, 1)
 
        deallocate(ILS_upsampled)
 

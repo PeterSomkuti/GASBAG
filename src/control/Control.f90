@@ -52,6 +52,8 @@ module control_mod
      integer :: N_bands
      !> Number of spectral points / channels per band
      integer, allocatable :: N_spec(:)
+     !> Log level
+     integer :: loglevel
   end type CS_general
 
   type :: CS_algorithm
@@ -391,6 +393,13 @@ contains
     MCS%window(:)%wl_min = 0.0d0
     MCS%window(:)%wl_max = 0.0d0
 
+    call fini_extract(fini, 'logger', 'loglevel', .false., fini_int)
+    if (fini_int > 0) then
+       MCS%general%loglevel = fini_int
+    else
+       MCS%general%loglevel = 10
+    end if
+    
     ! ----------------------------------------------------------------------
     ! Check which algoirthms the user wants
     ! First make sure that the config file does not have more than the

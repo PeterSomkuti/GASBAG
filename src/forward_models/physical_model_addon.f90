@@ -1401,6 +1401,157 @@ contains
 
   end subroutine write_results_into_hdf_output
 
+  !> @brief Given a dispersion array "this_dispersion", in window "i_win", this
+  !> function calculates the first and last pixel indices as the boundaries in
+  !> the detector.
+  !> @param this_dispersion Wavelength per detector index
+  !> @param i_win Retrieval Window index for MCS
+  !> @param l1b_wl_idx_min Lower wavelength pixel index corresponding to
+  !> user-defined "wl_min"
+  !> @param l1b_wl_idx_min Upper wavelength pixel index corresponding to
+  !> user-defined "wl_max"
+  subroutine calculate_dispersion_limits(this_dispersion, i_win, &
+       l1b_wl_idx_min, l1b_wl_idx_max)
+
+    implicit none
+    double precision, intent(in) :: this_dispersion(:)
+    integer, intent(in) :: i_win
+    integer, intent(inout) :: l1b_wl_idx_min, l1b_wl_idx_max
+
+    integer :: i
+
+    l1b_wl_idx_min = 0
+    l1b_wl_idx_max = 0
+
+    ! This here grabs the boundaries of the L1b data by simply looping over
+    ! the dispersion array and setting the l1b_wl_idx_* accordingly.
+    do i=1, size(this_dispersion)
+       if (this_dispersion(i) < MCS%window(i_win)%wl_min) then
+          l1b_wl_idx_min = i
+       end if
+       if (this_dispersion(i) < MCS%window(i_win)%wl_max) then
+          l1b_wl_idx_max = i
+       end if
+       if (this_dispersion(i) > MCS%window(i_win)%wl_max) then
+          exit
+       end if
+    end do
+
+    ! If window lower limit is below the first wavelength value, set it
+    ! to the beginning (index 1)
+    if (l1b_wl_idx_min == 0) then
+       l1b_wl_idx_min = 1
+    end if
+
+    ! Have to increase the higher-wavelength index by one so that we can
+    ! use the full stride l1b_wl_idx_min: l1b_wl_idx_min to access the L1b
+    ! radiance corresponding to the user-defined values.
+    if (l1b_wl_idx_max < size(this_dispersion)) then
+       l1b_wl_idx_max = l1b_wl_idx_max + 1
+    end if
+
+    ! If the index goes past the maximal size of the array, simply
+    ! set it back to the boundary.
+    if (l1b_wl_idx_max > size(this_dispersion)) then
+       l1b_wl_idx_max = size(this_dispersion)
+    end if
+
+  end subroutine calculate_dispersion_limits
+
+  !> @brief Calculates the boundaries of the subcolumns
+  !> @param SV State vector object
+  !> @param gas_idx gas index (from MCS%gas)
+
+  subroutine set_gas_scale_levels(SV, gas_idx, i_win, atm, psurf, &
+       s_start, s_stop, do_gas_jac, success)
+
+    type(statevector), intent(inout) :: SV
+    integer, intent(in) :: gas_idx
+    integer, intent(in) :: i_win
+    type(atmosphere), intent(in) :: atm
+    double precision, intent(in) :: psurf
+    integer, intent(inout) :: s_start(:)
+    integer, intent(inout) :: s_stop(:)
+    logical, intent(inout) :: do_gas_jac
+    logical, intent(inout) :: success
+
+    character(len=*), parameter :: fname = "set_gas_scale_levels"
+    character(len=999) :: tmp_str
+    integer :: i, l
+
+
+    success = .false.
+
+    ! We need to 'reverse-lookup' to see which SV index belongs to this
+    ! gas to grab the right scaling factor. This is done only on the first
+    ! iteration - or if we retrieve surface pressure.
+    do i=1, SV%num_gas
+
+       if (MCS%window(i_win)%gas_retrieve_scale(gas_idx)) then
+
+          do_gas_jac = .true.
+          if (SV%gas_idx_lookup(i) == gas_idx) then
+
+             ! This bit here figures out which level/layer range a
+             ! certain scaling factor corresponds to. They are fractions
+             ! of surface pressure, so we use 'searchsorted' to find
+             ! where they would belong to. We also make sure it can't
+             ! go below or above the first/last level.
+
+             s_start(i) = searchsorted_dp((atm%p), &
+                  SV%gas_retrieve_scale_start(i) * (psurf), .true.)
+             s_start(i) = max(1, s_start(i))
+
+             s_stop(i) = searchsorted_dp((atm%p), &
+                  SV%gas_retrieve_scale_stop(i) * (psurf), .true.) + 1
+             s_stop(i) = min(size(atm%p), s_stop(i))
+
+             SV%s_start(i) = s_start(i)
+             SV%s_stop(i) = s_stop(i)
+
+          end if
+       end if
+
+    end do
+
+    ! We need to make sure that we are not "doubling up" on a specific
+    ! gas VMR level when retrieving scale factors. E.g. 0:0.5 0.5:1.0 will
+    ! produce overlapping s_start/s_stop.
+
+    do i=1, SV%num_gas
+       do l=1, SV%num_gas
+          ! Skip gases if index does not match
+          if (SV%gas_idx_lookup(i) /= gas_idx) cycle
+          if (SV%gas_idx_lookup(l) /= gas_idx) cycle
+
+          if (s_start(i) == s_stop(l)) then
+             s_start(i) = s_start(i) + 1
+             SV%s_start(i) = SV%s_start(i) + 1
+          end if
+       end do
+    end do
+
+    ! Last check - we run through all gas statevectors and
+    ! check if they are at least 2 apart - meaning you can't
+    ! (as of now) retrieve a single gas layer.
+    do i=1, SV%num_gas
+
+       ! Skip gases if index does not match
+       if (SV%gas_idx_lookup(i) /= gas_idx) cycle
+
+       if (s_stop(i) - s_start(i) == 1) then
+          write(tmp_str, '(A,A)') "Scale factor index error for gas ", &
+               MCS%window(i_win)%gases(SV%gas_idx_lookup(i))%chars()
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
+    end do
+
+    success = .true.
+
+  end subroutine set_gas_scale_levels
+
+
 
   !> @begin Wrapper to replace prior VMRs with special functions
   subroutine replace_prior_VMR(scn, prior_types)

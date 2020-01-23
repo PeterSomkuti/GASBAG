@@ -204,23 +204,29 @@ contains
   !> @param val Value, whose position in the array needs determining
   !> @param left Left insert? (or right if set to .false.)
   !> @param idx The index at which val would be inserted in x
-  pure function searchsorted_dp(x, val, left) result(idx)
-  implicit none
-  double precision, intent(in) :: x(:), val
-  logical, intent(in), optional :: left
-  integer :: idx
+  pure function searchsorted_dp(x, val, left, user_L) result(idx)
+    implicit none
+    double precision, intent(in) :: x(:), val
+    logical, intent(in), optional :: left
+    integer, intent(in), optional :: user_L
+    integer :: idx
 
-  logical :: from_left
-  integer :: L, R, m
+    logical :: from_left
+    integer :: L, R, m
 
-  ! Insert to the left of value is the standard
-  if (.not. present(left)) then
+    ! Insert to the left of value is the standard
+    if (.not. present(left)) then
        from_left = .true.
     else
        from_left = left
     end if
 
-    L = 1
+    if (present(user_L)) then
+       L = user_L
+    else
+       L = 1
+    end if
+    
     R = size(x)
     idx = -1
 
@@ -350,6 +356,7 @@ contains
     ! make sure that you only pass arrays here that in wavelength (detector pixel)
     ! space are at the same positions as the output wavelengths wl_output.
 
+    allocate(ILS_upsampled(N_wl))
     do idx_pix=1, N_pix
 
        ! Note the ILS boundary in wavelength space. wl_kernels spans usually
@@ -358,7 +365,10 @@ contains
        ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
 
        idx_hires_ILS_min = searchsorted_dp(wl_input, ILS_delta_min)
-       idx_hires_ILS_max = searchsorted_dp(wl_input, ILS_delta_max)
+       ! When doing the binary search for the upper WL index, we can safely
+       ! set the "left" search limit to the other index.
+       idx_hires_ILS_max = searchsorted_dp(wl_input, ILS_delta_max, &
+            user_L=idx_hires_ILS_min)
 
        if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
           call logger%error(fname, "idx_hires_ILS_min out of bounds.")
@@ -371,34 +381,34 @@ contains
        end if
 
 
-       N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min
+       N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min + 1
 
-       allocate(ILS_upsampled(N_this_wl + 1))
-       ILS_upsampled = 0.0d0
+       !allocate(ILS_upsampled(N_this_wl + 1))
+       ILS_upsampled(:) = 0.0d0
 
        call pwl_value_1d_v2( &
             N_ils_pix, &
             wl_output(idx_pix) + wl_kernels(:, idx_pix), kernels(:, idx_pix), &
             N_this_wl, &
-            wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(:))
+            wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(1:N_this_wl))
 
        !output(idx_pix) = dot_product(ILS_upsampled(:), input(idx_hires_ILS_min:idx_hires_ILS_max)) &
        !     / sum(ILS_upsampled)
 
        ! Use BLAS for dot product and sum. Not really faster at this point..
-       output(idx_pix) = ddot(N_this_wl + 1, &
-            ILS_upsampled, 1, input(idx_hires_ILS_min:idx_hires_ILS_max), 1) &
-            / dasum(N_this_wl + 1, ILS_upsampled, 1)
-
-       deallocate(ILS_upsampled)
+       output(idx_pix) = ddot(N_this_wl, &
+            ILS_upsampled(1:N_this_wl), 1, &
+            input(idx_hires_ILS_min:idx_hires_ILS_max), 1) &
+            / dasum(N_this_wl, ILS_upsampled(1:N_this_wl), 1)
 
     end do
+    deallocate(ILS_upsampled)
 
     success = .true.
 
     call cpu_time(cpu_stop)
     write(tmp_str, '(A, F10.7)') "Convolution time (s): ", cpu_stop - cpu_start
-    !call logger%debug(fname, trim(tmp_str))
+    call logger%debug(fname, trim(tmp_str))
 
   end subroutine oco_type_convolution
 

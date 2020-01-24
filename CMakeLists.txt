@@ -41,6 +41,13 @@ configure_file(
 )
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
+
+  if (CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 8.0)
+      message(FATAL_ERROR "gfortran version must be at least 8.0!")
+  else()
+      message(STATUS "gfortran version is sufficcient!")
+  endif()
+
   set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512")
 
   # Make OpenMP conditional
@@ -51,26 +58,25 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
-  #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  set(warnings "-Wall -Wextra -Wpedantic")
-  set(opt "-O3 -mtune=native")
+  set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
+  #set(warnings "-Wall -Wextra -Wpedantic")
+  set(opt "-O3 -mtune=native -march=native -ftree-vectorize")
   set(bounds "-fbounds-check")
 
+elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
+
+  set(opt "-O3")
+
 else()
-  # only support Gfortran for now
+  message(FATAL_ERROR "Unsupported compiler")
 endif()
 
-if (CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 8.0)
-    message(FATAL_ERROR "gfortran version must be at least 8.0!")
-else()
-    message(STATUS "gfortran version is sufficcient!")
-endif()
 
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
 set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g ${bounds} -fcheck=all -fbacktrace -fno-omit-frame-pointer")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
-set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
+set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-generate --coverage")
 
 set(CMAKE_CXX_FLAGS "-O3 -mtune=native")
 #set(CMAKE_CXX_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
@@ -161,7 +167,7 @@ set_source_files_properties(
 set_source_files_properties(
   ${xrtm_sources}
   PROPERTIES
-  COMPILE_FLAGS "-O3 -mtune=native"
+  COMPILE_FLAGS "-O3 -mtune=native -march=native"
   )
 
 # Our code is definitely in the need of having warnings

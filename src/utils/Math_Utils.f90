@@ -174,6 +174,7 @@ contains
 
     last_d = 1
     do i=1, ni
+
        if (xi(i) <= xd(1)) then
           yi(i) = yd(1)
        else if (xi(i) >= xd(nd)) then
@@ -185,6 +186,7 @@ contains
                 ! Since we are using a sorted array, we can
                 ! skip searching the first d points, as we know
                 ! the value is not going to be found there.
+                ! This provides a significant speed-up by ~10x
                 last_d = d
 
                 fac = (xi(i) - xd(d)) / (xd(d+1) - xd(d))
@@ -226,7 +228,7 @@ contains
     else
        L = 1
     end if
-    
+
     R = size(x)
     idx = -1
 
@@ -274,19 +276,14 @@ contains
   !> re-grid all ILS tables to a common high-resolution grid, so that we would not need to
   !> interpolate the ILS onto the high-res grid of the current pixel. This however seemed to
   !> create issues when the chosen high-res spacing was not fine enough, since the ILS wl spacing
-  !> getsfiner the closer you are at the center (at least for OCO-2/3). Hence I reverted to
+  !> gets finer the closer you are at the center (at least for OCO-2/3). Hence I reverted to
   !> this particular option, where the ILS is interpolated to the high-res wavelength grid
   !> for every pixel at every calculation. While this makes it somewhat slower, it also
   !> seemed to have eliminated the issue of bad results. These bad results were non-trivially
-  !> seen as stripy patterns which were  related to time-of-day and doppler shift.
+  !> seen as stripy patterns which were related to time-of-day and doppler shift.
   !> Since the doppler shift changes the wavelength grid, one can end up with misaligned
   !> spectra if the ILS convolution (however it is done) does work accordingly and shifts
   !> the line cores around..
-  !> @todo
-  !> There is an allocation of a 1D array inside the pixel loop, which probably
-  !> eats up a good chunk of cycles. Find a smart way of guessing
-  !> the maximal size that this array needs to be, and only use a smaller section
-  !> of the array via slicing/indexing.
   subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
        wl_output, output, success)
 
@@ -295,19 +292,25 @@ contains
     ! ILS. wl_output is the DESIRED output wavelength grid
 
     ! High-resolution bits
-    double precision, intent(in) :: wl_input(:), input(:)
+    double precision, contiguous, intent(in) :: wl_input(:), input(:)
     ! "Convolution" wavelengths and kernels
-    double precision, intent(in) :: wl_kernels(:,:), kernels(:,:)
-    double precision, intent(in) :: wl_output(:)
-    double precision, intent(inout) :: output(:)
+    double precision, contiguous, intent(in) :: wl_kernels(:,:), kernels(:,:)
+    double precision, contiguous, intent(in) :: wl_output(:)
+    double precision, contiguous, intent(inout) :: output(:)
     logical, intent(out) :: success
 
     character(len=*), parameter :: fname = "oco_type_convolution"
-    integer :: N_pix, N_ils_pix, N_wl, N_this_wl
+
+    ! These should be constant, and helps the compiler to optimize the loop
+    integer :: N_pix
+    integer :: N_ils_pix
+    integer :: N_wl
+
+    integer :: N_this_wl
     integer :: idx_pix, idx_hires_ILS_min, idx_hires_ILS_max
     double precision :: ILS_delta_min, ILS_delta_max
-    double precision :: ILS_wl_spacing
 
+    double precision, allocatable :: wl_kernels_absolute(:,:)
     double precision, allocatable :: ILS_upsampled(:)
 
     double precision :: cpu_start, cpu_stop
@@ -323,8 +326,6 @@ contains
     N_ils_pix = size(wl_kernels, 1)
 
     success = .false.
-
-    ILS_wl_spacing = wl_input(2) - wl_input(1)
 
     if (N_pix /= size(wl_kernels, 2)) then
        call logger%fatal(fname, "wl_kernels or wl_output have incompatible sizes.")
@@ -351,6 +352,11 @@ contains
        return
     end if
 
+    allocate(wl_kernels_absolute, mold=wl_kernels)
+    do idx_pix = 1, N_pix
+        wl_kernels_absolute(:, idx_pix) = wl_kernels(:, idx_pix) + wl_output(idx_pix)
+    end do
+
     ! Main loop over all (instrument) output pixels. Note that idx_pix is
     ! RELATIVE to the array that is supplied here, which means you need to
     ! make sure that you only pass arrays here that in wavelength (detector pixel)
@@ -361,13 +367,14 @@ contains
 
        ! Note the ILS boundary in wavelength space. wl_kernels spans usually
        ! some range from -lambda to +lambda.
-       ILS_delta_min = wl_output(idx_pix) + wl_kernels(1, idx_pix)
-       ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
+       !ILS_delta_min = wl_kernels_absolute(1, idx_pix) !wl_output(idx_pix) + wl_kernels(1, idx_pix)
+       !ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
 
-       idx_hires_ILS_min = searchsorted_dp(wl_input, ILS_delta_min)
+       idx_hires_ILS_min = searchsorted_dp(wl_input, wl_kernels_absolute(1, idx_pix))
        ! When doing the binary search for the upper WL index, we can safely
        ! set the "left" search limit to the other index.
-       idx_hires_ILS_max = searchsorted_dp(wl_input, ILS_delta_max, &
+       idx_hires_ILS_max = searchsorted_dp(wl_input, &
+            wl_kernels_absolute(N_ils_pix, idx_pix), &
             user_L=idx_hires_ILS_min)
 
        if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
@@ -380,22 +387,16 @@ contains
           return
        end if
 
-
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min + 1
 
-       !allocate(ILS_upsampled(N_this_wl + 1))
-       ILS_upsampled(:) = 0.0d0
-
+       ! Interpolate the ILS at the actual hi-res grid
        call pwl_value_1d_v2( &
             N_ils_pix, &
-            wl_output(idx_pix) + wl_kernels(:, idx_pix), kernels(:, idx_pix), &
+            wl_kernels_absolute(:, idx_pix), kernels(:, idx_pix), &
             N_this_wl, &
             wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(1:N_this_wl))
 
-       !output(idx_pix) = dot_product(ILS_upsampled(:), input(idx_hires_ILS_min:idx_hires_ILS_max)) &
-       !     / sum(ILS_upsampled)
-
-       ! Use BLAS for dot product and sum. Not really faster at this point..
+       ! Use BLAS for dot product and sum - gives a nice speed-up!
        output(idx_pix) = ddot(N_this_wl, &
             ILS_upsampled(1:N_this_wl), 1, &
             input(idx_hires_ILS_min:idx_hires_ILS_max), 1) &

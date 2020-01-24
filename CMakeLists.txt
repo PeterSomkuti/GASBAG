@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.5)
 cmake_policy(SET CMP0074 NEW)
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/cmake/modules")
+
+message(STATUS "CMake module path is: ${CMAKE_MODULE_PATH}")
 
 project(GASBAG)
 
@@ -65,7 +68,11 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
 
-  set(opt "-O3")
+  set(dialect "-assume realloc_lhs -standard-semantics -std18 -debug all -warn all")
+  if(USE_OPENMP)
+    set(dialect "${dialect}")
+    message(STATUS "Compiling with OpenMP")
+  endif()
 
 else()
   message(FATAL_ERROR "Unsupported compiler")
@@ -78,13 +85,17 @@ set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g ${bounds} -fcheck=all -fbacktrace -fno-omi
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-generate --coverage")
 
-set(CMAKE_CXX_FLAGS "-O3 -mtune=native")
+set(CMAKE_CXX_FLAGS "-O3 -mtune=native -march=native -ftree-vectorize")
 #set(CMAKE_CXX_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile
 # properly. Most machines should have these by now.
+# NOTE OpenBLAS seems to be pretty quick. Outsourcing many operations
+# to BLAS-equivalents might speed up the code even further.
+
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
+find_package(NETCDF REQUIRED COMPONTENTS Fortran)
 find_package(HDF5 REQUIRED COMPONENTS Fortran)
 # This is where we put compiled modules
 SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
@@ -189,6 +200,8 @@ target_include_directories(GASBAG PRIVATE
   "third-party/xrtm/misc"
   "third-party/xrtm/src")
 
+message(STATUS "LAPACK Libraries at -- " ${LAPACK_LIBRARIES})
+message(STATUS "BLAS Libraries at -- " ${BLAS_LIBRARIES})
 message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
 # HDF5 needs to be included at compile time already

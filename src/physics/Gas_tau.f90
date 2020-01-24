@@ -43,7 +43,7 @@ contains
   !> OCO full-physics way of doing it, but somewhat optimized for speed, since
   !> all variables are loaded into memory. Using pre-gridded spectroscopy makes
   !> this a bit faster than having to interpolate into the ABSCO wavelength grid.
-  subroutine calculate_gas_tau(pre_gridded, is_H2O, &
+  subroutine calculate_gas_tau(pre_gridded, is_H2O, num_active_levels, &
        wl, gas_vmr, psurf, p, T, sh, grav, &
        gas, N_sub, need_psurf_jac, &
        gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
@@ -52,6 +52,7 @@ contains
     implicit none
     logical, intent(in) :: pre_gridded
     logical, intent(in) :: is_H2O
+    integer, intent(in) :: num_active_levels
     double precision, intent(in) :: wl(:)
     double precision, intent(in) :: gas_vmr(:)
     double precision, intent(in) :: psurf
@@ -103,7 +104,7 @@ contains
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
 
     ! Various counter and size variables
-    integer :: N_lay, N_lev, N_wl, num_active_levels
+    integer :: N_lay, N_lev, N_wl
     integer :: j,k,l
 
     allocate(this_CS_value(size(wl)))
@@ -135,19 +136,6 @@ contains
     N_lev = size(gas_vmr)
     N_lay = N_lev - 1
     N_wl = size(wl)
-
-    do j=1, N_lev
-       if (psurf >= p(j)) then
-          num_active_levels = j+1
-       end if
-    end do
-
-    if (num_active_levels > N_lev) then
-       write(tmp_str, '(A,F12.2,A,F12.2)') "Psurf: ", psurf, " larger than BOA level: ", p(N_lev)
-       call logger%error(fname, trim(tmp_str))
-       success = .false.
-       return
-    end if
 
     ! Maybe some time later we will let the user decide if log-scaling should be
     ! used or not, but I don't see a reason why you would ever NOT want to use this.
@@ -444,7 +432,7 @@ contains
   !> @param H2O H2O VMR
   !> @param wl_left_idx Positions of wl in gas%wl array
   !> @param CS_value Cross section values for wavelengths wl
-  function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+  pure function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
     implicit none
     logical, intent(in) :: pre_gridded
@@ -489,7 +477,7 @@ contains
     idx_r_p = idx_l_p + 1
 
     if ((idx_l_p < 1) .or. (idx_l_p > size(gas%p) - 1)) then
-       call logger%error(fname, "idx_l_p out of range.")
+    !   call logger%error(fname, "idx_l_p out of range.")
        return
     end if
 
@@ -514,7 +502,7 @@ contains
     idx_lr_T = idx_ll_T + 1
 
     if ((idx_ll_T < 1) .or. (idx_ll_T > size(gas%T, 1) - 1)) then
-       call logger%error(fname, "idx_ll_T out of range.")
+    !   call logger%error(fname, "idx_ll_T out of range.")
        return
     end if
 
@@ -534,7 +522,7 @@ contains
     idx_rr_T = idx_rl_T + 1
 
     if ((idx_rl_T < 1) .or. (idx_rl_T > size(gas%T, 1) - 1)) then
-       call logger%error(fname, "idx_rl_T out of range.")
+    !   call logger%error(fname, "idx_rl_T out of range.")
        return
     end if
 
@@ -567,7 +555,7 @@ contains
        ! Check if H2O is out of range, but this check only makes sense
        ! if we have spectroscopy with an H2O dimension.
        if ((idx_l_H2O < 1) .or. (idx_l_H2O > size(gas%H2O) - 1)) then
-          call logger%error(fname, "idx_l_H2O out of range.")
+       !   call logger%error(fname, "idx_l_H2O out of range.")
           return
        end if
     end if
@@ -589,6 +577,7 @@ contains
          (gas%T(idx_lr_T, idx_l_p) - gas%T(idx_ll_T, idx_l_p))
     T_d_r = (T - gas%T(idx_rl_T, idx_r_p)) / &
          (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
+
 
     do i=1, size(wl)
 

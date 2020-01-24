@@ -904,6 +904,7 @@ contains
              allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
 
              do i=1, size(fini_string_array)
+                MCS%window(window_nr)%gas_prior_type(i) = ""
                 MCS%window(window_nr)%gases(i) = fini_string_array(i)
                 MCS%window(window_nr)%num_gases = MCS%window(window_nr)%num_gases + 1
              end do
@@ -1231,7 +1232,7 @@ contains
        ! Write the gas prior type string into the corresponding position in
        ! MCS%window
        MCS_gas_pos = MCS%window(i_win)%gas_index(gas_idx)
-       MCS%window(i_win)%gas_prior_type(MCS_gas_pos) = prior_strings(2)%chars()
+       MCS%window(i_win)%gas_prior_type(MCS_gas_pos) = prior_strings(2)
 
     end do
 

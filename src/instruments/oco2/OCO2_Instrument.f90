@@ -86,8 +86,8 @@ contains
           stop 1
        end if
 
-       n_fp = n_fp_frames(1)
-       n_frames = n_fp_frames(2)
+       n_fp = int(n_fp_frames(1))
+       n_frames = int(n_fp_frames(2))
     else if (radiance_o2_exists) then
        call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", n_fp_frames)
        if (size(n_fp_frames) /= 3) then
@@ -95,8 +95,8 @@ contains
           stop 1
        end if
 
-       n_fp = n_fp_frames(2)
-       n_frames = n_fp_frames(3)
+       n_fp = int(n_fp_frames(2))
+       n_frames = int(n_fp_frames(3))
     else
        call logger%fatal(fname, "Error in determining the frame/footprint file structure.")
        stop 1
@@ -112,27 +112,28 @@ contains
 
     ! Store the total number of soundings to be processed in the MCS. We need
     ! that later to allocate all those big arrays.
-    MCS%general%N_soundings = n_fp * n_frames
-    MCS%general%N_frame = n_frames
-    MCS%general%N_fp = n_fp
+    MCS%general%N_soundings = int(n_fp * n_frames)
+    MCS%general%N_frame = int(n_frames)
+    MCS%general%N_fp = int(n_fp)
 
     call get_HDF5_dset_dims(file_id, "/InstrumentHeader/measureable_signal_max_observed", dim_spec)
     ! OCO-2, we have three bands, but we grab the value from this data instead
-    MCS%general%N_bands = dim_spec(1)
+    MCS%general%N_bands = int(dim_spec(1))
 
     ! And we can grab the number of pixels per band individually
     allocate(MCS%general%N_spec(MCS%general%N_bands))
     MCS%general%N_spec(:) = 1
 
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_o2", dim_spec)
-    MCS%general%N_spec(1) = dim_spec(1)
+    MCS%general%N_spec(1) = int(dim_spec(1))
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_weak_co2", dim_spec)
-    MCS%general%N_spec(2) = dim_spec(1)
+    MCS%general%N_spec(2) = int(dim_spec(1))
     call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_strong_co2", dim_spec)
-    MCS%general%N_spec(3) = dim_spec(1)
+    MCS%general%N_spec(3) = int(dim_spec(1))
+    ! "dirty" hack for GeoCarb-type files
     if (MCS%general%N_bands == 4) then
        call get_HDF5_dset_dims(file_id, "/SoundingMeasurements/radiance_ch4", dim_spec)
-       MCS%general%N_spec(4) = dim_spec(1)
+       MCS%general%N_spec(4) = int(dim_spec(1))
     end if
 
 
@@ -236,7 +237,6 @@ contains
     integer(hsize_t) :: hs_offset(3), hs_count(3)
     integer(hsize_t) :: dim_mem(1)
     integer :: hdferr
-    integer(kind = OMP_lock_kind) :: lck
 
     ! Set dataset name according to the band we want
     if (band == 1) then
@@ -322,7 +322,6 @@ contains
     double precision, allocatable :: tmp_radiance(:)
     integer :: i_fr, i, funit
     logical :: radiance_OK
-    character(len=50) :: tmp_str
 
     allocate(radiance_l1b(N_spec))
     radiance_l1b(:) = 0.0d0
@@ -373,7 +372,6 @@ contains
     double precision, intent(in) :: maxms
     integer, intent(in) :: fp, band, idx_start, idx_end
 
-    integer(hsize_t), allocatable :: dims(:)
     integer :: i
 
     do i=1, size(noise)
@@ -598,13 +596,12 @@ contains
 
     integer(hid_t), intent(in) :: l1b_file_id
     integer, intent(in) :: band
-    double precision, dimension(:,:,:), allocatable, intent(out) :: stokes_coefs
+    double precision, allocatable, intent(out) :: stokes_coefs(:,:,:)
 
     character(len=*), parameter :: fname = "read_stokes_coefs(oco2)"
-    integer(hsize_t), dimension(:), allocatable :: dset_dims
-    double precision, dimension(:,:,:,:), allocatable :: tmp_array4d
-    double precision, dimension(:,:,:,:,:), allocatable :: tmp_array5d
-    integer :: i
+    integer(hsize_t), allocatable :: dset_dims(:)
+    double precision, allocatable :: tmp_array4d(:,:,:,:)
+    double precision, allocatable :: tmp_array5d(:,:,:,:,:)
 
     call logger%debug(fname, "Trying to allocate stokes coef. array.")
     allocate(stokes_coefs(4, MCS%general%N_fp, MCS%general%N_frame))

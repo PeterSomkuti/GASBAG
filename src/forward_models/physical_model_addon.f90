@@ -1572,16 +1572,12 @@ contains
     do i=1, size(prior_types)
 
        ! Nothing to do if this string is empty
-       if (prior_types(i) == "") cycle
-
+       if (trim(prior_types(i)) == "") cycle
 
        if (prior_types(i) == "SC4C2018") then
           ! Max Reuter / Oliver Schneising
           ! CH4 profiles as derived from a climatology file
-
           call logger%debug(fname, "Using Reuter/Schneising SC4C2018 model for CH4.")
-
-
 
        else
           ! If the prior type is not implemented, the user has made a mistake.
@@ -1591,7 +1587,7 @@ contains
           write(tmp_str, '(A,A)') "Sorry, the following prior VMR function " &
               // "is not implemented: ", prior_types(i)%chars()
           call logger%fatal(fname, trim(tmp_str))
-          stop 1
+          !stop 1
        end if
 
     end do

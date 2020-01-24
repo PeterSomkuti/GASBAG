@@ -51,8 +51,7 @@ contains
     character(len=*), parameter :: fname = "setup_XRTM"
 
     type(string) :: tmp_str
-    integer :: N, i, j
-    integer :: xrtm_error
+    integer :: i, j
     integer :: num_solvers
 
     success = .false.
@@ -197,7 +196,7 @@ contains
   end subroutine create_XRTM
 
 
-  subroutine solve_RT_problem_XRTM(window, SV, scn, n_stokes, s_start, s_stop, &
+  subroutine solve_RT_problem_XRTM(window, SV, scn, n_stokes, &
        radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, &
        xrtm_success)
 
@@ -205,8 +204,7 @@ contains
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
     integer, intent(in) :: n_stokes
-    integer, intent(in) :: s_start(:)
-    integer, intent(in) :: s_stop(:)
+
     double precision, intent(inout) :: radiance_calc_work_hi_stokes(:,:)
     double precision, allocatable, intent(inout) :: dI_dgas(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dsurf(:,:,:)
@@ -245,26 +243,11 @@ contains
     integer :: xrtm_n_derivs
     !
     integer :: xrtm_streams
-
-    integer, allocatable :: n_coef(:)
-    double precision, allocatable :: coef(:,:,:,:)
-    double precision, allocatable :: lcoef(:,:,:,:,:)
-
-    double precision, allocatable :: coef_left(:,:,:)
-    double precision, allocatable :: lcoef_left(:,:,:,:)
-    double precision, allocatable :: coef_right(:,:,:)
-    double precision, allocatable :: lcoef_right(:,:,:,:)
-
-    double precision, allocatable :: ltau(:,:,:)
-    double precision, allocatable :: lomega(:,:,:)
-    double precision, allocatable :: lsurf(:,:)
-
-    double precision, allocatable :: aero_fac(:)
     !
-    double precision :: cpu_start, cpu_stop
-    integer :: i,j,k,l
-    integer :: aer_idx
-    integer :: deriv_counter
+    integer, allocatable :: n_coef(:)
+    !
+    integer :: j
+
 
     ! Initialize success variable
     xrtm_success = .false.
@@ -348,7 +331,6 @@ contains
        ! option is only required for RT solvers that
        ! require some notion of "streams", such as
        ! BVP.
-       !
        ! --------------------------------------
 
        if ( &
@@ -836,30 +818,26 @@ contains
     character(len=999) :: fmt_str
     integer :: xrtm_error
 
-    integer :: num_solvers
-    integer, allocatable :: separate_solvers(:)
-
     double precision :: out_thetas(1)
     double precision :: out_phis(1,1)
-    double precision, allocatable :: ray_coef(:,:)
     integer :: out_levels(1)
     !integer :: n_coef(n_layers)
     double precision :: single_ltau(n_derivs, n_layers)
     double precision :: single_lomega(n_derivs, n_layers)
     double precision :: single_lsurf(n_derivs)
 
-    double precision :: tau(n_layers), omega(n_layers), omega_tmp(n_layers)
+    double precision :: tau(n_layers), omega(n_layers)
     double precision, allocatable :: this_coef(:,:,:), this_lcoef(:,:,:,:)
 
     double precision :: wl_fac
     integer :: N_spec
-    integer :: max_coefs
-    integer :: i,j,k,l,m,q
+    integer :: i,l,m,q
 
     integer :: funit
 
     double precision :: cpu_start, cpu_end
-
+    double precision :: cpu_start2, cpu_end2
+    double precision :: pure_XRTM_duration
     success = .false.
 
     ! Make some sanity checks for correct usage of this function.
@@ -940,8 +918,6 @@ contains
     allocate(I_m(n_stokes, 1, 1, 1))
     allocate(K_p(n_stokes, 1, 1, n_derivs, 1))
     allocate(K_m(n_stokes, 1, 1, n_derivs, 1))
-
-
 
     ! Some general set-up's that are not expected to change, and can
     ! be safely hard-coded.
@@ -1042,6 +1018,7 @@ contains
     ! to make sure is that the array positions between optical paramaters make sense.
     ! -----------------------------------------------------------------------------------
 
+    pure_XRTM_duration = 0.0d0
     call cpu_time(cpu_start)
     do i=1, N_spec
 
@@ -1117,13 +1094,6 @@ contains
           return
        end if
 
-       ! Plug in surface property
-       call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
-       if (xrtm_error /= 0) then
-          call logger%error(fname, "Error calling xrtm_set_kernel_ampfac_f90")
-          return
-       end if
-
        ! Plug in optical depth
        call xrtm_set_ltau_n_f90(xrtm, tau, xrtm_error)
        if (xrtm_error /= 0) then
@@ -1132,7 +1102,6 @@ contains
        end if
 
        ! Plug in the layer optical depth derivatives
-
        call xrtm_set_ltau_l_nn_f90(xrtm, single_ltau, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_ltau_nn_f90")
@@ -1147,22 +1116,30 @@ contains
        end if
 
        ! Plug in the single-scatter albedo derivatives
-
        call xrtm_set_omega_l_nn_f90(xrtm, single_lomega, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_omega_l_nn_f90")
           return
        end if
 
+       ! Plug in the phase function expansion moments
        call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_n_f90")
           return
        end if
 
+       ! Plug in the phase function expansion moment derivatives
        call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
+          return
+       end if
+
+       ! Plug in surface property
+       call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
+       if (xrtm_error /= 0) then
+          call logger%error(fname, "Error calling xrtm_set_kernel_ampfac_f90")
           return
        end if
 
@@ -1188,6 +1165,8 @@ contains
        ! of both, summed.
 
        do l=1, size(xrtm_separate_solvers)
+
+          call cpu_time(cpu_start2)
           ! Calculate TOA radiance!
           call xrtm_radiance_f90(xrtm, & ! XRTM object
                xrtm_separate_solvers(l), & ! XRTM solver bitmask
@@ -1198,6 +1177,9 @@ contains
                K_p, & ! Upward jacobians
                K_m, & ! Downward jacobians
                xrtm_error)
+          call cpu_time(cpu_end2)
+
+          pure_XRTM_duration = pure_XRTM_duration + cpu_end2 - cpu_start2
 
           if (xrtm_error /= 0) then
              call logger%error(fname, "Error calling xrtm_radiance_f90")
@@ -1301,6 +1283,9 @@ contains
     end do
 
     call cpu_time(cpu_end)
+
+    write(tmp_str, '(A, F7.3, A)') "Pure XRTM radiance calculations: ", pure_XRTM_duration, " sec"
+    call logger%debug(fname, trim(tmp_str))
     write(tmp_str, '(A, F7.3, A)') "XRTM monochromatic calculations: ", cpu_end - cpu_start, " sec"
     call logger%debug(fname, trim(tmp_str))
 

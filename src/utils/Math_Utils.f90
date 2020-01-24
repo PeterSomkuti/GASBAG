@@ -307,8 +307,9 @@ contains
     integer :: N_wl
 
     integer :: N_this_wl
-    integer :: idx_pix, idx_hires_ILS_min, idx_hires_ILS_max
-    double precision :: ILS_delta_min, ILS_delta_max
+    integer :: idx_pix
+    integer :: idx_hires_ILS_min
+    integer :: idx_hires_ILS_max
 
     double precision, allocatable :: wl_kernels_absolute(:,:)
     double precision, allocatable :: ILS_upsampled(:)
@@ -352,6 +353,9 @@ contains
        return
     end if
 
+    ! Note the ILS boundary in wavelength space. wl_kernels spans usually
+    ! some range from -lambda to +lambda. We thus bring them onto an absolute
+    ! wavelength grid, dependent on the detector pixel position.
     allocate(wl_kernels_absolute, mold=wl_kernels)
     do idx_pix = 1, N_pix
         wl_kernels_absolute(:, idx_pix) = wl_kernels(:, idx_pix) + wl_output(idx_pix)
@@ -364,11 +368,6 @@ contains
 
     allocate(ILS_upsampled(N_wl))
     do idx_pix=1, N_pix
-
-       ! Note the ILS boundary in wavelength space. wl_kernels spans usually
-       ! some range from -lambda to +lambda.
-       !ILS_delta_min = wl_kernels_absolute(1, idx_pix) !wl_output(idx_pix) + wl_kernels(1, idx_pix)
-       !ILS_delta_max = wl_output(idx_pix) + wl_kernels(N_ils_pix, idx_pix)
 
        idx_hires_ILS_min = searchsorted_dp(wl_input, wl_kernels_absolute(1, idx_pix))
        ! When doing the binary search for the upper WL index, we can safely
@@ -397,8 +396,8 @@ contains
             wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(1:N_this_wl))
 
        ! Use BLAS for dot product and sum - gives a nice speed-up!
-       output(idx_pix) = ddot(N_this_wl, &
-            ILS_upsampled(1:N_this_wl), 1, &
+       output(idx_pix) = ddot( &
+            N_this_wl, ILS_upsampled(1:N_this_wl), 1, &
             input(idx_hires_ILS_min:idx_hires_ILS_max), 1) &
             / dasum(N_this_wl, ILS_upsampled(1:N_this_wl), 1)
 

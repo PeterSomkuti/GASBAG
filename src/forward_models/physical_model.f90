@@ -172,16 +172,12 @@ contains
     integer(hid_t) :: result_gid
     ! Does a spike/bad_sample data field exist?
     logical :: spike_exists, bad_sample_exists, result_exists, met_sounding_exists
-    ! Fixed dimensions for the arrays to be saved into the output HDF file
-    integer(hsize_t) :: out_dims2d(2), out_dims3d(3)
     ! Dimensions for the read-in of MET/L1b data
     integer(hsize_t), allocatable :: dset_dims(:)
     ! HDF error variable
     integer :: hdferr
     ! Holders for temporary strings and dataset names to grab L1b/MET data
-    character(len=999) :: dset_name, tmp_str, group_name
-    ! String needed for converting to lower-case
-    type(string) :: lower_str
+    character(len=999) :: dset_name, tmp_str
     ! Name of this function for debugging
     character(len=*), parameter :: fname = "physical_retrieval"
     ! What are the dimensions of the ABSCO file used?
@@ -611,8 +607,8 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       frame_start = 685
-       frame_stop = 800
+       !frame_start = 685
+       !frame_stop = 800
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -1725,6 +1721,7 @@ contains
                 call calculate_gas_tau( &
                      .true., & ! We are using pre-gridded spectroscopy!
                      is_H2O, & ! Is this gas H2O?
+                     num_active_levels, & ! Number of active levels
                      scn%op%wl, & ! The high-resolution wavelength grid
                      this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                      scn%atm%psurf, & ! Surface pressure
@@ -1746,6 +1743,7 @@ contains
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
+                  num_active_levels, & ! Number of active levels
                   scn%op%wl, & ! The high-resolution wavelength grid
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   scn%atm%psurf, & ! Surface pressure
@@ -1946,8 +1944,6 @@ contains
                SV, & ! The statevector
                scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate
-               s_start, & ! sub-column start indices
-               s_stop, & ! sub_column stop indices
                radiance_calc_work_hi_stokes, & ! Results
                dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, & ! Jacobian results
                xrtm_success &

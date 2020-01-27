@@ -135,6 +135,8 @@ module physical_model_mod
   double precision, allocatable :: solar_continuum_from_hdf(:,:)
   integer :: N_solar
 
+  !> On request, we can pre-load ALL spectra from the L1B file
+  double precision, dimension(:,:,:), allocatable :: all_L1B_radiances
   !> Final modelled radiances (pixel, footprint, frame)
   double precision, dimension(:,:,:), allocatable :: final_radiance
   !> Measured radiances (pixel, footprint, frame)
@@ -414,6 +416,13 @@ contains
        ! but why not make use of per-band data (like for OCO-2).
        select type(my_instrument)
        type is (oco2_instrument)
+
+          ! If requested - read ALL spectra from the L1B file!
+          if (CS%input%preload_spectra) then
+             call logger%info(fname, "Reading in all radiances into memory.")
+             if (allocated(all_L1B_radiances)) deallocate(all_L1B_radiances)
+             call my_instrument%read_all_spectra(l1b_file_id, band, all_L1B_radiances)
+          end if
 
           ! Read in the measurement geometries - per band
           call my_instrument%read_sounding_geometry(l1b_file_id, band, &
@@ -1065,10 +1074,15 @@ contains
     select type(my_instrument)
     type is (oco2_instrument)
 
-       ! Read the L1B spectrum for this one measurement in normal mode!
-       call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
-            CS%general%N_spec(band), radiance_l1b)
-
+       if (CS%input%preload_spectra) then
+          ! We have all radiances in memory, just grab it
+          allocate(radiance_l1b(CS%general%N_spec(band)))
+          radiance_l1b(:) = all_L1B_radiances(:, i_fp, i_fr)
+       else
+          ! Read the L1B spectrum for this one measurement in normal mode!
+          call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
+               CS%general%N_spec(band), radiance_l1b)
+       end if
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
             scn%date, success_time_convert)

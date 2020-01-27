@@ -39,6 +39,7 @@ module oco2_mod
      procedure, nopass :: read_l1b_dispersion
      procedure, nopass :: read_l1b_snr_coef
      procedure, nopass :: read_ils_data
+     procedure, nopass :: read_all_spectra
      procedure, nopass :: read_one_spectrum
      procedure, nopass :: read_sounding_geometry
      procedure, nopass :: read_sounding_location
@@ -211,6 +212,42 @@ contains
     end do
 
   end subroutine calculate_dispersion
+
+
+  subroutine read_all_spectra(l1b_file_id, band, spectra)
+
+    implicit none
+
+    integer(hid_t), intent(in) :: l1b_file_id
+    integer, intent(in) :: band
+    double precision, allocatable, intent(inout) :: spectra(:,:,:)
+
+    character(len=999) :: dset_name
+    integer(hid_t) :: dset_id, dspace_id
+    integer(hid_t), allocatable :: dset_dims(:)
+
+    character(len=*), parameter :: fname = "read_all_spectra(oco2)"
+
+    ! Set dataset name according to the band we want
+    if (band == 1) then
+       dset_name = "/SoundingMeasurements/radiance_o2"
+    else if (band == 2) then
+       dset_name = "/SoundingMeasurements/radiance_weak_co2"
+    else if (band == 3) then
+       dset_name = "/SoundingMeasurements/radiance_strong_co2"
+    else if (band == 4) then
+       dset_name = "/SoundingMeasurements/radiance_ch4"
+    else
+       call logger%fatal(fname, "Band number must be between 1 and 3!")
+       stop 1
+    end if
+
+    call logger%info(fname, "Reading ALL spectra from L1B from field: " // trim(dset_name))
+    call read_DP_hdf_dataset(l1b_file_id, dset_name, spectra, dset_dims)
+
+  end subroutine read_all_spectra
+
+
 
   !> @brief Read one single spectrum from the L1B data
   !> @param l1b_file_id HDF File ID of the L1B file

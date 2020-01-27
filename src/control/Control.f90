@@ -214,6 +214,8 @@ module control_mod
      integer(hid_t) :: met_file_id
      !> Name of the instrument
      type(string) :: instrument_name
+     !> Whether to preload spectra or not
+     logical :: preload_spectra = .false.
   end type CS_input_t
 
   type :: CS_output_t
@@ -525,6 +527,12 @@ contains
        CS%input%l1b_filename = trim(fini_char)
     end if
 
+    call fini_extract(fini, 'input', 'preload_spectra', .false., fini_char)
+    fini_string = fini_char
+    if (fini_string /= "") then
+       CS%input%preload_spectra = string_to_bool(fini_string)
+    end if
+
     ! Do the same for the MET file
     ! If doing physical retrieval and downlooking mode, we MUST have the MET file
     if ((CS%algorithm%using_physical .eqv. .true.) &
@@ -552,6 +560,7 @@ contains
        CS%input%met_filename = trim(fini_char)
 
     end if
+
 
     ! ----------------------------------------------------------------------
 

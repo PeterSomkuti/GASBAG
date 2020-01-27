@@ -92,6 +92,8 @@ contains
     valid_options(4,1) = "l1b_file"
     ! MET file location
     valid_options(4,2) = "met_file"
+    ! Preload L1B spectra?
+    valid_options(4,3) = "preload_spectra"
 
     ! Output file options
     valid_sections(5)  = "output"

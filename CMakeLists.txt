@@ -9,10 +9,6 @@ project(GASBAG)
 set(PROJECT_DESCRIPTION "Generic Algorithm for Single Band Acquisition of Gases - GASBAG")
 enable_language(Fortran C)
 
-
-# This here lets us use the current GIT revision as part of
-# the make process (TODO!!)
-
 execute_process(
   COMMAND git rev-parse --abbrev-ref HEAD
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -178,7 +174,7 @@ set_source_files_properties(
 set_source_files_properties(
   ${xrtm_sources}
   PROPERTIES
-  COMPILE_FLAGS "-O3 -mtune=native -march=native"
+  COMPILE_FLAGS "-Ofast -mtune=native -march=native -ftree-vectorize"
   )
 
 # Our code is definitely in the need of having warnings

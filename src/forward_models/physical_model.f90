@@ -640,8 +640,14 @@ contains
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
-             this_converged = physical_FM(my_instrument, i_fp, i_fr, i_win, band, &
-                  this_iterations)
+             this_converged = physical_FM( &
+                  my_instrument, &
+                  i_fp, &
+                  i_fr, &
+                  i_win, &
+                  band, &
+                  this_iterations &
+                  )
              ! ---------------------------------------------------------------------
 
 #ifdef _OPENMP

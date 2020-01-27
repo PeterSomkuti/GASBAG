@@ -40,7 +40,7 @@ module physical_model_mod
 
   ! Third-party modules
   use logger_mod, only: logger => master_logger
-  use mod_datetime
+  use datetime_module
   use doppler_solar_module
   use stringifor
 
@@ -669,9 +669,10 @@ contains
 #else
              call cpu_time(cpu_time_stop)
 #endif
-
-             ! Store the processing time in seconds
+             ! Calculate the retrieval duration time
              results%processing_time(i_fp, i_fr) = cpu_time_stop - cpu_time_start
+
+
 
              ! Increase the rerival count tracker and compute the average processing
              ! time per retrieval.
@@ -683,7 +684,7 @@ contains
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                      dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
-                     (cpu_time_stop - cpu_time_start), " sec. - Converged: ", &
+                     results%processing_time(i_fp, i_fr), " sec. - Converged: ", &
                      this_converged, ", # Iterations: ", this_iterations
 
                 call logger%info(fname, trim(tmp_str))

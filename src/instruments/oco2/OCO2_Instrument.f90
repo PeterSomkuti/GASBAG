@@ -286,6 +286,9 @@ contains
     ! only one thread at a time is reading in a spectrum.
     ! NOTE: HDF5 (without the parallel) is not designed for concurrent access,
     ! so we MUST restrict reading from a file to one thread/process at a time.
+    ! HDF5 (at the moment) cannot be built in thread-safe mode with Fortran
+    ! support, so we have to lock OpenMP down for the duration of these
+    ! calls. This produces a fair amount of overhead!
 
 !$OMP CRITICAL
     call h5dopen_f(l1b_file_id, dset_name, dset_id, hdferr)

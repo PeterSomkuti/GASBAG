@@ -1,7 +1,7 @@
 module statevector_mod
 
   use logger_mod, only: logger => master_logger
-  use control_mod, only: MCS, MAX_GASES
+  use control_mod, only: CS_window_t, CS_gas_t, CS_aerosol_t, MAX_GASES
   use stringifor, only: string
 
   type statevector
@@ -119,10 +119,14 @@ contains
   end subroutine clear_SV
 
 
-  subroutine parse_and_initialize_SV(i_win, num_levels, SV)
+  subroutine parse_and_initialize_SV(i_win, num_levels, CS_win, CS_gas, CS_aerosol, SV)
 
     implicit none
-    integer, intent(in) :: i_win, num_levels
+    integer, intent(in) :: i_win
+    integer, intent(in) :: num_levels
+    type(CS_window_t) :: CS_win
+    type(CS_gas_t) :: CS_gas(:)
+    type(CS_aerosol_t) :: CS_aerosol(:)
     type(statevector), intent(inout) :: SV
 
     character(len=*), parameter :: fname = "parse_and_initialize_statevector"
@@ -130,7 +134,6 @@ contains
     type(string), allocatable :: split_string(:)
     type(string), allocatable :: split_sv_string(:)
     type(string), allocatable :: split_svval_string(:)
-    type(string), allocatable :: split_aero_string(:)
     type(string) :: check_sv_name
     type(string) :: check_sv_retr_type
     character(len=999) :: tmp_str
@@ -167,7 +170,7 @@ contains
 
     ! How many SV elements do we have per gas? We can retrieve
     ! multiple sub-column VMRs for our gases.
-    allocate(gas_retr_count(MCS%window(i_win)%num_gases))
+    allocate(gas_retr_count(CS_win%num_gases))
     gas_retr_count(:) = 0
 
     ! These are the known state vector elements - only these will be properly
@@ -186,16 +189,16 @@ contains
     ! Add gases as 'known' state vector elements. CAUTION! There is
     ! obviously a danger if someone decides to name their gas "psurf".
     ! Maybe I should add a list of protected names that can't be used.
-    do i=1, MCS%window(i_win)%num_gases
-       known_SV(last_known+i) = MCS%window(i_win)%gases(i)
+    do i=1, CS_win%num_gases
+       known_SV(last_known+i) = CS_win%gases(i)
        ! This flags the known SV as one of a gas type
        is_gas_SV(last_known+i) = .true.
     end do
-    last_known = last_known + MCS%window(i_win)%num_gases
+    last_known = last_known + CS_win%num_gases
 
     ! Do the same for aerosols
-    do i=1, MCS%window(i_win)%num_aerosols
-       known_SV(last_known + i) = MCS%window(i_win)%aerosol(i)
+    do i=1, CS_win%num_aerosols
+       known_SV(last_known + i) = CS_win%aerosol(i)
        is_aerosol_SV(last_known + i) = .true.
     end do
 
@@ -204,7 +207,7 @@ contains
     known_SV_max = last_known+i
 
     ! Split the state vector string from the config file
-    call MCS%window(i_win)%SV_string%split(tokens=split_string, sep=' ')
+    call CS_win%SV_string%split(tokens=split_string, sep=' ')
 
     do i=1, size(split_string)
        SV_found = .false.
@@ -256,12 +259,12 @@ contains
 
     ! Again, we can do these only if the arrays are allocated,
     ! which they aren't if no gases are defined..
-    if (MCS%window(i_win)%num_gases > 0) then
-       MCS%window(i_win)%gas_retrieved(:) = .false.
-       MCS%window(i_win)%gas_retrieve_profile(:) = .false.
-       MCS%window(i_win)%gas_retrieve_scale(:) = .false.
-       MCS%window(i_win)%gas_retrieve_scale_start(:,:) = -1.0d0
-       MCS%window(i_win)%gas_retrieve_scale_stop(:,:) = -1.0d0
+    if (CS_win%num_gases > 0) then
+       CS_win%gas_retrieved(:) = .false.
+       CS_win%gas_retrieve_profile(:) = .false.
+       CS_win%gas_retrieve_scale(:) = .false.
+       CS_win%gas_retrieve_scale_start(:,:) = -1.0d0
+       CS_win%gas_retrieve_scale_stop(:,:) = -1.0d0
     end if
 
     do i=1, size(split_string)
@@ -270,13 +273,13 @@ contains
        if (split_string(i)%lower() == "albedo") then
 
           ! Albedo order needs to be >= 0
-          if (MCS%window(i_win)%albedo_order < 0) then
+          if (CS_win%albedo_order < 0) then
              call logger%fatal(fname, "We are retrieving albedo, but the albedo order " &
                   // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
              stop 1
           else
              ! Albedo order 0 means simple factor, order 1 is with slope etc.
-             num_albedo_parameters = MCS%window(i_win)%albedo_order + 1
+             num_albedo_parameters = CS_win%albedo_order + 1
           end if
 
        end if
@@ -285,28 +288,28 @@ contains
        ! We are retrieving DISPERSION!
        if (split_string(i)%lower() == "dispersion") then
           ! Dispersion order needs to be > 0
-          if (MCS%window(i_win)%dispersion_order < 0) then
+          if (CS_win%dispersion_order < 0) then
              call logger%fatal(fname, "We are retrieving dispersion, but the dispersion order " &
                   // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
              stop 1
           else
              ! Dispersion order 1 means shift, 2 is stretch etc., this is not quite
              ! consistent with the albedo order notation, but whatever.
-             num_dispersion_parameters = MCS%window(i_win)%dispersion_order + 1
+             num_dispersion_parameters = CS_win%dispersion_order + 1
 
              ! We MUST have at least the same number of dispersion perturbation
              ! elements.
-             if (.not. allocated(MCS%window(i_win)%dispersion_pert)) then
+             if (.not. allocated(CS_win%dispersion_pert)) then
                 call logger%fatal(fname, "Dispersion perturbation not in config file!")
                 stop 1
              end if
 
-             if (num_dispersion_parameters > size(MCS%window(i_win)%dispersion_pert)) then
+             if (num_dispersion_parameters > size(CS_win%dispersion_pert)) then
                 call logger%fatal(fname, "Not enough disperison perturbation values!")
                 stop 1
              end if
 
-             if (num_dispersion_parameters > size(MCS%window(i_win)%dispersion_cov)) then
+             if (num_dispersion_parameters > size(CS_win%dispersion_cov)) then
                 call logger%fatal(fname, "Not enough disperison covariance values!")
                 stop 1
              end if
@@ -316,26 +319,26 @@ contains
        ! We are retrieving ILS stretch!
        if (split_string(i)%lower() == "ils_stretch") then
           ! Stretch order needs to be > 0
-          if (MCS%window(i_win)%ils_stretch_order < 0) then
+          if (CS_win%ils_stretch_order < 0) then
              call logger%fatal(fname, "We are retrieving ILS stretch, but the ILS stretch order " &
                   // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
              stop 1
           else
-             num_ils_stretch_parameters = MCS%window(i_win)%ils_stretch_order + 1
+             num_ils_stretch_parameters = CS_win%ils_stretch_order + 1
 
              ! We MUST have at least the same number of dispersion perturbation
              ! elements.
-             if (.not. allocated(MCS%window(i_win)%ils_stretch_pert)) then
+             if (.not. allocated(CS_win%ils_stretch_pert)) then
                 call logger%fatal(fname, "ILS perturbation not in config file!")
                 stop 1
              end if
 
-             if (num_ils_stretch_parameters > size(MCS%window(i_win)%ils_stretch_pert)) then
+             if (num_ils_stretch_parameters > size(CS_win%ils_stretch_pert)) then
                 call logger%fatal(fname, "Not enough ILS perturbation values!")
                 stop 1
              end if
 
-             if (num_ils_stretch_parameters > size(MCS%window(i_win)%ils_stretch_cov)) then
+             if (num_ils_stretch_parameters > size(CS_win%ils_stretch_cov)) then
                 call logger%fatal(fname, "Not enough ILS covariance values!")
                 stop 1
              end if
@@ -373,7 +376,7 @@ contains
           ! Surface pressure only makes sense if we have gases defined
           ! in our current microwindow.
 
-          if (MCS%window(i_win)%num_gases == 0) then
+          if (CS_win%num_gases == 0) then
              call logger%fatal(fname, "Sorry, you must have at least one gas in the window " &
                   // "to retrieve surface pressure!")
              stop 1
@@ -405,14 +408,14 @@ contains
              ! Yes, it is - now we look which particular gas this is, and set the
              ! retrieved-flag accordingly.
 
-             do k=1, MCS%window(i_win)%num_gases
-                gas_index = MCS%window(i_win)%gas_index(k)
+             do k=1, CS_win%num_gases
+                gas_index = CS_win%gas_index(k)
                 ! If this gas is not used in this window, skip!
-                if (.not. MCS%gas(gas_index)%used) cycle
+                if (.not. CS_gas(gas_index)%used) cycle
                 ! Otherwise, loop through the gases we have in the window
                 ! and set them as 'retrieved'
-                if (MCS%window(i_win)%gases(k) == check_sv_name) then
-                   MCS%window(i_win)%gas_retrieved(k) = .true.
+                if (CS_win%gases(k) == check_sv_name) then
+                   CS_win%gas_retrieved(k) = .true.
 
                    ! Depending on the type, we must set the profile/scale retrieval
                    ! flags accordingly. The default setting is a profile retrieval.
@@ -420,7 +423,7 @@ contains
                       write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_sv_name%chars(), &
                            " as a full profile."
                       call logger%debug(fname, trim(tmp_str))
-                      MCS%window(i_win)%gas_retrieve_profile(k) = .true.
+                      CS_win%gas_retrieve_profile(k) = .true.
                    else if (check_sv_retr_type == "scale") then
                       write(tmp_str, '(A, A, A)') "We are retrieving gas ", check_sv_name%chars(), &
                            " as scale factor(s)."
@@ -428,7 +431,7 @@ contains
                       ! Increment gas retrieval counter
                       gas_retr_count(k) = gas_retr_count(k) + 1
 
-                      MCS%window(i_win)%gas_retrieve_scale(k) = .true.
+                      CS_win%gas_retrieve_scale(k) = .true.
                       call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
 
                       if (size(split_svval_string) /= 3) then
@@ -438,22 +441,22 @@ contains
 
                       ! Stick the gas scalar start and end psurf factors into the MCS
                       write(tmp_str, *) split_svval_string(1)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k))
+                      read(tmp_str, *) CS_win%gas_retrieve_scale_start(k, gas_retr_count(k))
                       write(tmp_str, *) split_svval_string(2)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k))
+                      read(tmp_str, *) CS_win%gas_retrieve_scale_stop(k, gas_retr_count(k))
                       write(tmp_str, *) split_svval_string(3)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%gas_retrieve_scale_cov(k, gas_retr_count(k))
+                      read(tmp_str, *) CS_win%gas_retrieve_scale_cov(k, gas_retr_count(k))
 
                       ! Of course the values cannot be outside of the interval [0,1]
-                      if ((MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k)) < 0.0d0) .or. &
-                           (MCS%window(i_win)%gas_retrieve_scale_start(k, gas_retr_count(k)) > 1.0d0)) then
+                      if ((CS_win%gas_retrieve_scale_start(k, gas_retr_count(k)) < 0.0d0) .or. &
+                           (CS_win%gas_retrieve_scale_start(k, gas_retr_count(k)) > 1.0d0)) then
                          call logger%fatal(fname, "Sorry, scalar retrieval boundary needs to be [0,1]!")
                          call logger%fatal(fname, split_string(i)%chars())
                          stop 1
                       end if
 
-                      if ((MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k)) < 0.0d0) .or. &
-                           (MCS%window(i_win)%gas_retrieve_scale_stop(k, gas_retr_count(k)) > 1.0d0)) then
+                      if ((CS_win%gas_retrieve_scale_stop(k, gas_retr_count(k)) < 0.0d0) .or. &
+                           (CS_win%gas_retrieve_scale_stop(k, gas_retr_count(k)) > 1.0d0)) then
                          call logger%fatal(fname, "Sorry, scalar retrieval boundary needs to be [0,1]!")
                          call logger%fatal(fname, split_string(i)%chars())
                          stop 1
@@ -473,13 +476,13 @@ contains
           ! Is this a known SV element, and it it related to an aerosol?
           if ((check_sv_name == known_SV(j)) .and. (is_aerosol_SV(j))) then
 
-             do k=1, MCS%window(i_win)%num_aerosols
-                aero_index = MCS%window(i_win)%aerosol_index(k)
+             do k=1, CS_win%num_aerosols
+                aero_index = CS_win%aerosol_index(k)
 
                 ! If this aerosol isn't used, then simply skip
-                if (.not. MCS%aerosol(aero_index)%used) cycle
+                if (.not. CS_aerosol(aero_index)%used) cycle
 
-                if (MCS%window(i_win)%aerosol(k) == check_sv_name) then
+                if (CS_win%aerosol(k) == check_sv_name) then
 
                    if ((check_sv_retr_type == 'aod') .or. &
                         (check_sv_retr_type == 'aod-log')) then
@@ -488,12 +491,12 @@ contains
                            check_sv_name%chars()
                       call logger%debug(fname, trim(tmp_str))
 
-                      MCS%window(i_win)%aerosol_retrieve_aod(k) = .true.
+                      CS_win%aerosol_retrieve_aod(k) = .true.
                       num_aerosol_aod_parameters = num_aerosol_aod_parameters + 1
                       
                       if (check_sv_retr_type == 'aod-log') then
                          call logger%debug(fname, ".. in log-space.")
-                         MCS%window(i_win)%aerosol_retrieve_aod_log(k) = .true.
+                         CS_win%aerosol_retrieve_aod_log(k) = .true.
                       end if
 
                       call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
@@ -504,9 +507,9 @@ contains
                       end if
 
                       write(tmp_str, *) split_svval_string(1)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%aerosol_prior_aod(k)
+                      read(tmp_str, *) CS_win%aerosol_prior_aod(k)
                       write(tmp_str, *) split_svval_string(2)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%aerosol_aod_cov(k)
+                      read(tmp_str, *) CS_win%aerosol_aod_cov(k)
 
                    else if ((check_sv_retr_type == 'height') .or. &
                         (check_sv_retr_type == 'height-log')) then
@@ -515,12 +518,12 @@ contains
                            check_sv_name%chars()
                       call logger%debug(fname, trim(tmp_str))
 
-                      MCS%window(i_win)%aerosol_retrieve_height(k) = .true.
+                      CS_win%aerosol_retrieve_height(k) = .true.
                       num_aerosol_height_parameters = num_aerosol_height_parameters + 1
 
                       if (check_sv_retr_type == 'height-log') then
                          call logger%debug(fname, ".. in log-space.")
-                         MCS%window(i_win)%aerosol_retrieve_height_log(k) = .true.
+                         CS_win%aerosol_retrieve_height_log(k) = .true.
                       end if
 
                       call split_sv_string(3)%split(tokens=split_svval_string, sep=':')
@@ -531,9 +534,9 @@ contains
                       end if
 
                       write(tmp_str, *) split_svval_string(1)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%aerosol_prior_height(k)
+                      read(tmp_str, *) CS_win%aerosol_prior_height(k)
                       write(tmp_str, *) split_svval_string(2)%chars()
-                      read(tmp_str, *) MCS%window(i_win)%aerosol_height_cov(k)
+                      read(tmp_str, *) CS_win%aerosol_height_cov(k)
 
                    else
                       call logger%fatal(fname, "Aerosol state vector needs to be stated as " &
@@ -558,7 +561,7 @@ contains
     ! number of elements for each type.
 
     call initialize_statevector( &
-         i_win, &
+         CS_win, &
          num_levels, &
          SV, &
          num_albedo_parameters, &
@@ -579,7 +582,7 @@ contains
 
 
 
-  subroutine initialize_statevector(i_win, num_levels, sv, &
+  subroutine initialize_statevector(CS_win, num_levels, sv, &
        count_albedo, count_sif, count_dispersion, count_psurf, &
        count_solar_shift, count_solar_stretch, count_zlo, &
        count_temp, count_ils_stretch, count_aerosol_aod, &
@@ -587,7 +590,8 @@ contains
        gas_retr_count)
 
     implicit none
-    integer, intent(in) :: i_win, num_levels
+    type(CS_window_t), intent(in) :: CS_win
+    integer, intent(in) :: num_levels
     type(statevector), intent(inout) :: sv
     integer, intent(in) :: count_albedo, count_sif, &
          count_dispersion, count_psurf, count_solar_shift, &
@@ -761,8 +765,8 @@ contains
 
        cnt = 1
 
-       do i = 1, MCS%window(i_win)%num_aerosols
-          if (MCS%window(i_win)%aerosol_retrieve_aod(i)) then
+       do i = 1, CS_win%num_aerosols
+          if (CS_win%aerosol_retrieve_aod(i)) then
 
              sv_count = sv_count + 1
              sv%idx_aerosol_aod(i) = sv_count
@@ -789,8 +793,8 @@ contains
 
        cnt = 1
 
-       do i = 1, MCS%window(i_win)%num_aerosols
-          if (MCS%window(i_win)%aerosol_retrieve_height(i)) then
+       do i = 1, CS_win%num_aerosols
+          if (CS_win%aerosol_retrieve_height(i)) then
 
              sv_count = sv_count + 1
              sv%idx_aerosol_height(i) = sv_count
@@ -841,10 +845,10 @@ contains
        call logger%info(fname, trim(tmp_str))
 
        cnt = 1
-       do i = 1, MCS%window(i_win)%num_gases
-          if (MCS%window(i_win)%gas_retrieved(i)) then
+       do i = 1, CS_win%num_gases
+          if (CS_win%gas_retrieved(i)) then
 
-             if (MCS%window(i_win)%gas_retrieve_profile(i)) then
+             if (CS_win%gas_retrieve_profile(i)) then
                 do j = 1, num_levels
                    sv_count = sv_count + 1
                    sv%idx_gas(cnt, j) = sv_count
@@ -856,7 +860,7 @@ contains
              end if
 
 
-             if (MCS%window(i_win)%gas_retrieve_scale(i)) then
+             if (CS_win%gas_retrieve_scale(i)) then
                 ! Retrieving scale factor(s)? Set idx_gas to -1 first.
                 do j = 1, gas_retr_count(i)
                    ! Loop through the number of retrieved elements per
@@ -869,11 +873,11 @@ contains
                    sv%gas_idx_lookup(cnt) = i
 
                    sv%gas_retrieve_scale_start(cnt) = &
-                        MCS%window(i_win)%gas_retrieve_scale_start(i, j)
+                        CS_win%gas_retrieve_scale_start(i, j)
                    sv%gas_retrieve_scale_stop(cnt) = &
-                        MCS%window(i_win)%gas_retrieve_scale_stop(i, j)
+                        CS_win%gas_retrieve_scale_stop(i, j)
                    sv%gas_retrieve_scale_cov(cnt) = &
-                        MCS%window(i_win)%gas_retrieve_scale_cov(i, j)
+                        CS_win%gas_retrieve_scale_cov(i, j)
                    cnt = cnt + 1
                 end do
              end if

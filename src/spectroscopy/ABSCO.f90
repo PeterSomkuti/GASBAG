@@ -2,7 +2,7 @@ module absco_mod
 
   use file_utils_mod, only: read_DP_hdf_dataset, get_HDF5_dset_dims, check_hdf_error
   use math_utils_mod, only: searchsorted_dp
-  use control_mod, only: MCS, CS_gas
+  use control_mod, only: CS_gas_t
   use logger_mod, only: logger => master_logger
   use HDF5
 
@@ -14,7 +14,7 @@ contains
 
     implicit none
     character(len=*), intent(in) :: filename
-    type(CS_gas), intent(inout) :: gas
+    type(CS_gas_t), intent(inout) :: gas
     integer, intent(inout) :: absco_dims
     integer, intent(in) :: hitran_index
 

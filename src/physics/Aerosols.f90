@@ -8,7 +8,7 @@ module aerosols_mod
   ! User modules
   use scene_mod
   use file_utils_mod, only: read_mom_file, read_mie_file
-  use control_mod, only: MCS, CS_aerosol
+  use control_mod, only: CS_aerosol_t
   use math_utils_mod
   use statevector_mod
 
@@ -71,7 +71,7 @@ contains
     ! coefficients etc. into the various arrays.
 
     implicit none
-    type(CS_aerosol), intent(inout) :: aerosol
+    type(CS_aerosol_t), intent(inout) :: aerosol
     logical :: success
 
     ! Function name
@@ -125,10 +125,12 @@ contains
   !> @brief Initialize the required aerosol data
   !> @param scn Scene object
   !> @param i_win Retrieval window index
-  subroutine aerosol_init(scn, i_win)
+  subroutine aerosol_init(scn, i_win, CS_win, CS_aerosol)
 
     type(scene), intent(inout) :: scn
     integer, intent(in) :: i_win
+    type(CS_window_t), intent(in) :: CS_win
+    type(CS_aerosol_t), intent(inout) :: CS_aerosol(:)
     ! Local
     character(len=*), parameter :: fname = "aerosol_init"
     character(len=999) :: tmp_str
@@ -167,14 +169,14 @@ contains
 
     do j = 1, scn%num_aerosols
 
-       do i = 1, size(MCS%aerosol)
+       do i = 1, size(CS_aerosol)
 
-          if (MCS%window(i_win)%aerosol(j) /= MCS%aerosol(i)%name) cycle
+          if (CS_win%aerosol(j) /= CS_aerosol(i)%name) cycle
 
 
           ! Find out which wavelength regions of the
           ! aerosol files are needed for this band
-          idx_l = minloc(abs(MCS%aerosol(i)%wavelengths(:) - scn%op%wl(1)), 1)
+          idx_l = minloc(abs(CS_aerosol(i)%wavelengths(:) - scn%op%wl(1)), 1)
           idx_r = idx_l + 1
 
           ! Store these wavelength indices for later use
@@ -182,7 +184,7 @@ contains
           scn%op%aer_wl_idx_r(j) = idx_r
 
           ! Now check the values against the available data
-          if (idx_r > size(MCS%aerosol(i)%wavelengths)) then
+          if (idx_r > size(CS_aerosol(i)%wavelengths)) then
              call logger%fatal(fname, "Problem initializing aerosols!")
              write(tmp_str, '(A, F15.5, A, F15.5)') "First wavelength of band at ", &
                   scn%op%wl(1), " is closest to the highest-wavelength " &
@@ -192,8 +194,8 @@ contains
              stop 1
           end if
 
-          if (scn%max_pfmom < MCS%aerosol(i)%max_n_coef) then
-             scn%max_pfmom = MCS%aerosol(i)%max_n_coef
+          if (scn%max_pfmom < CS_aerosol(i)%max_n_coef) then
+             scn%max_pfmom = CS_aerosol(i)%max_n_coef
           end if
 
           ! Store the relevant index that allows us to access the aerosol
@@ -208,19 +210,19 @@ contains
           !
           ! -------------------------------------------------
 
-          alpha_ext = -log(MCS%aerosol(i)%qext(idx_l) / MCS%aerosol(i)%qext(idx_r)) &
-               / log(MCS%aerosol(i)%wavelengths(idx_l) / MCS%aerosol(i)%wavelengths(idx_r))
+          alpha_ext = -log(CS_aerosol(i)%qext(idx_l) / CS_aerosol(i)%qext(idx_r)) &
+               / log(CS_aerosol(i)%wavelengths(idx_l) / CS_aerosol(i)%wavelengths(idx_r))
 
-          alpha_sca = -log(MCS%aerosol(i)%qsca(idx_l) / MCS%aerosol(i)%qsca(idx_r)) &
-               / log(MCS%aerosol(i)%wavelengths(idx_l) / MCS%aerosol(i)%wavelengths(idx_r))
+          alpha_sca = -log(CS_aerosol(i)%qsca(idx_l) / CS_aerosol(i)%qsca(idx_r)) &
+               / log(CS_aerosol(i)%wavelengths(idx_l) / CS_aerosol(i)%wavelengths(idx_r))
 
           do l=1, size(scn%op%wl)
 
-             scn%op%aer_ext_q(l, j) = MCS%aerosol(i)%qext(idx_l) &
-                  * (scn%op%wl(l) / MCS%aerosol(i)%wavelengths(idx_l)) ** (-alpha_ext)
+             scn%op%aer_ext_q(l, j) = CS_aerosol(i)%qext(idx_l) &
+                  * (scn%op%wl(l) / CS_aerosol(i)%wavelengths(idx_l)) ** (-alpha_ext)
 
-             scn%op%aer_sca_q(l, j) = MCS%aerosol(i)%qsca(idx_l) &
-                  * (scn%op%wl(l) / MCS%aerosol(i)%wavelengths(idx_l)) ** (-alpha_ext)
+             scn%op%aer_sca_q(l, j) = CS_aerosol(i)%qsca(idx_l) &
+                  * (scn%op%wl(l) / CS_aerosol(i)%wavelengths(idx_l)) ** (-alpha_ext)
 
              scn%op%aer_ssa(l, j) = scn%op%aer_sca_q(l, j) / scn%op%aer_ext_q(l, j)
 
@@ -254,11 +256,14 @@ contains
   end subroutine destroy_aerosol
 
 
-  subroutine insert_aerosols_in_scene(scn, scn_aer, SV, i_win)
+  subroutine insert_aerosols_in_scene(SV, CS_win, CS_aerosol, scn, scn_aer)
 
+    type(statevector), intent(in) :: SV
+    type(CS_window_t), intent(in) :: CS_win
+    type(CS_aerosol_t), intent(inout) :: CS_aerosol(:)
     type(scene), intent(inout) :: scn
     class(generic_aerosol), intent(inout) :: scn_aer(:)
-    type(statevector), intent(in) :: SV
+
     integer :: i_win
 
     character(len=*), parameter :: fname = "insert_aerosols_in_scene"
@@ -275,13 +280,13 @@ contains
 
        do i = 1, scn%num_aerosols
 
-          scn_aer(i)%name = MCS%window(i_win)%aerosol(i)
+          scn_aer(i)%name = CS_win%aerosol(i)
 
           ! Feed in the default values into the aerosol distribution objects
           ! Note that these values are supposed to be in real-space (no log!)
-          scn_aer(i)%AOD = MCS%aerosol(scn%op%aer_mcs_map(i))%default_aod
-          scn_aer(i)%height = MCS%aerosol(scn%op%aer_mcs_map(i))%default_height * scn%atm%psurf
-          scn_aer(i)%width = MCS%aerosol(scn%op%aer_mcs_map(i))%default_width
+          scn_aer(i)%AOD = CS_aerosol(scn%op%aer_mcs_map(i))%default_aod
+          scn_aer(i)%height = CS_aerosol(scn%op%aer_mcs_map(i))%default_height * scn%atm%psurf
+          scn_aer(i)%width = CS_aerosol(scn%op%aer_mcs_map(i))%default_width
 
        end do
 
@@ -289,7 +294,7 @@ contains
        ! with those coming from the state vector.
 
        do i = 1, SV%num_aerosol_aod
-          if (MCS%window(i_win)%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(i))) then
+          if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(i))) then
              ! AOD supplied in log-space
              scn_aer(SV%aerosol_aod_idx_lookup(i))%AOD = exp(SV%svsv(SV%idx_aerosol_aod(i)))
           else
@@ -299,7 +304,7 @@ contains
        end do
 
        do i = 1, SV%num_aerosol_height
-          if (MCS%window(i_win)%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(i))) then
+          if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(i))) then
              ! Aerosol height supplied in log-space
              scn_aer(SV%aerosol_height_idx_lookup(i))%height = exp(SV%svsv(SV%idx_aerosol_height(i)))
           else
@@ -313,7 +318,7 @@ contains
 
        ! This function distributes the aerosols according to the data given in
        ! the scn_aer object.
-       call aerosol_gauss_shape(scn, scn_aer)
+       call aerosol_gauss_shape(CS_aerosol, scn, scn_aer)
 
        ! Print some debug information on each aerosol used in the scene.
        do i = 1, scn%num_aerosols
@@ -334,8 +339,9 @@ contains
   end subroutine insert_aerosols_in_scene
 
 
-  subroutine aerosol_gauss_shape(scn, scn_aer)
+  subroutine aerosol_gauss_shape(CS_aerosol, scn, scn_aer)
 
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(scene), intent(inout) :: scn
     type(gauss_aerosol), intent(inout) :: scn_aer(:)
     
@@ -374,10 +380,10 @@ contains
           ! the scattering contribution to the extinction.
           if (wl == 1) then
              scn%op%aer_sca_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) &
-                  * MCS%aerosol(scn%op%aer_mcs_map(aer))%ssa(scn%op%aer_wl_idx_l(aer))
+                  * CS_aerosol(scn%op%aer_mcs_map(aer))%ssa(scn%op%aer_wl_idx_l(aer))
           else if (wl == 2) then
              scn%op%aer_sca_tau_edge(wl,:,aer) = scn%op%aer_ext_tau_edge(wl,:,aer) &
-                  * MCS%aerosol(scn%op%aer_mcs_map(aer))%ssa(scn%op%aer_wl_idx_r(aer))
+                  * CS_aerosol(scn%op%aer_mcs_map(aer))%ssa(scn%op%aer_wl_idx_r(aer))
           end if
 
           where(scn%op%aer_ext_tau_edge(wl,:,aer) < 1.0d-10) scn%op%aer_ext_tau_edge(wl,:,aer) = 1d-10
@@ -390,7 +396,7 @@ contains
           if (wl == 1) then
 
              write(tmp_str, '(A,A)') "Aerosol extinction, scattering and SSA for left edge and aerosol: ", &
-                  MCS%aerosol(scn%op%aer_mcs_map(aer))%name%chars()
+                  CS_aerosol(scn%op%aer_mcs_map(aer))%name%chars()
              call logger%debug(fname, trim(tmp_str))
              do lay = 1, scn%num_levels - 1
 

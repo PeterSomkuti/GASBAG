@@ -9,6 +9,7 @@ module physical_model_addon_mod
   use scene_mod
   use aerosols_mod
   use file_utils_mod
+  use control_mod
 
   ! Third-party modules
   use stringifor
@@ -163,142 +164,11 @@ contains
   end subroutine destroy_optical_properties
 
 
-  subroutine precompute_all_coef(scn, SV, n_stokes, n_derivs, constant_coef, coef, lcoef)
-
-    type(scene), intent(in) :: scn
-    type(statevector), intent(in) :: SV
-    integer, intent(in) :: n_stokes
-    integer, intent(in) :: n_derivs
-    logical, intent(in) :: constant_coef
-    double precision, allocatable, intent(inout) :: coef(:,:,:,:)
-    double precision, allocatable, intent(inout) :: lcoef(:,:,:,:,:)
-
-
-    character(len=*), parameter :: fname = "precompute_all_coef"
-    double precision, allocatable :: ray_coef(:,:,:)
-
-    double precision, allocatable :: coef_left(:,:,:)
-    double precision, allocatable :: coef_right(:,:,:)
-    double precision, allocatable :: lcoef_left(:,:,:,:)
-    double precision, allocatable :: lcoef_right(:,:,:,:)
-
-    integer :: aer_idx
-
-    double precision, allocatable :: aer_sca_left(:,:), aer_sca_right(:,:)
-    double precision, allocatable :: aer_ext_left(:,:), aer_ext_right(:,:)
-    double precision :: denom
-    double precision :: left_wl, right_wl
-    double precision :: wl
-    double precision :: fac
-    integer :: n_mom
-    integer :: n_coefs
-    integer :: i, l, p, a
-    integer :: n_layers
-
-    call logger%debug(fname, "FUNCTION START")
-
-    n_layers = scn%num_active_levels - 1
-
-    ! Depending on whether we use polarization or not,
-    ! we only need to do a certain number of phase matrix
-    ! elements.
-
-    n_mom = -1
-    if (n_stokes == 1) then
-       call logger%debug(fname, "Setting number of PFmom elements to 1")
-       n_mom = 1
-    else if (n_stokes == 3) then
-       call logger%debug(fname, "Setting number of PFmom elements to 6")
-       n_mom = 6
-    else
-       call logger%fatal(fname, "Number of stokes elements is neither 1 or 3!")
-       stop 1
-    end if
-
-    allocate(ray_coef(3, n_mom, size(scn%op%wl)))
-
-    if (scn%num_aerosols > 0) then
-       call logger%debug(fname, "We have aerosols - allocating scattering optical depths.")
-       left_wl = MCS%aerosol(1)%wavelengths(scn%op%aer_wl_idx_l(1))
-       right_wl = MCS%aerosol(1)%wavelengths(scn%op%aer_wl_idx_r(1))
-
-       allocate(aer_sca_left(n_layers, scn%num_aerosols))
-       allocate(aer_sca_right(n_layers, scn%num_aerosols))
-
-       allocate(aer_ext_left(n_layers, scn%num_aerosols))
-       allocate(aer_ext_right(n_layers, scn%num_aerosols))
-
-       aer_sca_left(:,:) = scn%op%aer_sca_tau(1,1:n_layers,:)
-       aer_sca_right(:,:) = scn%op%aer_sca_tau(size(scn%op%wl),1:n_layers,:)
-
-       aer_ext_left(:,:) = scn%op%aer_ext_tau(1,1:n_layers,:)
-       aer_ext_right(:,:) = scn%op%aer_ext_tau(size(scn%op%wl),1:n_layers,:)
-
-    else
-       call logger%debug(fname, "No aerosols present. Just grabbing band edge wavelengths.")
-       left_wl = scn%op%wl(1)
-       right_wl = scn%op%wl(size(scn%op%wl))
-    end if
-
-    call logger%debug(fname, "Calculating coefficients at left edge")
-    call compute_coef_at_wl(scn, SV, left_wl, n_mom, n_derivs, &
-         scn%op%ray_tau(1,:), aer_sca_left, aer_ext_left, coef_left, lcoef_left)
-
-    call logger%debug(fname, "Calculating coefficients at right edge")
-    call compute_coef_at_wl(scn, SV, right_wl, n_mom, n_derivs, &
-         scn%op%ray_tau(size(scn%op%wl),:), aer_sca_right, aer_ext_right, coef_right, lcoef_right)
-
-    if (constant_coef) then
-       n_coefs = 1
-    else
-       n_coefs = size(scn%op%wl)
-    end if
-
-    ! This array might turn out to be huge, and the code will crash
-    ! if it is too large for the operating system to handle.
-
-    allocate(coef(size(coef_left, 1), &
-         size(coef_left, 2), size(coef_left, 3), n_coefs))
-    allocate(lcoef(size(lcoef_left, 1), size(lcoef_left, 2), &
-         size(lcoef_left, 3), size(lcoef_left, 4), n_coefs))
-
-    call logger%debug(fname, "Setting coef and lcoef arrays to zero.")
-    coef(:,:,:,:) = 0.0d0
-    lcoef(:,:,:,:,:) = 0.0d0
-
-
-    ! Assume the scattering properties from the middle of the reference wavelengths
-    if (constant_coef) then
-       call logger%debug(fname, "Using constant scattering coefficients for the band.")
-       fac = 0.5
-       coef(:,:,:,1) = (1.0d0 - fac) * coef_left(:,:,:) + fac * coef_right(:,:,:)
-       lcoef(:,:,:,:,1) = (1.0d0 - fac) * lcoef_left(:,:,:,:) + fac * lcoef_right(:,:,:,:)
-    else
-       ! NOTE
-       ! This here is a heinously slow operation
-
-       call logger%debug(fname, "Creating big coef and lcoef arrays (SLOW).")
-
-       do i = 1, size(scn%op%wl)
-          wl = scn%op%wl(i)
-
-          fac = (wl - left_wl)  / (right_wl - left_wl)
-
-          coef(:,:,:,i) = (1.0d0 - fac) * coef_left(:,:,:) + fac * coef_right(:,:,:)
-          lcoef(:,:,:,:,i) = (1.0d0 - fac) * lcoef_left(:,:,:,:) + fac * lcoef_right(:,:,:,:)
-
-       end do
-    end if
-
-    call logger%debug(fname, "FUNCTION END")
-
-  end subroutine precompute_all_coef
-
-
-  subroutine compute_coef_at_wl(scn, SV, wl, n_mom, n_derivs, ray_tau, &
+  subroutine compute_coef_at_wl(scn, CS_aerosol, SV, wl, n_mom, n_derivs, ray_tau, &
        aer_sca_tau, aer_ext_tau, coef, lcoef)
 
     type(scene), intent(in) :: scn
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(statevector), intent(in) :: SV
     double precision, intent(in) :: wl
     integer, intent(in) :: n_mom ! 1 for scalar, 6 for vector
@@ -359,9 +229,9 @@ contains
 
           ! Calculate the "interpolation" factor needed for coef interpolation
           ! Using this here makes the subroutine a bit more general and useful
-          fac = (wl - MCS%aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_l(a))) &
-               / (MCS%aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_r(a)) &
-               - MCS%aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_l(a)) )
+          fac = (wl - CS_aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_l(a))) &
+               / (CS_aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_r(a)) &
+               - CS_aerosol(aer_idx)%wavelengths(scn%op%aer_wl_idx_l(a)) )
 
           ! This gives us the phase function moments from the mom file, but interpolated
           ! AT the wavelength requested by the user. If this is used to calculate the
@@ -370,9 +240,9 @@ contains
           ! stored in the file.
 
           do p = 1, n_mom
-             aerpmom(a,1:MCS%aerosol(aer_idx)%max_n_coef,p,l) = &
-               (1.0d0 - fac) * MCS%aerosol(aer_idx)%coef(:,p,scn%op%aer_wl_idx_l(a)) &
-               + fac * MCS%aerosol(aer_idx)%coef(:,p,scn%op%aer_wl_idx_r(a))
+             aerpmom(a,1:CS_aerosol(aer_idx)%max_n_coef,p,l) = &
+               (1.0d0 - fac) * CS_aerosol(aer_idx)%coef(:,p,scn%op%aer_wl_idx_l(a)) &
+               + fac * CS_aerosol(aer_idx)%coef(:,p,scn%op%aer_wl_idx_r(a))
 
              ! Add aerosol contributions here
              coef(:, p, l) = coef(:, p, l) + aerpmom(a, :, p, l) * aer_sca_tau(l, a)
@@ -429,7 +299,7 @@ contains
           call calculate_aero_height_factors( &
                scn%atm%p_layers(1:n_layer), &
                this_aero_height, &
-               MCS%aerosol(scn%op%aer_mcs_map(aer_sv_idx))%default_width, &
+               CS_aerosol(scn%op%aer_mcs_map(aer_sv_idx))%default_width, &
                aer_fac)
 
           ! And calculate dBeta/dAerosolHeight for layer l
@@ -994,12 +864,12 @@ contains
   !> @param results Result container
   !> @param SV State vector object
   !> @param i_win Retrieval window index for MCS
-  subroutine assign_SV_names_to_result(results, SV, i_win)
+  subroutine assign_SV_names_to_result(results, SV, CS_win)
     implicit none
 
     type(result_container), intent(inout) :: results
     type(statevector), intent(in) :: SV
-    integer, intent(in) :: i_win
+    type(CS_window_t), intent(in) :: CS_win
 
     type(string) :: lower_str
     character(len=999) :: tmp_str
@@ -1078,7 +948,7 @@ contains
        ! Retrieved aerosol AOD names
        do j=1, SV%num_aerosol_aod
           if (SV%idx_aerosol_aod(j) == i) then
-             lower_str = MCS%window(i_win)%aerosol(sv%aerosol_aod_idx_lookup(j))%lower()
+             lower_str = CS_win%aerosol(sv%aerosol_aod_idx_lookup(j))%lower()
              write(tmp_str, '(A,A)') lower_str%chars(), "_aod"
              results%sv_names(i) = trim(tmp_str)
           end if
@@ -1087,7 +957,7 @@ contains
        ! Retrieved aerosol AOD names
        do j=1, SV%num_aerosol_height
           if (SV%idx_aerosol_height(j) == i) then
-             lower_str = MCS%window(i_win)%aerosol(sv%aerosol_height_idx_lookup(j))%lower()
+             lower_str = CS_win%aerosol(sv%aerosol_height_idx_lookup(j))%lower()
              write(tmp_str, '(A,A)') lower_str%chars(), "_height"
              results%sv_names(i) = trim(tmp_str)
           end if
@@ -1098,10 +968,10 @@ contains
        do j=1, SV%num_gas
           ! Check if this SV element is a scalar retrieval
           if (SV%idx_gas(j,1) == i) then
-             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
-                if (MCS%window(i_win)%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
+             if (CS_win%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
+                if (CS_win%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
 
-                lower_str = MCS%window(i_win)%gases(sv%gas_idx_lookup(j))%lower()
+                lower_str = CS_win%gases(sv%gas_idx_lookup(j))%lower()
                 write(tmp_str, '(A)') trim(lower_str%chars() // "_scale_")
                 write(tmp_str, '(A, F4.2)') trim(tmp_str), &
                      SV%gas_retrieve_scale_start(j)
@@ -1122,7 +992,9 @@ contains
 
   !> @brief Writes global result arrays into the output HDF file
   subroutine write_results_into_hdf_output( &
-       i_win, &
+       CS_win, &
+       CS_general, &
+       CS_output, &
        output_file_id, &
        results, &
        met_psurf, &
@@ -1131,7 +1003,10 @@ contains
        noise_radiance, &
        wavelength_radiance)
 
-    integer, intent(in) :: i_win
+    type(CS_window_t), intent(in) :: CS_win
+    type(CS_general_t), intent(in) :: CS_general
+    type(CS_output_t), intent(in) :: CS_output
+
     integer(hid_t), intent(in) :: output_file_id
     type(result_container), intent(in) :: results
     double precision, allocatable, intent(in) :: met_psurf(:,:)
@@ -1180,28 +1055,28 @@ contains
     !---------------------------------------------------------------------
 
     ! Create an HDF group for all windows separately
-    group_name = "RetrievalResults/physical/" // trim(MCS%window(i_win)%name%chars())
+    group_name = "RetrievalResults/physical/" // trim(CS_win%name%chars())
     call h5gcreate_f(output_file_id, trim(group_name), result_gid, hdferr)
     call check_hdf_error(hdferr, fname, "Error. Could not create group: " &
          // trim(group_name))
 
     ! Set the dimensions of the arrays for saving them into the HDF file
-    out_dims2d(1) = MCS%general%n_fp
-    out_dims2d(2) = MCS%general%n_frame
+    out_dims2d(1) = CS_general%n_fp
+    out_dims2d(2) = CS_general%n_frame
 
     ! Save the processing time
     call logger%info(fname, "Writing out: " // trim(group_name) // &
-         "/processing_time_" // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/processing_time_", MCS%general%code_name
+         "/processing_time_" // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/processing_time_", CS_general%code_name
     call write_DP_hdf_dataset(output_file_id, &
          trim(tmp_str), results%processing_time(:,:), out_dims2d, -9999.99d0)
 
     ! Writing out the prior surface pressure, but obviously only if allocated
     if (allocated(met_psurf)) then
        call logger%info(fname, "Writing out: " // trim(group_name) // &
-            "/surface_pressure_apriori_" // MCS%general%code_name)
+            "/surface_pressure_apriori_" // CS_general%code_name)
        write(tmp_str, '(A,A,A)') trim(group_name), "/surface_pressure_apriori_", &
-            MCS%general%code_name
+            CS_general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)
     end if
@@ -1209,7 +1084,7 @@ contains
     ! Save the prior state vectors
     do i=1, N_SV
        write(tmp_str, '(A,A,A,A,A)') trim(group_name) , "/", &
-            results%sv_names(i)%chars() , "_apriori_", MCS%general%code_name
+            results%sv_names(i)%chars() , "_apriori_", CS_general%code_name
        call logger%info(fname, "Writing out: " // trim(tmp_str))
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
@@ -1219,7 +1094,7 @@ contains
     ! Save the retrieved state vectors
     do i=1, N_SV
        write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", results%sv_names(i)%chars(), &
-            "_", MCS%general%code_name
+            "_", CS_general%code_name
        call logger%info(fname, "Writing out: " // trim(tmp_str))
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
@@ -1229,7 +1104,7 @@ contains
     ! Save the retrieved state vector uncertainties
     do i=1, N_SV
        write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
-            results%sv_names(i)%chars() , "_uncertainty_", MCS%general%code_name
+            results%sv_names(i)%chars() , "_uncertainty_", CS_general%code_name
        call logger%info(fname, "Writing out: " // trim(tmp_str))
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), &
@@ -1240,55 +1115,55 @@ contains
     ! Here we re-set the output dimensions for 3D fields, needed
     ! for column AKs
 
-    out_dims3d(1) = MCS%general%n_fp
-    out_dims3d(2) = MCS%general%n_frame
+    out_dims3d(1) = CS_general%n_fp
+    out_dims3d(2) = CS_general%n_frame
     out_dims3d(3) = size(results%col_AK, 4)
 
-    do i=1,MCS%window(i_win)%num_gases
-       if (MCS%window(i_win)%gas_retrieved(i)) then
+    do i=1, CS_win%num_gases
+       if (CS_win%gas_retrieved(i)) then
 
           ! Save XGAS for each gas
-          lower_str = MCS%window(i_win)%gases(i)%lower()
+          lower_str = CS_win%gases(i)%lower()
 
           write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-               lower_str%chars(), "_", MCS%general%code_name
+               lower_str%chars(), "_", CS_general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                results%xgas(:,:,i), out_dims2d, -9999.99d0)
 
           write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-               lower_str%chars(), "_apriori_", MCS%general%code_name
+               lower_str%chars(), "_apriori_", CS_general%code_name
           call logger%info(fname, "Writing out: " // trim(tmp_str))
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                results%xgas_prior(:,:,i), out_dims2d, -9999.99d0)
 
-          if (MCS%output%gas_averaging_kernels) then
+          if (CS_output%gas_averaging_kernels) then
              ! These variables only need to be saved if the user requested
              ! column averaging kernels. They add quite a bit to the output
              ! file size, hence you want to make sure that you really need
              ! them.
 
              write(tmp_str, '(A,A,A,A)') trim(group_name), "/pressure_levels", &
-                  "_", MCS%general%code_name
+                  "_", CS_general%code_name
              call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
                   results%pressure_levels(:,:,:), out_dims3d, -9999.99d0)
 
-             if (MCS%output%gas_averaging_kernels) then
+             if (CS_output%gas_averaging_kernels) then
                 write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-                     lower_str%chars(), "_column_ak_", MCS%general%code_name
+                     lower_str%chars(), "_column_ak_", CS_general%code_name
                 call logger%info(fname, "Writing out: " // trim(tmp_str))
                 call write_DP_hdf_dataset(output_file_id, &
                      trim(tmp_str), &
                      results%col_AK(:,:,i,:), out_dims3d, -9999.99d0)
              end if
 
-             if (MCS%output%pressure_weights) then
+             if (CS_output%pressure_weights) then
                 write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-                     lower_str%chars(), "_pressure_weights_", MCS%general%code_name
+                     lower_str%chars(), "_pressure_weights_", CS_general%code_name
                 call logger%info(fname, "Writing out: " // trim(tmp_str))
                 call write_DP_hdf_dataset(output_file_id, &
                      trim(tmp_str), &
@@ -1296,14 +1171,14 @@ contains
              end if
 
              write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
-                  lower_str%chars(), "_profile_apriori_", MCS%general%code_name
+                  lower_str%chars(), "_profile_apriori_", CS_general%code_name
              call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
                   results%vmr_prior(:,:,i,:), out_dims3d, -9999.99d0)
 
              write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &
-                  lower_str%chars(), "_profile_retrieved_", MCS%general%code_name
+                  lower_str%chars(), "_profile_retrieved_", CS_general%code_name
              call logger%info(fname, "Writing out: " // trim(tmp_str))
              call write_DP_hdf_dataset(output_file_id, &
                   trim(tmp_str), &
@@ -1316,81 +1191,81 @@ contains
 
     ! Save number of iterations
     call logger%info(fname, "Writing out: " // trim(group_name) // "/num_iterations_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/num_iterations_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/num_iterations_", CS_general%code_name
     call write_INT_hdf_dataset(output_file_id, &
          trim(tmp_str), results%num_iterations(:,:), out_dims2d, -9999)
 
     ! Save converged status
     call logger%info(fname, "Writing out: " // trim(group_name) // "/converged_flag_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/converged_flag_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/converged_flag_", CS_general%code_name
     call write_INT_hdf_dataset(output_file_id, &
          trim(tmp_str), results%converged(:,:), out_dims2d, -9999)
 
     ! Retrieved CHI2
     call logger%info(fname, "Writing out: " // trim(group_name) // "/reduced_chi_squared_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/reduced_chi_squared_", CS_general%code_name
     call write_DP_hdf_dataset(output_file_id, &
          trim(tmp_str), results%chi2(:,:), out_dims2d, -9999.99d0)
 
     ! Residual RMS
     call logger%info(fname, "Writing out: " // trim(group_name) // "/residual_rms_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/residual_rms_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/residual_rms_", CS_general%code_name
     call write_DP_hdf_dataset(output_file_id, &
          trim(tmp_str), results%residual_rms(:,:), out_dims2d, -9999.99d0)
 
     ! Dsigma_sq
     call logger%info(fname, "Writing out: " // trim(group_name) // "/final_dsigma_sq_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/final_dsigma_sq_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/final_dsigma_sq_", CS_general%code_name
     call write_DP_hdf_dataset(output_file_id, &
          trim(tmp_str), results%dsigma_sq(:,:), out_dims2d, -9999.99d0)
 
     ! Signal-to-noise ratio (mean)
     call logger%info(fname, "Writing out: " // trim(group_name) // "/snr_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/snr_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/snr_", CS_general%code_name
     call write_DP_hdf_dataset(output_file_id, &
          trim(tmp_str), results%SNR, out_dims2d)
 
     call logger%info(fname, "Writing out: " // trim(group_name) // "/continuum_level_radiance_" &
-         // MCS%general%code_name)
-    write(tmp_str, '(A,A,A)') trim(group_name), "/continuum_level_radiance_", MCS%general%code_name
+         // CS_general%code_name)
+    write(tmp_str, '(A,A,A)') trim(group_name), "/continuum_level_radiance_", CS_general%code_name
     call write_DP_hdf_dataset(output_file_id, &
          trim(tmp_str), results%continuum, out_dims2d)
 
     ! Save the radiances, only on user request (non-default)
-    if (MCS%output%save_radiances) then
+    if (CS_output%save_radiances) then
 
        out_dims3d = shape(final_radiance)
 
        call logger%info(fname, "Writing out: " // trim(group_name) // "/modelled_radiance_" &
-            // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", MCS%general%code_name
+            // CS_general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/modelled_radiance_", CS_general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), final_radiance, out_dims3d)
 
        out_dims3d = shape(measured_radiance)
        call logger%info(fname, "Writing out: " // trim(group_name) // "/measured_radiance_" &
-            // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/measured_radiance_", MCS%general%code_name
+            // CS_general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/measured_radiance_", CS_general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), measured_radiance, out_dims3d)
 
        out_dims3d = shape(noise_radiance)
        call logger%info(fname, "Writing out: " // trim(group_name) // "/noise_radiance_" &
-            // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/noise_radiance_", MCS%general%code_name
+            // CS_general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/noise_radiance_", CS_general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), noise_radiance, out_dims3d)
 
        out_dims3d = shape(wavelength_radiance)
        call logger%info(fname, "Writing out: " // trim(group_name) // "/wavelength_" &
-            // MCS%general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/wavelength_", MCS%general%code_name
+            // CS_general%code_name)
+       write(tmp_str, '(A,A,A)') trim(group_name), "/wavelength_", CS_general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), wavelength_radiance, out_dims3d)
 
@@ -1410,12 +1285,12 @@ contains
   !> user-defined "wl_min"
   !> @param l1b_wl_idx_min Upper wavelength pixel index corresponding to
   !> user-defined "wl_max"
-  subroutine calculate_dispersion_limits(this_dispersion, i_win, &
+  subroutine calculate_dispersion_limits(this_dispersion, CS_win, &
        l1b_wl_idx_min, l1b_wl_idx_max)
 
     implicit none
     double precision, intent(in) :: this_dispersion(:)
-    integer, intent(in) :: i_win
+    type(CS_window_t), intent(in) :: CS_win
     integer, intent(inout) :: l1b_wl_idx_min, l1b_wl_idx_max
 
     integer :: i
@@ -1426,13 +1301,13 @@ contains
     ! This here grabs the boundaries of the L1b data by simply looping over
     ! the dispersion array and setting the l1b_wl_idx_* accordingly.
     do i=1, size(this_dispersion)
-       if (this_dispersion(i) < MCS%window(i_win)%wl_min) then
+       if (this_dispersion(i) < CS_win%wl_min) then
           l1b_wl_idx_min = i
        end if
-       if (this_dispersion(i) < MCS%window(i_win)%wl_max) then
+       if (this_dispersion(i) < CS_win%wl_max) then
           l1b_wl_idx_max = i
        end if
-       if (this_dispersion(i) > MCS%window(i_win)%wl_max) then
+       if (this_dispersion(i) > CS_win%wl_max) then
           exit
        end if
     end do
@@ -1462,12 +1337,12 @@ contains
   !> @param SV State vector object
   !> @param gas_idx gas index (from MCS%gas)
 
-  subroutine set_gas_scale_levels(SV, gas_idx, i_win, atm, psurf, &
+  subroutine set_gas_scale_levels(SV, gas_idx, CS_win, atm, psurf, &
        s_start, s_stop, do_gas_jac, success)
 
     type(statevector), intent(inout) :: SV
     integer, intent(in) :: gas_idx
-    integer, intent(in) :: i_win
+    type(CS_window_t), intent(in) :: CS_win
     type(atmosphere), intent(in) :: atm
     double precision, intent(in) :: psurf
     integer, intent(inout) :: s_start(:)
@@ -1487,7 +1362,7 @@ contains
     ! iteration - or if we retrieve surface pressure.
     do i=1, SV%num_gas
 
-       if (MCS%window(i_win)%gas_retrieve_scale(gas_idx)) then
+       if (CS_win%gas_retrieve_scale(gas_idx)) then
 
           do_gas_jac = .true.
           if (SV%gas_idx_lookup(i) == gas_idx) then
@@ -1541,7 +1416,7 @@ contains
 
        if (s_stop(i) - s_start(i) == 1) then
           write(tmp_str, '(A,A)') "Scale factor index error for gas ", &
-               MCS%window(i_win)%gases(SV%gas_idx_lookup(i))%chars()
+               CS_win%gases(SV%gas_idx_lookup(i))%chars()
           call logger%error(fname, trim(tmp_str))
           return
        end if

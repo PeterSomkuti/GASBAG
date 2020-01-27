@@ -12,26 +12,27 @@
 
 program GASBAG
 
-  !! User modules
+  ! User modules
   use startup_mod, only: initialize_config
   use version_mod, only: git_branch, git_commit_hash, git_rev_no
-  use control_mod, only: MCS, populate_MCS
+  use control_mod, only: CS_t, populate_MCS
   use instruments_mod, only: generic_instrument
   use file_utils_mod, only: check_hdf_error
   use oco2_mod
 
-  !! Third party modules
+  ! Third party modules
   use logger_mod, only: logger => master_logger
   use finer, only: file_ini
   use datetime_module
 
-  !! System modules
+  ! System modules
   use iso_fortran_env
   use HDF5
 
   implicit none
 
-  !! Local variables
+  ! Local variables
+  type(CS_t) :: CS
   type(file_ini) :: fini ! The config file structure
   class(generic_instrument), allocatable :: my_instrument ! The used instrument type
   integer :: hdferr ! HDF error variable
@@ -69,9 +70,8 @@ program GASBAG
   call initialize_config(fini)
 
   ! Initialize the program control_mod structure (MCS) with the settings
-  ! from the config file. MCS is designed to be read program-wide, so you
-  ! can simply read any user-settings from any module.
-  call populate_MCS(fini)
+  ! from the config file.
+  call populate_MCS(fini, CS)
 
   ! This is where the my_insturment type is properly allocated using one of
   ! the derived types, depending on the instrument specified in the config.
@@ -79,33 +79,33 @@ program GASBAG
   ! a (sadly maybe cumbersome) SELECT TYPE statement - but this is just how
   ! Fortran works with run-time polymorphism.
 
-  if (MCS%input%instrument_name%lower() == 'oco2') then
+  if (CS%input%instrument_name%lower() == 'oco2') then
      allocate(oco2_instrument :: my_instrument)
      call logger%info("Main", "Using instrument: OCO-2")
   else
-     call logger%fatal("Main", "Unknown instrument " // MCS%input%instrument_name)
+     call logger%fatal("Main", "Unknown instrument " // CS%input%instrument_name)
      stop 1
   end if
 
   ! If the user chooses to overwrite the output, use the H5F_ACC_TRUNC_F key
   ! which does exactly that. If not, use H5F_ACC_EXCL_F, which will return
   ! with an error that we catch afterwards (and terminate the program).
-  if (MCS%output%overwrite_output) then
-     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_TRUNC_F, &
-          MCS%output%output_file_id, hdferr)
+  if (CS%output%overwrite_output) then
+     call h5fcreate_f(CS%output%output_filename%chars(), H5F_ACC_TRUNC_F, &
+          CS%output%output_file_id, hdferr)
   else
-     call h5fcreate_f(MCS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
-          MCS%output%output_file_id, hdferr)
+     call h5fcreate_f(CS%output%output_filename%chars(), H5F_ACC_EXCL_F, &
+          CS%output%output_file_id, hdferr)
 
      call check_hdf_error(hdferr, "Main", "Error creating output HDF5 file at: " &
-          // trim(MCS%output%output_filename%chars()))
+          // trim(CS%output%output_filename%chars()))
   end if
 
   select type(my_instrument)
   type is (oco2_instrument)
      ! Scan the L1b file - we need some info from there, mostly the
      ! number of frames, footprints, bands and spectral points
-     call my_instrument%scan_l1b_file(MCS%input%l1b_filename)
+     call my_instrument%scan_l1b_file(CS%input%l1b_filename, CS%general)
   end select
 
 
@@ -113,14 +113,13 @@ program GASBAG
   ! the config file should have been passed onto the MCS, hence why the main
   ! retrieval function needs no arguments apart from the choice of instrumentm,
   ! and also does not return anything back really.
-
-  call perform_retrievals(my_instrument)
+  call perform_retrievals(my_instrument, CS)
 
 
   ! Finishing touches
 
   ! Close the output HDF5 file
-  call h5fclose_f(MCS%output%output_file_id, hdferr)
+  call h5fclose_f(CS%output%output_file_id, hdferr)
   call check_hdf_error(hdferr, "Main", "Error closing output HDF5 file")
 
   ! Close the HDF5 library

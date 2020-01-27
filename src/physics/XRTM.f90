@@ -5,7 +5,7 @@
 module XRTM_mod
 
   ! User modules
-  use control_mod, only: CS_window
+  use control_mod, only: CS_window_t
   use math_utils_mod
   use Rayleigh_mod, only : calculate_rayleigh_scatt_matrix, calculate_rayleigh_depolf
   use statevector_mod
@@ -196,11 +196,14 @@ contains
   end subroutine create_XRTM
 
 
-  subroutine solve_RT_problem_XRTM(window, SV, scn, n_stokes, &
+  subroutine solve_RT_problem_XRTM(CS_win, CS_general, CS_aerosol, &
+       SV, scn, n_stokes, &
        radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, &
        xrtm_success)
 
-    type(CS_window), intent(in) :: window
+    type(CS_window_t), intent(in) :: CS_win
+    type(CS_general_t), intent(in) :: CS_general
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
     integer, intent(in) :: n_stokes
@@ -283,12 +286,12 @@ contains
     !
     ! -----------------------------------------------------------------------
 
-    if (window%RT_strategy == "") then
+    if (CS_win%RT_strategy == "") then
        call logger%fatal(fname, "Must have an RT strategy for XRTM!")
        stop 1
     end if
 
-    if (window%RT_strategy%lower() == "monochromatic") then
+    if (CS_win%RT_strategy%lower() == "monochromatic") then
 
        call logger%debug(fname, "Using monochromatic RT strategy.")
 
@@ -305,9 +308,9 @@ contains
        ! into proper XRTM language and sets the corresponding options.
 
        call setup_XRTM( &
-            window%xrtm_options, &
-            window%xrtm_solvers, &
-            window%do_polarization, &
+            CS_win%xrtm_options, &
+            CS_win%xrtm_solvers, &
+            CS_win%do_polarization, &
             xrtm_options, &
             xrtm_solvers, &
             xrtm_separate_solvers, &
@@ -339,25 +342,25 @@ contains
             ) then
 
           ! Is it even allocated?
-          if (.not. allocated(window%RT_streams)) then
+          if (.not. allocated(CS_win%RT_streams)) then
              call logger%fatal(fname, "You MUST supply a -rt_streams- option!")
              stop 1
           end if
 
           ! And if allocated, does it have the right size?
-          if (size(window%RT_streams) < 1) then
+          if (size(CS_win%RT_streams) < 1) then
              call logger%fatal(fname, "You need to supply at least one value for -rt_streams-")
              stop 1
           end if
 
           ! And then finally it needs to have the right value
-          if (window%RT_streams(1) < 2) then
-             write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", window%RT_streams(1)
+          if (CS_win%RT_streams(1) < 2) then
+             write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", CS_win%RT_streams(1)
              call logger%fatal(fname, trim(tmp_str))
              stop 1
           end if
 
-          xrtm_streams = window%RT_streams(1) / 2
+          xrtm_streams = CS_win%RT_streams(1) / 2
 
        else
 
@@ -400,7 +403,9 @@ contains
             xrtm_n_derivs, &
             scn, &
             SV, &
-            window, &
+            CS_win, &
+            CS_general, &
+            CS_aerosol, &
             monochr_radiance, &
             monochr_weighting_functions, &
             xrtm_success)
@@ -449,7 +454,7 @@ contains
           dI_dAOD(:,j,:) = monochr_weighting_functions(:,:,SV%num_gas + SV%num_temp + SV%num_albedo + j)
           ! If this AOD retrieval is in log-space, we need to multiply by
           ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
-          if (window%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
+          if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
              dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
           end if
        end do
@@ -457,14 +462,14 @@ contains
        do j=1, SV%num_aerosol_height
           dI_dAHeight(:,j,:) = monochr_weighting_functions(:,:, &
                SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j)
-          if (window%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
+          if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
              dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) * exp(SV%svsv(SV%idx_aerosol_height(j)))
           end if
        end do
 
     else
 
-       call logger%fatal(fname, "RT strategy: '" // window%RT_strategy%chars() &
+       call logger%fatal(fname, "RT strategy: '" // CS_win%RT_strategy%chars() &
             // "' not recognized. Valid options are..")
 
        call logger%fatal(fname, "(1) monochromatic")
@@ -481,14 +486,17 @@ contains
 
   !> @brief Calculates radiances and weighting functions for all wavelengths in the band
   subroutine XRTM_monochromatic(xrtm, xrtm_separate_solvers, n_derivs, scn, SV, &
-    window, radiance, weighting_functions, success)
+       CS_win, CS_general, CS_aerosol, &
+       radiance, weighting_functions, success)
 
     type(xrtm_type), intent(inout) :: xrtm
     integer, intent(in) :: xrtm_separate_solvers(:)
     integer, intent(in) :: n_derivs
     type(scene), intent(in) :: scn
     type(statevector), intent(in) :: SV
-    type(CS_window), intent(in) :: window
+    type(CS_window_t), intent(in) :: CS_win
+    type(CS_general_t), intent(in) :: CS_general
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     ! Container for radiance result (specetral, n_stokes)
     double precision, intent(inout) :: radiance(:,:)
     ! Container for weighting function results (spectral, n_stokes, n_derivs)
@@ -646,7 +654,7 @@ contains
        call calculate_aero_height_factors( &
             scn%atm%p_layers(:), &
             exp(SV%svsv(SV%idx_aerosol_height(j))) * scn%atm%psurf, &
-            MCS%aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
+            CS_aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
             aero_fac)
 
        do l = 1, n_layers
@@ -667,12 +675,12 @@ contains
 
     ! Calculate coef and lcoef at band edges
     call logger%debug(fname, "Computing phase function coefficients and derivatives at band edges.")
-    call compute_coef_at_wl(scn, SV, scn%op%wl(1), n_mom, n_derivs, &
+    call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(1), n_mom, n_derivs, &
          scn%op%ray_tau(1,:), scn%op%aer_sca_tau(1,:,:), &
          scn%op%aer_ext_tau(1,:,:), &
          coef_left, lcoef_left)
 
-    call compute_coef_at_wl(scn, SV, scn%op%wl(n_wl), n_mom, n_derivs, &
+    call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(n_wl), n_mom, n_derivs, &
          scn%op%ray_tau(n_wl,:), scn%op%aer_sca_tau(n_wl,:,:), &
          scn%op%aer_ext_tau(n_wl,:,:), &
          coef_right, lcoef_right)
@@ -710,6 +718,8 @@ contains
          xrtm, & ! XRTM handler
          xrtm_separate_solvers, & ! separate XRTM solvers
          SV, & ! State vector structure - needed for decoding SV positions
+         CS_general, & ! Control structure general section
+         CS_aerosol, & ! Control structure aerosol array
          scn%op%wl, & ! per pixel wavelength
          scn%SZA, & ! solar zenith angle
          scn%VZA, & ! viewing zenith angle
@@ -726,7 +736,7 @@ contains
          n_derivs, & ! Number of derivatives to be calculated
          n_layers, & ! Number of atmospheric layers
          n_coef, & ! Number of per-layer coefficients to be used by XRTM
-         window%constant_coef, & ! Keep coefficients constant along window?
+         CS_win%constant_coef, & ! Keep coefficients constant along window?
          radiance, & ! Output radiances
          weighting_functions, & ! Output weighting functions
          xrtm_success, & ! Success indicator
@@ -753,6 +763,8 @@ contains
   !> to obtain the values at each wavelength.
   subroutine calculate_XRTM_radiance(xrtm, xrtm_separate_solvers, &
        SV, &
+       CS_general, &
+       CS_aerosol, &
        wavelengths, SZA, VZA, SAA, VAA, &
        altitude_levels, albedo, &
        layer_tau, &
@@ -776,6 +788,8 @@ contains
     type(xrtm_type), intent(inout) :: xrtm
     integer, intent(in) :: xrtm_separate_solvers(:)
     type(statevector), intent(in) :: SV
+    type(CS_general_t), intent(in) :: CS_general
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     double precision, intent(in) :: wavelengths(:)
     double precision, intent(in) :: SZA, VZA, SAA, VAA, albedo(:)
     double precision, intent(in) :: altitude_levels(:)
@@ -1209,7 +1223,7 @@ contains
 
           ! Format string for derivative debug output
           ! .. but only go into this branch when debug is requested
-          if ((i == 1) .and. (MCS%general%loglevel <= 10)) then
+          if ((i == 1) .and. (CS_general%loglevel <= 10)) then
              call logger%debug(fname, "--- First wavelength ----------------------------------------------")
 
              ! Write XRTM inputs

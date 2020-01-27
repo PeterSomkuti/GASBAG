@@ -42,7 +42,7 @@ module control_mod
   !> Number of aerosols
   integer, parameter :: MAX_AEROSOLS = 10
 
-  type :: CS_general
+  type :: CS_general_t
      character(len=3) :: code_name = "gbg"
      !> Number of soundings to be processed
      integer :: N_soundings
@@ -54,9 +54,9 @@ module control_mod
      integer, allocatable :: N_spec(:)
      !> Log level
      integer :: loglevel
-  end type CS_general
+  end type CS_general_t
 
-  type :: CS_algorithm
+  type :: CS_algorithm_t
      !> Name of the algorithm(s) used?
      type(string) :: name(MAX_ALGORITHMS)
      !> How many do we want to actually use?
@@ -78,9 +78,9 @@ module control_mod
      logical :: solar_footprint_averaging
      !> Do we want to step through for debugging?
      logical :: step_through
-  end type CS_algorithm
+  end type CS_algorithm_t
 
-  type :: CS_window
+  type :: CS_window_t
      !> Is this CS_window structure used?
      logical :: used
      !> The name will be used in the output file
@@ -201,9 +201,9 @@ module control_mod
      type(string), allocatable :: XRTM_solvers(:)
      !> Do we account for polarization?
      logical :: do_polarization
-  end type CS_window
+  end type CS_window_t
 
-  type :: CS_input
+  type :: CS_input_t
      !> Path to L1B file
      type(string) :: l1b_filename
      !> Path to MET file
@@ -214,9 +214,9 @@ module control_mod
      integer(hid_t) :: met_file_id
      !> Name of the instrument
      type(string) :: instrument_name
-  end type CS_input
+  end type CS_input_t
 
-  type :: CS_output
+  type :: CS_output_t
      !> Where does the ouptut HDF file go?
      type(string) :: output_filename
      !> HDF File ID for the output file
@@ -229,9 +229,9 @@ module control_mod
      logical :: pressure_weights
      !> Do we want to store gas averaging kernels?
      logical :: gas_averaging_kernels
-  end type CS_output
+  end type CS_output_t
 
-  type :: CS_gas
+  type :: CS_gas_t
      !> Is this CS_gas used?
      logical :: used
      !> Name of the gas/asorber, this will be cross-referenced
@@ -265,9 +265,9 @@ module control_mod
      double precision, allocatable :: p(:)
      !> The H2O dimension of the table
      double precision, allocatable :: H2O(:)
-  end type CS_gas
+  end type CS_gas_t
 
-  type :: CS_aerosol
+  type :: CS_aerosol_t
      !> Is this aerosol used?
      logical :: used
      !> Name of the aerosol / identifier
@@ -300,30 +300,29 @@ module control_mod
      double precision, allocatable :: sigma_ext(:)
      !> Effective radius (wavelength)
      double precision, allocatable :: reff(:)
-
-  end type CS_aerosol
+  end type CS_aerosol_t
 
 
   ! Main control_mod structure type
-  type :: CS
+  type :: CS_t
      !> Algorithm/forwared model - related settings
-     type(CS_algorithm) :: algorithm
+     type(CS_algorithm_t) :: algorithm
      !> Retrieval windows
-     type(CS_window) :: window(MAX_WINDOWS)
+     type(CS_window_t) :: window(MAX_WINDOWS)
      !> Gas absorbers
-     type(CS_gas) :: gas(MAX_GASES)
+     type(CS_gas_t) :: gas(MAX_GASES)
      !> Aerosols
-     type(CS_aerosol) :: aerosol(MAX_AEROSOLS)
+     type(CS_aerosol_t) :: aerosol(MAX_AEROSOLS)
      !> Input files/handlers needed by the program
-     type(CS_input) :: input
+     type(CS_input_t) :: input
      !> Output settings
-     type(CS_output) :: output
+     type(CS_output_t) :: output
      !> General retrieval settings/info
-     type(CS_general) :: general
-  end type CS
+     type(CS_general_t) :: general
+  end type CS_t
 
   !> Main control structure
-  type(CS), public :: MCS
+  !type(CS_t), public :: MCS
 
   public populate_MCS
 
@@ -337,11 +336,12 @@ contains
   !> what you did wrong.
   !
   !> @param fini FINER ini object
-  subroutine populate_MCS(fini)
+  subroutine populate_MCS(fini, CS)
 
     implicit none
 
     type(file_ini), intent(in) :: fini
+    type(CS_t), intent(inout) :: CS
 
     ! Local variables
 
@@ -384,20 +384,20 @@ contains
     ! First, we set all those fields to -1 values, that are added/populated
     ! later in e.g. instrument-specific rountines.
 
-    MCS%general%N_soundings = -1
+    CS%general%N_soundings = -1
 
-    MCS%algorithm%using_GK_SIF = .false.
-    MCS%algorithm%using_physical = .false.
+    CS%algorithm%using_GK_SIF = .false.
+    CS%algorithm%using_physical = .false.
 
-    MCS%window(:)%name = ""
-    MCS%window(:)%wl_min = 0.0d0
-    MCS%window(:)%wl_max = 0.0d0
+    CS%window(:)%name = ""
+    CS%window(:)%wl_min = 0.0d0
+    CS%window(:)%wl_max = 0.0d0
 
     call fini_extract(fini, 'logger', 'loglevel', .false., fini_int)
     if (fini_int > 0) then
-       MCS%general%loglevel = fini_int
+       CS%general%loglevel = fini_int
     else
-       MCS%general%loglevel = 10
+       CS%general%loglevel = 10
     end if
     
     ! ----------------------------------------------------------------------
@@ -419,7 +419,7 @@ contains
        call logger%warning(fname, "No SIF algorithms selected? " // &
             "Hope you know what you're doing!")
     else
-       MCS%algorithm%N_algorithms = alg_count
+       CS%algorithm%N_algorithms = alg_count
        allocate(alg_strings(alg_count))
     end if
 
@@ -447,17 +447,17 @@ contains
             max_tokens=alg_count)
 
        ! Stick names of algorithms into MCS
-       do i=1, MCS%algorithm%N_algorithms
-          MCS%algorithm%name(i) = alg_strings(i)
+       do i=1, CS%algorithm%N_algorithms
+          CS%algorithm%name(i) = alg_strings(i)
        end do
 
        ! And also check which one's we have to set the booleans correctly
-       do i=1, MCS%algorithm%N_algorithms
-          if (MCS%algorithm%name(i) == 'GK') then
-             MCS%algorithm%using_GK_SIF = .true.
+       do i=1, CS%algorithm%N_algorithms
+          if (CS%algorithm%name(i) == 'GK') then
+             CS%algorithm%using_GK_SIF = .true.
              call logger%trivia(fname, "Utilizing Guanter-type SIF retrieval!")
-          else if(MCS%algorithm%name(i) == 'physical') then
-             MCS%algorithm%using_physical = .true.
+          else if(CS%algorithm%name(i) == 'physical') then
+             CS%algorithm%using_physical = .true.
              call logger%trivia(fname, "Utilizing phyiscal retrieval!")
           end if
        end do
@@ -469,37 +469,37 @@ contains
        call fini%get(section_name='algorithm', option_name='n_basisfunctions', &
             val=fini_val, error=fini_error)
 
-       MCS%algorithm%N_basisfunctions = int(fini_val)
+       CS%algorithm%N_basisfunctions = int(fini_val)
     end if
 
     call fini_extract(fini, tmp_str, 'observation_mode', .false., fini_char)
-    MCS%algorithm%observation_mode = trim(fini_char)
+    CS%algorithm%observation_mode = trim(fini_char)
     ! Replace empty string (i.e. not supplied) by "downlooking" mode
-    if (MCS%algorithm%observation_mode == "") then
-       MCS%algorithm%observation_mode = "downlooking"
+    if (CS%algorithm%observation_mode == "") then
+       CS%algorithm%observation_mode = "downlooking"
        call logger%trivia(fname, "No observation mode supplied - setting to: downlooking")
     else
        call logger%trivia(fname, "Observation mode - setting to: " &
-            // MCS%algorithm%observation_mode%chars())
+            // CS%algorithm%observation_mode%chars())
     end if
 
     call fini_extract(fini, tmp_str, 'solar_footprint_averaging', .false., fini_char)
     fini_string = fini_char
     if (fini_string == "") then
        ! If not supplied, default state is "no"
-       MCS%algorithm%solar_footprint_averaging = .false.
+       CS%algorithm%solar_footprint_averaging = .false.
     else
-       MCS%algorithm%solar_footprint_averaging = string_to_bool(fini_string)
+       CS%algorithm%solar_footprint_averaging = string_to_bool(fini_string)
     end if
 
     call fini_extract(fini, tmp_str, 'step_through', .false., fini_char)
     fini_string = fini_char
     if (fini_string == "") then
        ! If not supplied, default state is "no"
-       MCS%algorithm%step_through = .false.
+       CS%algorithm%step_through = .false.
     else
-       MCS%algorithm%step_through = string_to_bool(fini_string)
-       if (MCS%algorithm%step_through) then
+       CS%algorithm%step_through = string_to_bool(fini_string)
+       if (CS%algorithm%step_through) then
           call logger%debug(fname, "Using step-through mode for debugging!")
        end if
     end if
@@ -522,13 +522,13 @@ contains
           call logger%fatal(fname, "Error reading l1b_file string")
           stop 1
        end if
-       MCS%input%l1b_filename = trim(fini_char)
+       CS%input%l1b_filename = trim(fini_char)
     end if
 
     ! Do the same for the MET file
     ! If doing physical retrieval and downlooking mode, we MUST have the MET file
-    if ((MCS%algorithm%using_physical .eqv. .true.) &
-         .and. (MCS%algorithm%observation_mode == "downlooking")) then
+    if ((CS%algorithm%using_physical .eqv. .true.) &
+         .and. (CS%algorithm%observation_mode == "downlooking")) then
        tmp_str = "input"
        if (.not. fini%has_option(section_name=tmp_str, &
             option_name="met_file")) then
@@ -549,7 +549,7 @@ contains
           stop 1
        end if
 
-       MCS%input%met_filename = trim(fini_char)
+       CS%input%met_filename = trim(fini_char)
 
     end if
 
@@ -557,7 +557,7 @@ contains
 
     ! Solar section ------------------------------------------------------
     ! If doing physical retrieval, we MUST have the solar section
-    if (MCS%algorithm%using_physical .eqv. .true.) then
+    if (CS%algorithm%using_physical .eqv. .true.) then
        if (.not. fini%has_section(section_name="solar")) then
           call logger%fatal(fname, "Need to have solar section when using physical retrieval.")
           stop 1
@@ -568,7 +568,7 @@ contains
              call logger%fatal(fname, "Could not read solar model file name.")
              stop 1
           end if
-          MCS%algorithm%solar_file = trim(fini_char)
+          CS%algorithm%solar_file = trim(fini_char)
 
           call fini%get(section_name='solar', option_name='solar_type', &
                val=fini_char, error=fini_error)
@@ -576,7 +576,7 @@ contains
              call logger%fatal(fname, "Could not read solar model type.")
              stop 1
           end if
-          MCS%algorithm%solar_type = trim(fini_char)
+          CS%algorithm%solar_type = trim(fini_char)
 
        end if
     end if
@@ -584,42 +584,42 @@ contains
 
     ! Outputs section ------------------------------------------------------
     call fini_extract(fini, 'output', 'output_file', .true., fini_char)
-    MCS%output%output_filename = trim(fini_char)
+    CS%output%output_filename = trim(fini_char)
 
     call fini_extract(fini, 'output', 'save_radiances', .false., fini_char)
     fini_string = fini_char
     if (fini_string == "") then
        ! If not supplied, default state is "no"
-       MCS%output%save_radiances = .false.
+       CS%output%save_radiances = .false.
     else
-       MCS%output%save_radiances = string_to_bool(fini_string)
+       CS%output%save_radiances = string_to_bool(fini_string)
     end if
 
     call fini_extract(fini, 'output', 'overwrite_output', .false., fini_char)
     fini_string = fini_char
     if (fini_string == "") then
        ! If not supplied, default state is "no"
-       MCS%output%overwrite_output = .false.
+       CS%output%overwrite_output = .false.
     else
-       MCS%output%overwrite_output = string_to_bool(fini_string)
+       CS%output%overwrite_output = string_to_bool(fini_string)
     end if
 
     call fini_extract(fini, 'output', 'pressure_weights', .false., fini_char)
     fini_string = fini_char
     if (fini_string == "") then
        ! If not supplied, default state is "no"
-       MCS%output%pressure_weights = .false.
+       CS%output%pressure_weights = .false.
     else
-       MCS%output%pressure_weights = string_to_bool(fini_string)
+       CS%output%pressure_weights = string_to_bool(fini_string)
     end if
 
     call fini_extract(fini, 'output', 'gas_averaging_kernels', .false., fini_char)
     fini_string = fini_char
     if (fini_string == "") then
        ! If not supplied, default state is "no"
-       MCS%output%gas_averaging_kernels = .false.
+       CS%output%gas_averaging_kernels = .false.
     else
-       MCS%output%gas_averaging_kernels = string_to_bool(fini_string)
+       CS%output%gas_averaging_kernels = string_to_bool(fini_string)
     end if
 
     ! ----------------------------------------------------------------------
@@ -628,7 +628,7 @@ contains
 
     ! Get instrument name
     call fini_extract(fini, 'instrument', 'name', .true., fini_char)
-    MCS%input%instrument_name = trim(fini_char)
+    CS%input%instrument_name = trim(fini_char)
     ! ----------------------------------------------------------------------
 
 
@@ -645,35 +645,35 @@ contains
        if (fini%has_section(section_name=win_str)) then
 
           ! Let's start with the required one's first!
-          MCS%window(window_nr)%used = .true.
+          CS%window(window_nr)%used = .true.
 
           ! Third argument in 'fini_extract' tells the function whether this
           ! is a required config setting or not. If a required setting is not found,
           ! the program will terminate with a useful error message.
           call fini_extract(fini, win_str, 'name', .true., fini_char)
-          MCS%window(window_nr)%name = trim(fini_char)
+          CS%window(window_nr)%name = trim(fini_char)
 
           call fini_extract(fini, win_str, 'wl_min', .true., fini_val)
-          MCS%window(window_nr)%wl_min = fini_val
+          CS%window(window_nr)%wl_min = fini_val
 
           call fini_extract(fini, win_str, 'wl_max', .true., fini_val)
-          MCS%window(window_nr)%wl_max = fini_val
+          CS%window(window_nr)%wl_max = fini_val
 
           call fini_extract(fini, win_str, 'band', .true., fini_int)
-          MCS%window(window_nr)%band = fini_int
+          CS%window(window_nr)%band = fini_int
 
-          if (MCS%algorithm%using_physical) then
+          if (CS%algorithm%using_physical) then
              ! The following are only required by the physical retrieval
 
              call fini_extract(fini, win_str, 'wl_spacing', .true., fini_val)
-             MCS%window(window_nr)%wl_spacing = fini_val
+             CS%window(window_nr)%wl_spacing = fini_val
 
              call fini_extract(fini, win_str, 'inverse_method', .true., fini_char)
-             MCS%window(window_nr)%inverse_method = trim(fini_char)
+             CS%window(window_nr)%inverse_method = trim(fini_char)
 
              call fini_extract(fini, win_str, 'max_iterations', .true., fini_int)
              if (fini_int > 0) then
-                MCS%window(window_nr)%max_iterations = fini_int
+                CS%window(window_nr)%max_iterations = fini_int
              else
                 call logger%fatal(fname, "Max iterations has to be > 0")
                 stop 1
@@ -681,32 +681,32 @@ contains
 
              call fini_extract(fini, win_str, 'lm_gamma', .true., fini_val)
              if (fini_val >= 0) then
-                MCS%window(window_nr)%lm_gamma = fini_val
+                CS%window(window_nr)%lm_gamma = fini_val
              else
                 call logger%fatal(fname, "LM-Gamma needs to be >= 0")
                 stop 1
              end if
 
              call fini_extract(fini, win_str, 'statevector', .true., fini_char)
-             MCS%window(window_nr)%SV_string = fini_char
+             CS%window(window_nr)%SV_string = fini_char
 
              call fini_extract(fini, win_str, 'rt_strategy', .false., fini_char)
-             MCS%window(window_nr)%RT_strategy = trim(fini_char)
+             CS%window(window_nr)%RT_strategy = trim(fini_char)
 
              call fini_extract(fini, win_str, 'rt_model', .true., fini_char)
-             MCS%window(window_nr)%RT_model = trim(fini_char)
+             CS%window(window_nr)%RT_model = trim(fini_char)
 
              call fini_extract(fini, win_str, 'xrtm_options', .false., fini_string_array)
              if (allocated(fini_string_array)) then
-                allocate(MCS%window(window_nr)%XRTM_options(size(fini_string_array)))
-                MCS%window(window_nr)%XRTM_options(:) = fini_string_array(:)
+                allocate(CS%window(window_nr)%XRTM_options(size(fini_string_array)))
+                CS%window(window_nr)%XRTM_options(:) = fini_string_array(:)
                 deallocate(fini_string_array)
              end if
 
              call fini_extract(fini, win_str, 'xrtm_solvers', .false., fini_string_array)
              if (allocated(fini_string_array)) then
-                allocate(MCS%window(window_nr)%XRTM_solvers(size(fini_string_array)))
-                MCS%window(window_nr)%XRTM_solvers(:) = fini_string_array(:)
+                allocate(CS%window(window_nr)%XRTM_solvers(size(fini_string_array)))
+                CS%window(window_nr)%XRTM_solvers(:) = fini_string_array(:)
                 deallocate(fini_string_array)
              end if
 
@@ -714,9 +714,9 @@ contains
              fini_string = fini_char
              if (fini_string == "") then
                 ! If not supplied, default state is "no"
-                MCS%window(window_nr)%do_polarization = .false.
+                CS%window(window_nr)%do_polarization = .false.
              else
-                MCS%window(window_nr)%do_polarization = string_to_bool(fini_string)
+                CS%window(window_nr)%do_polarization = string_to_bool(fini_string)
              end if
 
              call fini_extract(fini, win_str, 'rt_streams', .false., fini_string_array)
@@ -724,18 +724,18 @@ contains
              ! carry on will be decided at a later point in the code.
              if (allocated(fini_string_array)) then
 
-                allocate(MCS%window(window_nr)%RT_streams(size(fini_string_array)))
+                allocate(CS%window(window_nr)%RT_streams(size(fini_string_array)))
 
                 call logger%info(fname, "RT stream numbers: ")
                 ! Now we need to convert those strings to integers
                 do i=1, size(fini_string_array)
 
                    fini_char = fini_string_array(i)%chars()
-                   read(fini_char, '(I10)') MCS%window(window_nr)%RT_streams(i)
-                   write(tmp_str, '(I2, A, I10)') i, ": ", MCS%window(window_nr)%RT_streams(i)
+                   read(fini_char, '(I10)') CS%window(window_nr)%RT_streams(i)
+                   write(tmp_str, '(I2, A, I10)') i, ": ", CS%window(window_nr)%RT_streams(i)
                    call logger%info(fname, trim(tmp_str))
 
-                   if (mod(MCS%window(window_nr)%RT_streams(i), 2) /= 0) then
+                   if (mod(CS%window(window_nr)%RT_streams(i), 2) /= 0) then
                       call logger%fatal(fname, "Sorry - Stream numbers must be > 2 and even.")
                       stop 1
                    end if
@@ -755,7 +755,7 @@ contains
           call fini_extract(fini, win_str, 'gas_prior_type', &
                .false., fini_char)
           fini_string = fini_char
-          MCS%window(window_nr)%gas_prior_type_string = fini_string
+          CS%window(window_nr)%gas_prior_type_string = fini_string
 
 
           ! Arrays that are used for our super-duper smart first guess for the
@@ -763,9 +763,9 @@ contains
           call fini_extract(fini, win_str, 'smart_scale_first_guess_wl_in', &
                .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%smart_scale_first_guess_wl_in(size(fini_val_array)))
+             allocate(CS%window(window_nr)%smart_scale_first_guess_wl_in(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%smart_scale_first_guess_wl_in(i) = fini_val_array(i)
+                CS%window(window_nr)%smart_scale_first_guess_wl_in(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
@@ -773,9 +773,9 @@ contains
           call fini_extract(fini, win_str, 'smart_scale_first_guess_wl_out', &
                .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%smart_scale_first_guess_wl_out(size(fini_val_array)))
+             allocate(CS%window(window_nr)%smart_scale_first_guess_wl_out(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%smart_scale_first_guess_wl_out(i) = fini_val_array(i)
+                CS%window(window_nr)%smart_scale_first_guess_wl_out(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
@@ -783,18 +783,18 @@ contains
           call fini_extract(fini, win_str, 'smart_scale_first_guess_delta_tau', &
                .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%smart_scale_first_guess_delta_tau(size(fini_val_array)))
+             allocate(CS%window(window_nr)%smart_scale_first_guess_delta_tau(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%smart_scale_first_guess_delta_tau(i) = fini_val_array(i)
+                CS%window(window_nr)%smart_scale_first_guess_delta_tau(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
 
           ! Now we need to check if they are the same size
-          if ((size(MCS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
-               size(MCS%window(window_nr)%smart_scale_first_guess_wl_out)) .or. &
-               (size(MCS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
-               size(MCS%window(window_nr)%smart_scale_first_guess_delta_tau))) then
+          if ((size(CS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
+               size(CS%window(window_nr)%smart_scale_first_guess_wl_out)) .or. &
+               (size(CS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
+               size(CS%window(window_nr)%smart_scale_first_guess_delta_tau))) then
 
              call logger%error(fname, "Error parsing smart gas scalar first guess!")
              call logger%error(fname, "I need to have the same number of values for each " &
@@ -806,112 +806,112 @@ contains
           fini_string = fini_char
           if (fini_string == "") then
              ! If not supplied, default state is "no"
-             MCS%window(window_nr)%allow_divergences = .false.
+             CS%window(window_nr)%allow_divergences = .false.
           else
-             MCS%window(window_nr)%allow_divergences = string_to_bool(fini_string)
+             CS%window(window_nr)%allow_divergences = string_to_bool(fini_string)
           end if
 
           call fini_extract(fini, win_str, 'frame_skip', .false., fini_int)
           if (fini_int < 1) then
-             MCS%window(window_nr)%frame_skip = 1
+             CS%window(window_nr)%frame_skip = 1
           else
-             MCS%window(window_nr)%frame_skip = fini_int
+             CS%window(window_nr)%frame_skip = fini_int
           end if
 
           call fini_extract(fini, win_str, 'footprint_skip', .false., fini_int)
           if (fini_int < 1) then
-             MCS%window(window_nr)%footprint_skip = 1
+             CS%window(window_nr)%footprint_skip = 1
           else
-             MCS%window(window_nr)%footprint_skip = fini_int
+             CS%window(window_nr)%footprint_skip = fini_int
           end if
 
           call fini_extract(fini, win_str, 'sublayers', .false., fini_int)
           ! We round the number of sublayers to the next odd value > 2
           if (fini_int < 2) then
-             MCS%window(window_nr)%N_sublayers = 3
+             CS%window(window_nr)%N_sublayers = 3
           else if (mod(fini_int, 2) == 0) then
-             MCS%window(window_nr)%N_sublayers = fini_int + 1
+             CS%window(window_nr)%N_sublayers = fini_int + 1
           else
-             MCS%window(window_nr)%N_sublayers = fini_int
+             CS%window(window_nr)%N_sublayers = fini_int
           end if
 
           call fini_extract(fini, win_str, 'dsigma_scale', .false., fini_val)
-          MCS%window(window_nr)%dsigma_scale = fini_val
+          CS%window(window_nr)%dsigma_scale = fini_val
 
           call fini_extract(fini, win_str, 'basisfunctions', .false., fini_char)
-          MCS%window(window_nr)%basisfunction_file = trim(fini_char)
+          CS%window(window_nr)%basisfunction_file = trim(fini_char)
 
           call fini_extract(fini, win_str, 'albedo_order', .false., fini_int)
-          MCS%window(window_nr)%albedo_order = fini_int
+          CS%window(window_nr)%albedo_order = fini_int
 
           call fini_extract(fini, win_str, 'ils_stretch_order', .false., fini_int)
-          MCS%window(window_nr)%ils_stretch_order = fini_int
+          CS%window(window_nr)%ils_stretch_order = fini_int
 
           call fini_extract(fini, win_str, 'ils_stretch_perturbation', .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%ils_stretch_pert(size(fini_val_array)))
+             allocate(CS%window(window_nr)%ils_stretch_pert(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%ils_stretch_pert(i) = fini_val_array(i)
+                CS%window(window_nr)%ils_stretch_pert(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
 
           call fini_extract(fini, win_str, 'ils_stretch_covariance', .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%ils_stretch_cov(size(fini_val_array)))
+             allocate(CS%window(window_nr)%ils_stretch_cov(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%ils_stretch_cov(i) = fini_val_array(i)
+                CS%window(window_nr)%ils_stretch_cov(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
 
           call fini_extract(fini, win_str, 'dispersion_order', .false., fini_int)
-          MCS%window(window_nr)%dispersion_order = fini_int
+          CS%window(window_nr)%dispersion_order = fini_int
 
           call fini_extract(fini, win_str, 'dispersion_perturbation', .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%dispersion_pert(size(fini_val_array)))
+             allocate(CS%window(window_nr)%dispersion_pert(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%dispersion_pert(i) = fini_val_array(i)
+                CS%window(window_nr)%dispersion_pert(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
 
           call fini_extract(fini, win_str, 'dispersion_covariance', .false., fini_val_array)
           if (allocated(fini_val_array)) then
-             allocate(MCS%window(window_nr)%dispersion_cov(size(fini_val_array)))
+             allocate(CS%window(window_nr)%dispersion_cov(size(fini_val_array)))
              do i=1, size(fini_val_array)
-                MCS%window(window_nr)%dispersion_cov(i) = fini_val_array(i)
+                CS%window(window_nr)%dispersion_cov(i) = fini_val_array(i)
              end do
              deallocate(fini_val_array)
           end if
 
-          MCS%window(window_nr)%num_gases = 0
+          CS%window(window_nr)%num_gases = 0
           call fini_extract(fini, win_str, 'gases', .false., fini_string_array)
 
           if (allocated(fini_string_array)) then
 
              ! Depending on the number of gases supplied via the "gases" option, we
              ! allocate that number of fields for the various gas-related variables.
-             allocate(MCS%window(window_nr)%gases(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%gas_prior_type(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%gas_retrieved(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%gas_retrieve_profile(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%gas_retrieve_scale(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%gas_retrieve_scale_start(size(fini_string_array), 99))
-             allocate(MCS%window(window_nr)%gas_retrieve_scale_stop(size(fini_string_array), 99))
-             allocate(MCS%window(window_nr)%gas_retrieve_scale_cov(size(fini_string_array), 99))
-             allocate(MCS%window(window_nr)%gas_index(size(fini_string_array)))
+             allocate(CS%window(window_nr)%gases(size(fini_string_array)))
+             allocate(CS%window(window_nr)%gas_prior_type(size(fini_string_array)))
+             allocate(CS%window(window_nr)%gas_retrieved(size(fini_string_array)))
+             allocate(CS%window(window_nr)%gas_retrieve_profile(size(fini_string_array)))
+             allocate(CS%window(window_nr)%gas_retrieve_scale(size(fini_string_array)))
+             allocate(CS%window(window_nr)%gas_retrieve_scale_start(size(fini_string_array), 99))
+             allocate(CS%window(window_nr)%gas_retrieve_scale_stop(size(fini_string_array), 99))
+             allocate(CS%window(window_nr)%gas_retrieve_scale_cov(size(fini_string_array), 99))
+             allocate(CS%window(window_nr)%gas_index(size(fini_string_array)))
 
              do i=1, size(fini_string_array)
-                MCS%window(window_nr)%gas_prior_type(i) = ""
-                MCS%window(window_nr)%gases(i) = fini_string_array(i)
-                MCS%window(window_nr)%num_gases = MCS%window(window_nr)%num_gases + 1
+                CS%window(window_nr)%gas_prior_type(i) = ""
+                CS%window(window_nr)%gases(i) = fini_string_array(i)
+                CS%window(window_nr)%num_gases = CS%window(window_nr)%num_gases + 1
              end do
              deallocate(fini_string_array)
           end if
 
-          MCS%window(window_nr)%num_aerosols = 0
+          CS%window(window_nr)%num_aerosols = 0
           call fini_extract(fini, win_str, 'aerosols', .false., fini_string_array)
 
           if (allocated(fini_string_array)) then
@@ -920,29 +920,29 @@ contains
              ! type.
 
              call fini_extract(fini, win_str, 'aerosol_distribution_shape', .true., fini_char)
-             MCS%window(window_nr)%aerosol_distribution_shape = trim(fini_char)
+             CS%window(window_nr)%aerosol_distribution_shape = trim(fini_char)
 
-             allocate(MCS%window(window_nr)%aerosol(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_index(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_index(size(fini_string_array)))
 
-             allocate(MCS%window(window_nr)%aerosol_retrieve_aod(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_retrieve_aod_log(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_prior_aod(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_aod_cov(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_retrieve_aod(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_retrieve_aod_log(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_prior_aod(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_aod_cov(size(fini_string_array)))
 
-             allocate(MCS%window(window_nr)%aerosol_retrieve_height(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_retrieve_height_log(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_prior_height(size(fini_string_array)))
-             allocate(MCS%window(window_nr)%aerosol_height_cov(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_retrieve_height(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_retrieve_height_log(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_prior_height(size(fini_string_array)))
+             allocate(CS%window(window_nr)%aerosol_height_cov(size(fini_string_array)))
 
-             MCS%window(window_nr)%aerosol_retrieve_aod(:) = .false.
-             MCS%window(window_nr)%aerosol_retrieve_aod_log(:) = .false.
-             MCS%window(window_nr)%aerosol_retrieve_height(:) = .false.
-             MCS%window(window_nr)%aerosol_retrieve_height_log(:) = .false.
+             CS%window(window_nr)%aerosol_retrieve_aod(:) = .false.
+             CS%window(window_nr)%aerosol_retrieve_aod_log(:) = .false.
+             CS%window(window_nr)%aerosol_retrieve_height(:) = .false.
+             CS%window(window_nr)%aerosol_retrieve_height_log(:) = .false.
 
              do i=1, size(fini_string_array)
-                MCS%window(window_nr)%aerosol(i) = fini_string_array(i)
-                MCS%window(window_nr)%num_aerosols = MCS%window(window_nr)%num_aerosols + 1
+                CS%window(window_nr)%aerosol(i) = fini_string_array(i)
+                CS%window(window_nr)%num_aerosols = CS%window(window_nr)%num_aerosols + 1
              end do
 
              deallocate(fini_string_array)
@@ -950,20 +950,20 @@ contains
           
 
           call fini_extract(fini, win_str, 'atmosphere', .false., fini_char)
-          MCS%window(window_nr)%atmosphere_file = trim(fini_char)
+          CS%window(window_nr)%atmosphere_file = trim(fini_char)
 
           call fini_extract(fini, win_str, 'keep_scattering_constant', .false., fini_char)
           fini_string = fini_char
           if (fini_string == "") then
              ! If not supplied, default state is "no"
-             MCS%window(window_nr)%constant_coef = .false.
+             CS%window(window_nr)%constant_coef = .false.
           else
-             MCS%window(window_nr)%constant_coef = string_to_bool(fini_string)
+             CS%window(window_nr)%constant_coef = string_to_bool(fini_string)
           end if
 
 
        else
-          MCS%window(window_nr)%used = .false.
+          CS%window(window_nr)%used = .false.
        end if
     end do
 
@@ -980,26 +980,26 @@ contains
 
        if (fini%has_section(section_name=tmp_str)) then
 
-          MCS%gas(gas_nr)%used = .true.
+          CS%gas(gas_nr)%used = .true.
 
           call fini_extract(fini, tmp_str, 'name', .true., fini_char)
-          MCS%gas(gas_nr)%name = trim(fini_char)
+          CS%gas(gas_nr)%name = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'spectroscopy_type', .true., fini_char)
-          MCS%gas(gas_nr)%type = trim(fini_char)
+          CS%gas(gas_nr)%type = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'spectroscopy_file', .true., fini_char)
-          MCS%gas(gas_nr)%filename = trim(fini_char)
+          CS%gas(gas_nr)%filename = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'hitran_index', .false., fini_int)
           if (fini_int == -9999) then
              call logger%debug(fname, "No HITRAN index supplied.")
              fini_int = -1
           end if
-          MCS%gas(gas_nr)%hitran_index = fini_int
+          CS%gas(gas_nr)%hitran_index = fini_int
 
        else
-          MCS%gas(gas_nr)%used = .false.
+          CS%gas(gas_nr)%used = .false.
        end if
     end do
 
@@ -1013,31 +1013,31 @@ contains
 
        if (fini%has_section(section_name=tmp_str)) then
 
-          MCS%aerosol(aerosol_nr)%used = .true.
+          CS%aerosol(aerosol_nr)%used = .true.
 
           call fini_extract(fini, tmp_str, 'aerosol_name', .true., fini_char)
-          MCS%aerosol(aerosol_nr)%name = trim(fini_char)
+          CS%aerosol(aerosol_nr)%name = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'aerosol_type', .true., fini_char)
-          MCS%aerosol(aerosol_nr)%aer_type = trim(fini_char)
+          CS%aerosol(aerosol_nr)%aer_type = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'mom_file', .true., fini_char)
-          MCS%aerosol(aerosol_nr)%mom_filename = trim(fini_char)
+          CS%aerosol(aerosol_nr)%mom_filename = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'mie_file', .true., fini_char)
-          MCS%aerosol(aerosol_nr)%mie_filename = trim(fini_char)
+          CS%aerosol(aerosol_nr)%mie_filename = trim(fini_char)
 
           call fini_extract(fini, tmp_str, 'default_aod', .true., fini_val)
-          MCS%aerosol(aerosol_nr)%default_aod = fini_val
+          CS%aerosol(aerosol_nr)%default_aod = fini_val
 
           call fini_extract(fini, tmp_str, 'default_width', .true., fini_val)
-          MCS%aerosol(aerosol_nr)%default_width = fini_val
+          CS%aerosol(aerosol_nr)%default_width = fini_val
 
           call fini_extract(fini, tmp_str, 'default_height', .true., fini_val)
-          MCS%aerosol(aerosol_nr)%default_height = fini_val
+          CS%aerosol(aerosol_nr)%default_height = fini_val
 
        else
-          MCS%aerosol(aerosol_nr)%used = .false.
+          CS%aerosol(aerosol_nr)%used = .false.
        end if
 
     end do
@@ -1054,8 +1054,8 @@ contains
   subroutine MCS_find_gases(window, gas, i_win)
     implicit none
 
-    type(CS_window), intent(inout) :: window(:)
-    type(CS_gas), intent(inout) :: gas(:)
+    type(CS_window_t), intent(inout) :: window(:)
+    type(CS_gas_t), intent(inout) :: gas(:)
     integer, intent(in) :: i_win
 
     ! Local variables
@@ -1117,8 +1117,8 @@ contains
   subroutine MCS_find_aerosols(window, aerosol, i_win)
     implicit none
 
-    type(CS_window), intent(inout) :: window(:)
-    type(CS_aerosol), intent(inout) :: aerosol(:)
+    type(CS_window_t), intent(inout) :: window(:)
+    type(CS_aerosol_t), intent(inout) :: aerosol(:)
     integer, intent(in) :: i_win
 
     ! Local variables
@@ -1172,12 +1172,12 @@ contains
   end subroutine MCS_find_aerosols
 
 
-  subroutine MCS_find_gas_priors(window, gas, i_win)
+  subroutine MCS_find_gas_priors(CS_win, CS_gas, i_win)
 
     implicit none
 
-    type(CS_window), intent(inout) :: window(:)
-    type(CS_gas), intent(in) :: gas(:)
+    type(CS_window_t), intent(inout) :: CS_win(:)
+    type(CS_gas_t), intent(in) :: CS_gas(:)
     integer, intent(in) :: i_win
 
     ! Function name
@@ -1188,7 +1188,7 @@ contains
     integer :: gas_idx, MCS_gas_pos
     logical :: found_gas
 
-    call window(i_win)%gas_prior_type_string%split(&
+    call CS_win(i_win)%gas_prior_type_string%split(&
          tokens=split_string, sep=' ', &
          max_tokens=MAX_GASES)
 
@@ -1205,14 +1205,14 @@ contains
        ! Going through the gases, we have to find which one matches the gas
        ! specified in this prior type
        found_gas = .false.
-       do j=1, window(i_win)%num_gases
+       do j=1, CS_win(i_win)%num_gases
           ! Skip unused
-          if (.not. gas(j)%used) cycle
+          if (.not. CS_gas(j)%used) cycle
 
           ! Found the gas!
-          if (gas(j)%name == prior_strings(1)) then
+          if (CS_gas(j)%name == prior_strings(1)) then
              write(tmp_str, '(A, G0.1, A, A)') "Gas matching gas prior type found at index ", &
-                  j, " with name ", gas(j)%name%chars()
+                  j, " with name ", CS_gas(j)%name%chars()
              call logger%debug(fname, trim(tmp_str))
              found_gas = .true.
              gas_idx = j
@@ -1230,9 +1230,9 @@ contains
        end if
 
        ! Write the gas prior type string into the corresponding position in
-       ! MCS%window
-       MCS_gas_pos = MCS%window(i_win)%gas_index(gas_idx)
-       MCS%window(i_win)%gas_prior_type(MCS_gas_pos) = prior_strings(2)
+       ! CS%window
+       MCS_gas_pos = CS_win(i_win)%gas_index(gas_idx)
+       CS_win(i_win)%gas_prior_type(MCS_gas_pos) = prior_strings(2)
 
     end do
 

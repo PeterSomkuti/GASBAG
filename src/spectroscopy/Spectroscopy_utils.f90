@@ -1,14 +1,14 @@
 module spectroscopy_utils_mod
 
   use math_utils_mod
-  use control_mod, only: MCS, CS_gas
+  use control_mod, only: CS_gas_t
   use logger_mod, only: logger => master_logger
 
 contains
 
   subroutine regrid_spectroscopy(gas, wl_grid)
     implicit none
-    type(CS_gas), intent(inout) :: gas
+    type(CS_gas_t), intent(inout) :: gas
     double precision, intent(in) :: wl_grid(:)
 
     integer :: N_wl, d1, d2, d3, d4, wl_idx_left

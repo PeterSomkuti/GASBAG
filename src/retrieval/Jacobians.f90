@@ -6,7 +6,7 @@ module jacobians_mod
 
 
   use math_utils_mod, only: pwl_value_1d_v2, oco_type_convolution
-  use control_mod, only: MCS
+  use control_mod
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use statevector_mod, only: statevector
@@ -93,7 +93,9 @@ contains
   !> @param radiance_calc_work Modelled detector-resolution radiances
   !> @param radiance_calc_work_hi Modelled high-resolution radiances
   !> @param dispersion_jacobian Output dIntensity/dDispersionCoefficient
-  subroutine calculate_dispersion_jacobian(my_instrument, disp_idx, &
+  subroutine calculate_dispersion_jacobian(my_instrument, &
+       CS_general, CS_win, &
+       disp_idx, &
        dispersion_coefs, band, i_win, i_fp, N_spec, &
        ILS_delta_lambda, ILS_relative_response, &
        l1b_wl_idx_min, l1b_wl_idx_max, &
@@ -102,6 +104,8 @@ contains
 
     implicit none
     class(generic_instrument), intent(in) :: my_instrument
+    type(CS_general_t), intent(in) :: CS_general
+    type(CS_window_t), intent(in) :: CS_win
     double precision, intent(in) :: dispersion_coefs(:)
     integer, intent(in) :: disp_idx
     integer, intent(in) :: band
@@ -130,13 +134,13 @@ contains
     logical :: ILS_success
 
     allocate(dispersion_pert(size(dispersion_coefs, 1)))
-    allocate(this_dispersion(MCS%general%N_spec(band)))
+    allocate(this_dispersion(CS_general%N_spec(band)))
     allocate(radiance_tmp_work(N_spec))
 
     ! Perturb the dispersion coefficient (given the index disp_idx)
     dispersion_pert(:) = dispersion_coefs(:)
     dispersion_pert(disp_idx) = dispersion_pert(disp_idx) &
-         + MCS%window(i_win)%dispersion_pert(disp_idx)
+         + CS_win%dispersion_pert(disp_idx)
 
     select type(my_instrument)
     type is (oco2_instrument)
@@ -162,14 +166,16 @@ contains
 
        ! Calculate the dispersion jacobian via finite differencing
        dispersion_jacobian(:) = (radiance_tmp_work - radiance_calc_work) &
-            / MCS%window(i_win)%dispersion_pert(disp_idx)
+            / CS_win%dispersion_pert(disp_idx)
 
     end select
 
   end subroutine calculate_dispersion_jacobian
 
 
-  subroutine calculate_ILS_stretch_jacobian(my_instrument, coeff_idx, SV, &
+  subroutine calculate_ILS_stretch_jacobian(my_instrument, &
+       CS_win, &
+       coeff_idx, SV, &
        band, i_win, i_fp, N_spec, &
        ILS_delta_lambda, ILS_relative_response, &
        ILS_stretch, this_dispersion, &
@@ -179,6 +185,7 @@ contains
 
     implicit none
     class(generic_instrument), intent(in) :: my_instrument
+    type(CS_window_t) :: CS_win
     integer, intent(in) :: coeff_idx
     type(statevector) :: SV
     integer, intent(in) :: band
@@ -217,7 +224,7 @@ contains
        do l=1, SV%num_ils_stretch
           if (l == coeff_idx) then
              ILS_stretch_pert(i) = ILS_stretch_pert(i) &
-                  + (dble(i - center_pixel) ** (l-1) * (MCS%window(i_win)%ils_stretch_pert(l) &
+                  + (dble(i - center_pixel) ** (l-1) * (CS_win%ils_stretch_pert(l) &
                   + SV%svsv(SV%idx_ils_stretch(l))))
           else
              ILS_stretch_pert(i) = ILS_stretch_pert(i) &
@@ -247,7 +254,7 @@ contains
     end select
 
     ILS_stretch_jacobian(:) = (radiance_tmp_work - radiance_calc_work) &
-         / MCS%window(i_win)%ils_stretch_pert(coeff_idx)
+         / CS_win%ils_stretch_pert(coeff_idx)
 
   end subroutine calculate_ILS_stretch_jacobian
 

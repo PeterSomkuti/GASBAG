@@ -2,16 +2,17 @@
 !> @file guanter_model.f90
 !> @author Peter Somkuti
 !>
-!! This module contains the subroutines to execute the empirical, data-driven SIF
-!! retrieval scheme, outlined in Guanter et al. (2012). There will be a good chunk
-!! in here, which is redundant when compared to the physical-based retrieval module,
-!! however since the two retrieval methods are so different - I decided to put them
-!! into separate modules at the cost of some code doubling-up.
+!> @details
+!> This module contains the subroutines to execute the empirical, data-driven SIF
+!> retrieval scheme, outlined in Guanter et al. (2012). There will be a good chunk
+!> in here, which is redundant when compared to the physical-based retrieval module,
+!> however since the two retrieval methods are so different - I decided to put them
+!> into separate modules at the cost of some code doubling-up.
 
 module guanter_model_mod
 
   ! User modules
-  use control_mod, only: MCS, MAX_WINDOWS
+  use control_mod, only: CS_t, MAX_WINDOWS
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use math_utils_mod
@@ -76,11 +77,12 @@ contains
   !> reading in the needed arrays, and in the big loop call the forward
   !> model / retrieval function.
   !> @param my_instrument Instrument entity
-  !>
-  subroutine guanter_retrieval(my_instrument)
+  !> @param CS Control structure
+  subroutine guanter_retrieval(my_instrument, CS)
 
     implicit none
     class(generic_instrument), intent(in) :: my_instrument
+    type(CS_t), intent(in) :: CS
 
     !> Various HDF file IDs for L1B, basisfunction file, and output file
     integer(hid_t) :: l1b_file_id, basisfunction_file_id, output_file_id
@@ -123,13 +125,13 @@ contains
 
 
     ! Grab the HDF IDs for easy access
-    l1b_file_id = MCS%input%l1b_file_id
-    output_file_id = MCS%output%output_file_id
+    l1b_file_id = CS%input%l1b_file_id
+    output_file_id = CS%output%output_file_id
 
     ! Numbers for easy access in loops
-    N_fp = MCS%general%N_fp
-    N_fr = MCS%general%N_frame
-    N_bands = MCS%general%N_bands
+    N_fp = CS%general%N_fp
+    N_fr = CS%general%N_frame
+    N_bands = CS%general%N_bands
 
     ! And also create the result group in the output file
     call h5gcreate_f(output_file_id, "linear_fluorescence_results", &
@@ -140,15 +142,15 @@ contains
     ! basisfunctions for all retrieval windows already here.
     do i_win=1, MAX_WINDOWS
 
-       if (MCS%window(i_win)%used .eqv. .false.) then
+       if (CS%window(i_win)%used .eqv. .false.) then
           cycle ! This window is not used!
        end if
 
        ! Open up the basisfunction file
-       call h5fopen_f(MCS%window(i_win)%basisfunction_file%chars(), &
+       call h5fopen_f(CS%window(i_win)%basisfunction_file%chars(), &
             H5F_ACC_RDONLY_F, basisfunction_file_id, hdferr)
        call check_hdf_error(hdferr, fname, "Error opening HDF file: " &
-            // trim(MCS%window(i_win)%basisfunction_file%chars()))
+            // trim(CS%window(i_win)%basisfunction_file%chars()))
 
        if (.not. allocated(basisfunctions)) then
           ! And then start reading values into our own arrays
@@ -156,14 +158,14 @@ contains
           call get_HDF5_dset_dims(basisfunction_file_id, "/BasisFunction_SV1_FP1", num_pixels)
           ! Allocate the basisfunction array
           allocate(basisfunctions(MAX_WINDOWS, num_pixels(1), &
-               MCS%general%N_fp, MCS%algorithm%n_basisfunctions))
+               CS%general%N_fp, CS%algorithm%n_basisfunctions))
           ! Allocate the temporary array to hold one single basisfunction
           allocate(tmp_basisfunctions(num_pixels(1)))
        end if
 
        ! And read them in, one by one
        do i=1, N_fp
-          do j=1, MCS%algorithm%n_basisfunctions
+          do j=1, CS%algorithm%n_basisfunctions
 
              ! For now, I've decided the naming pattern for the basisfunctions
              ! are BasisFunction_SV{X}_FP{Y}, for basisfunction number X and footprint Y
@@ -187,7 +189,7 @@ contains
 
        call h5fclose_f(basisfunction_file_id, hdferr)
        call check_hdf_error(hdferr, fname, "Could not close basisfunction file " &
-            // trim(MCS%window(i_win)%basisfunction_file%chars()))
+            // trim(CS%window(i_win)%basisfunction_file%chars()))
 
     end do
 
@@ -206,7 +208,7 @@ contains
        ! Read in the sounding id's
        call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
 
-       allocate(dispersion(maxval(MCS%general%N_spec),MCS%general%N_fp, MCS%general%N_bands))
+       allocate(dispersion(maxval(CS%general%N_spec), CS%general%N_fp, CS%general%N_bands))
        do band=1, N_bands
           do fp=1, N_fp
              call my_instrument%calculate_dispersion(dispersion_coefs(:,fp,band), dispersion(:,fp,band), band, fp)
@@ -216,7 +218,7 @@ contains
     end select
 
     ! Allocate the (module-wide) result arrays here
-    num_total_soundings = MCS%general%N_soundings
+    num_total_soundings = CS%general%N_soundings
 
     allocate(retrieved_SIF_abs(N_fp, N_fr))
     allocate(retrieved_SIF_rel(N_fp, N_fr))
@@ -225,29 +227,29 @@ contains
     allocate(retrieved_SIF_rel_uncertainty(N_fp, N_fr))
 
     allocate(chi2(N_fp, N_fr))
-    allocate(final_SV(N_fp, N_fr, MCS%algorithm%n_basisfunctions + 1))
-    allocate(final_SV_uncert(N_fp, N_fr, MCS%algorithm%n_basisfunctions + 1))
+    allocate(final_SV(N_fp, N_fr, CS%algorithm%n_basisfunctions + 1))
+    allocate(final_SV_uncert(N_fp, N_fr, CS%algorithm%n_basisfunctions + 1))
 
 
     ! Allocate radiance containers if requested by user
-    if (MCS%output%save_radiances) then
-       allocate(final_radiance(size(dispersion, 1), MCS%general%N_fp, N_fr))
-       allocate(measured_radiance(size(dispersion, 1), MCS%general%N_fp, N_fr))
-       allocate(noise_radiance(size(dispersion, 1), MCS%general%N_fp, N_fr))
+    if (CS%output%save_radiances) then
+       allocate(final_radiance(size(dispersion, 1), CS%general%N_fp, N_fr))
+       allocate(measured_radiance(size(dispersion, 1), CS%general%N_fp, N_fr))
+       allocate(noise_radiance(size(dispersion, 1), CS%general%N_fp, N_fr))
     end if
 
 
-    !! Loop through all frames and footprints, and perform the retrieval
-    !! The outermose loop simply does it for the various microwindows
+    ! Loop through all frames and footprints, and perform the retrieval
+    ! The outermose loop simply does it for the various microwindows
 
     do i_win=1, MAX_WINDOWS
 
-       if (MCS%window(i_win)%used .eqv. .false.) then
+       if (CS%window(i_win)%used .eqv. .false.) then
           cycle ! This window is not used!
        end if
 
 
-       call logger%info(fname, "Processing window: " // trim(MCS%window(i_win)%name))
+       call logger%info(fname, "Processing window: " // trim(CS%window(i_win)%name))
 
        ! Fill result containers with NaNs
        retrieved_SIF_abs(:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -259,7 +261,7 @@ contains
        final_SV_uncert(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        chi2(:,:) =IEEE_VALUE(1D0, IEEE_QUIET_NAN)
 
-       if (MCS%output%save_radiances) then
+       if (CS%output%save_radiances) then
           final_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
           measured_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
           noise_radiance = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
@@ -274,13 +276,13 @@ contains
 
              ! Retrieval time!
              call cpu_time(cpu_time_start)
-             call guanter_FM(my_instrument, i_fr, i_fp, i_win, MCS%window(i_win)%band)
+             call guanter_FM(my_instrument, i_fr, i_fp, i_win, CS%window(i_win)%band, CS)
              call cpu_time(cpu_time_stop)
 
              if (mod(cnt, 1) == 0) then
                 write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F12.6, A)') &
                      "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
-                     dble(100 * dble(cnt) / dble(MCS%general%N_frame * MCS%general%N_fp)), "%) - ", &
+                     dble(100 * dble(cnt) / dble(CS%general%N_frame * CS%general%N_fp)), "%) - ", &
                      (cpu_time_stop - cpu_time_start), ' sec.'
                 call logger%debug(fname, trim(tmp_str))
              end if
@@ -289,18 +291,18 @@ contains
           end do
        end do
 
-       !! Write the results into the output HDF5 file
+       ! Write the results into the output HDF5 file
 
        call logger%info(fname, "Writing out results.")
        ! And then just write out the datasets / arrays
 
-       group_name = "linear_fluorescence_results/" // trim(MCS%window(i_win)%name)
+       group_name = "linear_fluorescence_results/" // trim(CS%window(i_win)%name)
 
        call logger%info(fname, "Writing group: " // trim(group_name))
        call h5gcreate_f(output_file_id, group_name, sif_result_gid, hdferr)
        call check_hdf_error(hdferr, fname, "Error. Could not create group: " // trim(group_name))
 
-       do i=1, MCS%algorithm%n_basisfunctions
+       do i=1, CS%algorithm%n_basisfunctions
 
           out_dims2d(1) = N_fp
           out_dims2d(2) = N_fr
@@ -356,7 +358,7 @@ contains
             trim(tmp_str), &
             chi2, out_dims2d, IEEE_VALUE(1D0, IEEE_QUIET_NAN))
 
-       if (MCS%output%save_radiances) then
+       if (CS%output%save_radiances) then
           out_dims3d = shape(final_radiance)
           write(tmp_str, '(A,A)') trim(group_name), "/modelled_radiance"
           call logger%info(fname, "Writing out: " // trim(tmp_str))
@@ -389,7 +391,8 @@ contains
   !> @param i_fp Footprint counter
   !> @param i_win Retrieval window counter
   !> @param band Current band
-  subroutine guanter_FM(my_instrument, i_fr, i_fp, i_win, band)
+  !> @param CS Control structure
+  subroutine guanter_FM(my_instrument, i_fr, i_fp, i_win, band, CS)
 
     implicit none
 
@@ -398,11 +401,12 @@ contains
     integer, intent(in) :: i_fp
     integer, intent(in) :: i_win
     integer, intent(in) :: band
+    type(CS_t) :: CS
 
     ! Lowest and highest L1B pixel index
     integer :: l1b_wl_idx_min, l1b_wl_idx_max
     ! Loop counters
-    integer :: i, j, l, cnt
+    integer :: i, l
     ! L1B HDF file ID
     integer(hid_t) :: l1b_file_id
 
@@ -459,21 +463,19 @@ contains
 
     ! Solution state vector
     double precision, allocatable :: xhat(:)
-    ! Jacobian, inverse noise covariance matrix
-    double precision, allocatable :: K(:,:), Se_inv(:,:)
+    ! Inverse noise covariance matrix
+    double precision, allocatable :: Se_inv(:,:)
     ! Regular and inverse of the posterior covariance matrix
     double precision, allocatable :: Shat(:,:), Shat_inv(:,:)
-    ! Temporary matrices for calculations
-    double precision, allocatable :: m_tmp1(:,:), m_tmp2(:,:)
 
     ! Grab the L1B HDF file handler
-    l1b_file_id = MCS%input%l1b_file_id
+    l1b_file_id = CS%input%l1b_file_id
 
     ! Read the spectrum from the L1B HDF file
     select type(my_instrument)
     type is (oco2_instrument)
        call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, &
-            band, MCS%general%N_spec(band), radiance_l1b)
+            band, CS%general%N_spec(band), radiance_l1b)
     end select
 
     ! Calculate the continuum radiance for this spectrum (the whole band)
@@ -485,10 +487,10 @@ contains
     l1b_wl_idx_max = 0
 
     do i=1, size(dispersion, 1)
-       if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_min) then
+       if (dispersion(i, i_fp, band) < CS%window(i_win)%wl_min) then
           l1b_wl_idx_min = i
        end if
-       if (dispersion(i, i_fp, band) < MCS%window(i_win)%wl_max) then
+       if (dispersion(i, i_fp, band) < CS%window(i_win)%wl_max) then
           l1b_wl_idx_max = i
        end if
     end do
@@ -576,7 +578,7 @@ contains
     ! the new baseline, and the process is repeated for removing another
     ! basisfunction, until no further improvement is seen.
 
-    N_basisfunctions = MCS%algorithm%n_basisfunctions
+    N_basisfunctions = CS%algorithm%n_basisfunctions
     N_eliminated = 0
 
     allocate(BIC_this_iteration(N_basisfunctions))
@@ -628,6 +630,7 @@ contains
                radiance_work, noise_work, Se_inv, &
                xhat, rad_conv, &
                Shat, tmp_chi2, this_BIC, used_basisfunctions)
+
           deallocate(Shat)
 
           BIC_this_iteration(i) = this_BIC
@@ -695,7 +698,7 @@ contains
     !write(tmp_str, '(A, F12.3,A)') "SIF rel: ", xhat(N_sv) * 100, "%"
     !call logger%trivia(fname, trim(tmp_str))
 
-    if (MCS%output%save_radiances) then
+    if (CS%output%save_radiances) then
        ! If requested, store the radiances and the noise values
        final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = rad_conv(:)
        measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_work(:)
@@ -751,7 +754,7 @@ contains
     ! Was matrix inversion successful?
     logical :: success_inv_mat
     ! Loop and counter variables
-    integer :: i, j, l, cnt
+    integer :: i, l, cnt
 
     ! If requested by the user, we can choose to only use
     ! certain basisfunctions (required by the backward elimination algorithm)
@@ -893,8 +896,8 @@ contains
        end if
     end do
 
-    !! Now we need to perform a linear regression y = ax + b.
-    !! Use the handy LAPACK routine DGELS here.
+    ! Now we need to perform a linear regression y = ax + b.
+    ! Use the handy LAPACK routine DGELS here.
 
     call DGELS('N', &    ! TRANS
          num_used, &     ! M

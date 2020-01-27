@@ -12,7 +12,7 @@
 module gas_tau_mod
 
   ! User modules
-  use control_mod, only: CS_gas
+  use control_mod, only: CS_gas_t
   use math_utils_mod
 
   public :: calculate_gas_tau, get_CS_value_at
@@ -60,7 +60,7 @@ contains
     double precision, intent(in) :: T(:)
     double precision, intent(in) :: sh(:)
     double precision, intent(in) :: grav(:)
-    type(CS_gas), intent(in) :: gas
+    type(CS_gas_t), intent(in) :: gas
     integer, intent(in) :: N_sub
     logical, intent(in) :: need_psurf_jac
 
@@ -436,7 +436,7 @@ contains
 
     implicit none
     logical, intent(in) :: pre_gridded
-    type(CS_gas), intent(in) :: gas
+    type(CS_gas_t), intent(in) :: gas
     double precision, intent(in) :: wl(:), p, T, H2O
     integer, intent(in) :: wl_left_idx(:)
 

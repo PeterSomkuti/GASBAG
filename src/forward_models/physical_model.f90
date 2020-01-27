@@ -20,8 +20,9 @@ module physical_model_mod
 
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
-  use control_mod, only: MCS, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, &
-       MCS_find_gases, MCS_find_aerosols, MCS_find_gas_priors
+  use control_mod
+  !only: CS_t, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, &
+  !     MCS_find_gases, MCS_find_aerosols, MCS_find_gas_priors
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use solar_model_mod
@@ -161,10 +162,11 @@ contains
   !> @param my_instrument Instrument entity
   !>
   !> TODO Detailed description of the workings
-  subroutine physical_retrieval(my_instrument)
+  subroutine physical_retrieval(my_instrument, CS)
 
     implicit none
     class(generic_instrument), intent(in) :: my_instrument
+    type(CS_t), intent(inout) :: CS
 
     ! HDF5 file handlers for the L1b file and the MET file
     integer(hid_t) :: l1b_file_id, met_file_id, output_file_id
@@ -207,25 +209,27 @@ contains
     double precision, allocatable :: land_fraction(:,:)
 
     ! Open up the MET file
-    if (MCS%algorithm%observation_mode == "downlooking") then
-       call h5fopen_f(MCS%input%met_filename%chars(), &
-            H5F_ACC_RDONLY_F, MCS%input%met_file_id, hdferr)
+    if (CS%algorithm%observation_mode == "downlooking") then
+       call h5fopen_f(CS%input%met_filename%chars(), &
+            H5F_ACC_RDONLY_F, CS%input%met_file_id, hdferr)
        call check_hdf_error(hdferr, fname, "Error opening MET file: " &
-            // trim(MCS%input%met_filename%chars()))
+            // trim(CS%input%met_filename%chars()))
        ! Store HDF file handler for more convenient access
-       met_file_id = MCS%input%met_file_id
+       met_file_id = CS%input%met_file_id
+    else
+       call logger%debug(fname, "Not loading MET data.")
     end if
 
     ! Store HDF file handler for more convenient access
-    l1b_file_id = MCS%input%l1b_file_id
-    output_file_id = MCS%output%output_file_id
+    l1b_file_id = CS%input%l1b_file_id
+    output_file_id = CS%output%output_file_id
     this_thread = 0
 
     ! Grab number of frames and footprints
-    num_frames = MCS%general%N_frame
-    num_fp = MCS%general%N_fp
+    num_frames = CS%general%N_frame
+    num_fp = CS%general%N_fp
     ! Grab number of bands
-    num_band = MCS%general%N_bands
+    num_band = CS%general%N_bands
 
     !---------------------------------------------------------------------
     ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
@@ -237,6 +241,7 @@ contains
     type is (oco2_instrument)
 
        call my_instrument%read_MET_data(met_file_id, l1b_file_id, &
+            CS%algorithm%observation_mode, &
             met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
 
        ! Pressure levels of p=0 don't agree well with the rest of the code,
@@ -245,7 +250,7 @@ contains
        ! (This really shouldn't occur anyway)
        where (met_P_levels < 1d-10) met_P_levels = 1d-10
 
-       if (MCS%algorithm%observation_mode == "downlooking") then
+       if (CS%algorithm%observation_mode == "downlooking") then
           ! These here also only make sense in a downlooking position.
           ! Read in the sounding id's
           call my_instrument%read_sounding_ids(l1b_file_id, sounding_ids)
@@ -301,8 +306,8 @@ contains
        ! pixels for the different bands!
        num_pixel = 0
        do band=1, num_band
-          if (MCS%general%N_spec(band) > num_pixel) then
-             num_pixel = MCS%general%N_spec(band)
+          if (CS%general%N_spec(band) > num_pixel) then
+             num_pixel = CS%general%N_spec(band)
           end if
        end do
 
@@ -320,8 +325,8 @@ contains
     ! We can also read in the aerosol data right here, as they are the same for
     ! all retrieval windows.
     do i=1, MAX_AEROSOLS
-       if (.not. MCS%aerosol(i)%used) cycle
-       call ingest_aerosol_files(MCS%aerosol(i))
+       if (.not. CS%aerosol(i)%used) cycle
+       call ingest_aerosol_files(CS%aerosol(i))
     end do
 
     ! Create the HDF group in which all the results go in the end
@@ -351,33 +356,33 @@ contains
     do i_win=1, MAX_WINDOWS
 
        ! Just skip unused windows
-       if (.not. MCS%window(i_win)%used) cycle
+       if (.not. CS%window(i_win)%used) cycle
 
        ! At the beginning, we check which gases were defined for this window,
        ! and see if a gas with the corresponding name has been defined.
-       call MCS_find_gases(MCS%window, MCS%gas, i_win)
+       call MCS_find_gases(CS%window, CS%gas, i_win)
 
        ! Same for aerosols
-       call MCS_find_aerosols(MCS%window, MCS%aerosol, i_win)
+       call MCS_find_aerosols(CS%window, CS%aerosol, i_win)
 
        ! We also check what type of gas priors the user wants to have
-       call MCS_find_gas_priors(MCS%window, MCS%gas, i_win)
+       call MCS_find_gas_priors(CS%window, CS%gas, i_win)
 
        ! If we have gases, we want to read in the corresponding spectroscopy data
        ! We have to do this for every microwindow since the cross sections are being
        ! re-gridded for every microwindow.
-       if (MCS%window(i_win)%num_gases > 0) then
+       if (CS%window(i_win)%num_gases > 0) then
           ! Read in the spectroscopy data, depending on the type
-          do i=1, size(MCS%window(i_win)%gases)
-             ! Which gas are we reading in? As in 'index of MCS%gases'
-             j = MCS%window(i_win)%gas_index(i)
+          do i=1, size(CS%window(i_win)%gases)
+             ! Which gas are we reading in? As in 'index of CS%gases'
+             j = CS%window(i_win)%gas_index(i)
 
-             if (MCS%gas(j)%type%lower() == "absco") then
-                call logger%trivia(fname, "Reading in ABSCO-type gas: " // MCS%window(i_win)%gases(i))
-                call read_absco_HDF(MCS%gas(j)%filename%chars(), MCS%gas(j), absco_dims, &
-                     MCS%gas(j)%hitran_index)
+             if (CS%gas(j)%type%lower() == "absco") then
+                call logger%trivia(fname, "Reading in ABSCO-type gas: " // CS%window(i_win)%gases(i))
+                call read_absco_HDF(CS%gas(j)%filename%chars(), CS%gas(j), absco_dims, &
+                     CS%gas(j)%hitran_index)
              else
-                call logger%fatal(fname, "Spectroscopy type: " // MCS%gas(j)%type &
+                call logger%fatal(fname, "Spectroscopy type: " // CS%gas(j)%type &
                      // " not implemented!")
                 stop 1
              end if
@@ -390,8 +395,8 @@ contains
 
           call logger%debug(fname, "Looking into atmosphere file.")
           call read_atmosphere_file(&
-               MCS%window(i_win)%atmosphere_file%chars(), &
-               MCS%window(i_win)%gases, &
+               CS%window(i_win)%atmosphere_file%chars(), &
+               CS%window(i_win)%gases, &
                initial_atm)
 
        end if
@@ -400,9 +405,9 @@ contains
 
 
        ! The currently used band / spectrometer number
-       band = MCS%window(i_win)%band
+       band = CS%window(i_win)%band
        ! Grab the number of spectral pixels in this band
-       num_pixel = MCS%general%N_spec(band)
+       num_pixel = CS%general%N_spec(band)
 
        ! We are reading in the sounding geometry and location on a
        ! per-band basis. This might not be necessary for all instruments,
@@ -411,12 +416,17 @@ contains
        type is (oco2_instrument)
 
           ! Read in the measurement geometries - per band
-          call my_instrument%read_sounding_geometry(l1b_file_id, band, SZA, SAA, VZA, VAA)
+          call my_instrument%read_sounding_geometry(l1b_file_id, band, &
+               CS%general%N_fp, CS%general%N_frame, CS%algorithm%observation_mode, &
+               SZA, SAA, VZA, VAA)
           ! Read in the measurement location
-          call my_instrument%read_sounding_location(l1b_file_id, band, lon, lat, &
-               altitude, relative_velocity, relative_solar_velocity)
+          call my_instrument%read_sounding_location(l1b_file_id, band, &
+               CS%general%N_fp, CS%general%N_frame, CS%algorithm%observation_mode, &
+               lon, lat, altitude, relative_velocity, relative_solar_velocity)
           ! Grab the L1B stokes coefficients
-          call my_instrument%read_stokes_coef(l1b_file_id, band, stokes_coef)
+          call my_instrument%read_stokes_coef(l1b_file_id, band, &
+               CS%general%N_fp, CS%general%N_frame, &
+               stokes_coef)
 
           ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
@@ -437,11 +447,11 @@ contains
        hires_pad = (ils_max_wl - ils_min_wl) * 1.025d0
 
        ! Grab the desired high-resolution wavelength grid spacing
-       hires_spacing = MCS%window(i_win)%wl_spacing
+       hires_spacing = CS%window(i_win)%wl_spacing
 
        ! .. and construct the high-resolution grid from the supplied
        ! microwindow range.
-       N_hires = ceiling((MCS%window(i_win)%wl_max - MCS%window(i_win)%wl_min + 2*hires_pad) &
+       N_hires = ceiling((CS%window(i_win)%wl_max - CS%window(i_win)%wl_min + 2*hires_pad) &
             / hires_spacing)
 
        write(tmp_str, '(A,G0.1)') "Number of hires spectral points: ", N_hires
@@ -449,19 +459,19 @@ contains
 
        allocate(hires_grid(N_hires))
        do i=1, N_hires
-          hires_grid(i) = MCS%window(i_win)%wl_min - hires_pad + dble(i-1) * hires_spacing
+          hires_grid(i) = CS%window(i_win)%wl_min - hires_pad + dble(i-1) * hires_spacing
        end do
 
        ! For a faster gas-OD calculation, we re-grid the spectroscopy data
        ! as well, such that we do not have to interpolate in the wavelength
        ! dimension every single time.
 
-       if (MCS%window(i_win)%num_gases > 0) then
+       if (CS%window(i_win)%num_gases > 0) then
           ! Read in the spectroscopy data, depending on the type
-          do i=1, size(MCS%window(i_win)%gases)
+          do i=1, size(CS%window(i_win)%gases)
 
-             j = MCS%window(i_win)%gas_index(i)
-             call regrid_spectroscopy(MCS%gas(j), hires_grid)
+             j = CS%window(i_win)%gas_index(i)
+             call regrid_spectroscopy(CS%gas(j), hires_grid)
 
           end do
        end if
@@ -471,22 +481,22 @@ contains
        ! the following. Since the re-gridding procedure is fairly costly, we want
        ! to keep the solar spectrum data as small as possible.
 
-       if (MCS%algorithm%solar_type == "toon") then
-          call read_toon_solar_spectrum(MCS%algorithm%solar_file%chars(), &
+       if (CS%algorithm%solar_type == "toon") then
+          call read_toon_solar_spectrum(CS%algorithm%solar_file%chars(), &
                solar_spectrum, &
-               MCS%window(i_win)%wl_min - hires_pad, &
-               MCS%window(i_win)%wl_max + hires_pad)
+               CS%window(i_win)%wl_min - hires_pad, &
+               CS%window(i_win)%wl_max + hires_pad)
 
-       else if (MCS%algorithm%solar_type == "oco_hdf") then
-          call read_oco_hdf_solar_spectrum(MCS%algorithm%solar_file%chars(), &
+       else if (CS%algorithm%solar_type == "oco_hdf") then
+          call read_oco_hdf_solar_spectrum(CS%algorithm%solar_file%chars(), &
                band, &
                solar_spectrum, &
                solar_continuum_from_hdf, &
-               MCS%window(i_win)%wl_min - hires_pad, &
-               MCS%window(i_win)%wl_max + hires_pad)
+               CS%window(i_win)%wl_min - hires_pad, &
+               CS%window(i_win)%wl_max + hires_pad)
        else
           call logger%fatal(fname, "Sorry, solar model type " &
-               // MCS%algorithm%solar_type%chars() &
+               // CS%algorithm%solar_type%chars() &
                // " is not known.")
        end if
 
@@ -510,7 +520,7 @@ contains
 
 
        ! Allocate containers to hold the radiances and noise values - if requested!
-       if (MCS%output%save_radiances) then
+       if (CS%output%save_radiances) then
           allocate(final_radiance(num_pixel, num_fp, num_frames))
           allocate(measured_radiance(num_pixel, num_fp, num_frames))
           allocate(noise_radiance(num_pixel, num_fp, num_frames))
@@ -546,13 +556,15 @@ contains
 
        ! Parsing the statevector string, that was passed in the window
        ! section and initialize the state vector SV accordingly. This subroutine
-       ! needs to access plenty of things in the MCS, so we only pass the
+       ! needs to access plenty of things in the CS, so we only pass the
        ! window index, and the routine takes care of arranging the rest.
 
        ! For the beginning, we start by initialising it with the number of levels
        ! as obtained from the initial_atm
 
-       call parse_and_initialize_SV(i_win, size(initial_atm%p), global_SV)
+       call parse_and_initialize_SV(i_win, size(initial_atm%p), &
+            CS%window(i_win), CS%gas, CS%aerosol, &
+            global_SV)
        call logger%info(fname, "Initialised SV structure")
 
        ! And now set up the result container with the appropriate sizes for arrays
@@ -560,13 +572,13 @@ contains
             size(global_SV%svap), initial_atm%num_gases, initial_atm%num_levels)
 
        ! Create the SV names corresponding to the SV indices
-       call assign_SV_names_to_result(results, global_SV, i_win)
+       call assign_SV_names_to_result(results, global_SV, CS%window(i_win))
 
 
        call logger%info(fname, "Starting main retrieval loop!")
 
        frame_start = 1
-       frame_skip = MCS%window(i_win)%frame_skip
+       frame_skip = CS%window(i_win)%frame_skip
        frame_stop = num_frames
 
        ! retr_count keeps track of the number of retrievals processed
@@ -574,7 +586,7 @@ contains
        ! processing time.
        retr_count = 0
        total_number_todo = (num_fp * frame_stop / frame_skip) / &
-            (MCS%window(i_win)%frame_skip * MCS%window(i_win)%footprint_skip)
+            (CS%window(i_win)%frame_skip * CS%window(i_win)%footprint_skip)
        mean_duration = 0.0d0
 
 
@@ -585,7 +597,7 @@ contains
        ! write to the same file from different threads - NOT thread-safe!
 
 #ifdef _OPENMP
-       if (MCS%algorithm%step_through) then
+       if (CS%algorithm%step_through) then
 
           if (OMP_GET_MAX_THREADS() > 1) then
              call logger%warning(fname, "User requested STEP-THROUGH mode.")
@@ -618,12 +630,13 @@ contains
        ! earlier (less total iterations to process) and will then just sit idle, whereas
        ! those threads can be assigned new soundings with dynamic scheduling.
 
-       !$OMP PARALLEL DO SHARED(retr_count, mean_duration) SCHEDULE(dynamic, num_fp) &
-       !$OMP PRIVATE(i_fr, i_fp, cpu_time_start, cpu_time_stop, &
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration, CS) SCHEDULE(dynamic, num_fp) &
+       !$OMP PRIVATE(i_fp, i_fr, &
+       !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
 
        do i_fr=frame_start, frame_stop, frame_skip
-          do i_fp=1, num_fp !, MCS%window(i_win)%footprint_skip
+          do i_fp=1, num_fp !, CS%window(i_win)%footprint_skip
 
 #ifdef _OPENMP
              this_thread = OMP_GET_THREAD_NUM()
@@ -644,8 +657,9 @@ contains
                   my_instrument, &
                   i_fp, &
                   i_fr, &
-                  i_win, &
                   band, &
+                  i_win, &
+                  CS, &
                   this_iterations &
                   )
              ! ---------------------------------------------------------------------
@@ -681,7 +695,9 @@ contains
 
        ! This writes the results into the HDF file
        call write_results_into_hdf_output( &
-            i_win, &
+            CS%window(i_win), &
+            CS%general, &
+            CS%output, &
             output_file_id, &
             results, &
             met_psurf, &
@@ -691,7 +707,7 @@ contains
             wavelength_radiance)
 
        ! Also deallocate containers holding the radiances
-       if (MCS%output%save_radiances) then
+       if (CS%output%save_radiances) then
 
           deallocate(final_radiance)
           deallocate(measured_radiance)
@@ -735,15 +751,15 @@ contains
 
        ! We also de-allocate ABSCO-related fields for safety. The ABSCO read routine
        ! will overwrite the data anyway, but you know .. bad practice.
-       do i=1, size(MCS%gas)
+       do i=1, size(CS%gas)
           ! Skip over unused
-          if (.not. MCS%gas(i)%used) cycle
+          if (.not. CS%gas(i)%used) cycle
 
-          if (allocated(MCS%gas(i)%cross_section)) deallocate(MCS%gas(i)%cross_section)
-          if (allocated(MCS%gas(i)%wavelength)) deallocate(MCS%gas(i)%wavelength)
-          if (allocated(MCS%gas(i)%T)) deallocate(MCS%gas(i)%T)
-          if (allocated(MCS%gas(i)%p)) deallocate(MCS%gas(i)%p)
-          if (allocated(MCS%gas(i)%H2O)) deallocate(MCS%gas(i)%H2O)
+          if (allocated(CS%gas(i)%cross_section)) deallocate(CS%gas(i)%cross_section)
+          if (allocated(CS%gas(i)%wavelength)) deallocate(CS%gas(i)%wavelength)
+          if (allocated(CS%gas(i)%T)) deallocate(CS%gas(i)%T)
+          if (allocated(CS%gas(i)%p)) deallocate(CS%gas(i)%p)
+          if (allocated(CS%gas(i)%H2O)) deallocate(CS%gas(i)%H2O)
 
        end do
 
@@ -756,23 +772,32 @@ contains
   !> @param my_instrument Instrument instance
   !> @param i_fp Footprint index
   !> @param i_fr Frame index
-  !> @param i_win Window index for MCS
+  !> @param i_win Window index for CS
   !> @param band Band number
+  !> @param CS_win Control structure for this(!) retrieval window
+  !> @param CS_gas Control structure for all gases
   !> @param converged Whether this retrieval has converged or not
   !>
   !> This function performs the full physical retrieval, and returns whether
   !> it converged or not. It accesses all the L1B/MET arrays defined in the module
   !> for fast readout and processing. The OE scheme is based on Rodgers (2000),
   !> and so far we are doing the LM-modification to the Gauss-Newton scheme.
-  function physical_FM(my_instrument, i_fp, i_fr, i_win, band, this_iterations) result(converged)
+  function physical_FM(my_instrument, i_fp, i_fr, band, i_win, &
+       CS, this_iterations) result(converged)
 
     implicit none
 
     class(generic_instrument), intent(in) :: my_instrument
-    integer, intent(in) :: i_fr, i_fp, i_win, band
+    integer, intent(in) :: i_fr
+    integer, intent(in) :: i_fp
+    integer, intent(in) :: band
+    integer, intent(in) :: i_win
+    type(CS_t), intent(inout) :: CS
     integer, intent(inout) :: this_iterations
     logical :: converged
 
+
+    type(CS_window_t) :: CS_win
     ! HDF file id handlers for L1B and output file
     integer(hid_t) :: l1b_file_id, output_file_id
 
@@ -977,6 +1002,7 @@ contains
     double precision :: cpu_gas_start, cpu_gas_stop
 
     ! Initialize
+    CS_win = CS%window(i_win)
     converged = .false.
     this_iterations = 0
 
@@ -984,8 +1010,8 @@ contains
     SV = global_SV
 
     ! Take a local copy of the HDF file ID handlers
-    l1b_file_id = MCS%input%l1b_file_id
-    output_file_id = MCS%output%output_file_id
+    l1b_file_id = CS%input%l1b_file_id
+    output_file_id = CS%output%output_file_id
 
     ! Ingest scene geometry and store them into the scene
     ! object.
@@ -1000,37 +1026,36 @@ contains
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
 
-
     ! Set the used radiative transfer model
-    if (MCS%window(i_win)%RT_model%lower() == "beer-lambert") then
+    if (CS_win%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
        ! Beer Lambert is intensity-only right now
        n_stokes = 1
-    else if (MCS%window(i_win)%RT_model%lower() == "xrtm") then
+    else if (CS_win%RT_model%lower() == "xrtm") then
        RT_model = RT_XRTM
 
        ! Depending on a user choice, we can run XRTM with polarization
        ! enabled or not.
-       if (MCS%window(i_win)%do_polarization) then
+       if (CS_win%do_polarization) then
           n_stokes = 3
        else
           n_stokes = 1
        end if
     else
-       call logger%error(fname, "RT Method: " // MCS%window(i_win)%RT_model%chars() // " unknown.")
+       call logger%error(fname, "RT Method: " // CS_win%RT_model%chars() // " unknown.")
        stop 1
     end if
 
     ! What is the total number of gases in this window,
     ! regardless of whether they are retrieved or not.
-    if (allocated(MCS%window(i_win)%gases)) then
-       num_gases = MCS%window(i_win)%num_gases
+    if (allocated(CS_win%gases)) then
+       num_gases = CS_win%num_gases
     else
        num_gases = 0
     end if
 
     ! Use user-supplied value for convergence critertion
-    dsigma_scale = MCS%window(i_win)%dsigma_scale
+    dsigma_scale = CS_win%dsigma_scale
     if (dsigma_scale < 0.0d0) then
        call logger%warning(fname, "Requested dsigma_scale is < 0, setting to 1.0.")
        dsigma_scale = 1.0d0
@@ -1041,7 +1066,7 @@ contains
 
        ! Read the L1B spectrum for this one measurement in normal mode!
        call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
-            MCS%general%N_spec(band), radiance_l1b)
+            CS%general%N_spec(band), radiance_l1b)
 
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
        call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
@@ -1058,15 +1083,15 @@ contains
 
     ! Estimate a smart first guess for the gas scale factor, if the user supplied
     ! values for expected delta tau etc.
-    if (allocated(MCS%window(i_win)%smart_scale_first_guess_wl_in)) then
+    if (allocated(CS_win%smart_scale_first_guess_wl_in)) then
 
-       allocate(scale_first_guess(size(MCS%window(i_win)%smart_scale_first_guess_wl_in)))
+       allocate(scale_first_guess(size(CS_win%smart_scale_first_guess_wl_in)))
 
        call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
             radiance_l1b, &
-            MCS%window(i_win)%smart_scale_first_guess_wl_in(:), &
-            MCS%window(i_win)%smart_scale_first_guess_wl_out(:), &
-            MCS%window(i_win)%smart_scale_first_guess_delta_tau(:), &
+            CS_win%smart_scale_first_guess_wl_in(:), &
+            CS_win%smart_scale_first_guess_wl_out(:), &
+            CS_win%smart_scale_first_guess_delta_tau(:), &
             scn%SZA, scn%VZA, scale_first_guess)
     else
        ! Otherwise just start with 1.0
@@ -1127,7 +1152,7 @@ contains
 
     call logger%debug(fname, "Calculating initial solar Doppler shift.")
     solar_doppler = 0.0d0
-    if (MCS%algorithm%observation_mode == "downlooking") then
+    if (CS%algorithm%observation_mode == "downlooking") then
        instrument_doppler = relative_velocity(i_fp, i_fr) / SPEED_OF_LIGHT
 
        ! THIS IS "BORROWED" FROM THE MS3 CODE
@@ -1135,7 +1160,7 @@ contains
             scn%epoch, scn%lat, scn%alt, solar_rv, solar_dist)
        solar_doppler = solar_rv / SPEED_OF_LIGHT
 
-    else if (MCS%algorithm%observation_mode == "space_solar") then
+    else if (CS%algorithm%observation_mode == "space_solar") then
 
        ! For space-solar observation mode, the doppler is obviously different
        ! so we need to change the calculation slightly.
@@ -1150,7 +1175,7 @@ contains
     N_spec_hi = size(this_solar, 1)
 
     ! Set the initial LM-Gamma parameter
-    lm_gamma = MCS%window(i_win)%lm_gamma
+    lm_gamma = CS_win%lm_gamma
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change, while the hi-res K stays the same
@@ -1185,7 +1210,8 @@ contains
     ! Separate function to populate the prior covariance - this contains
     ! a good number of hard-coded values, which in future should be
     ! given through the config file.
-    call populate_prior_covariance(SV, percentile(radiance_l1b, 98.0d0), &
+    call populate_prior_covariance(SV, CS_win, &
+         percentile(radiance_l1b, 98.0d0), &
          i_win, Sa, Sa_inv)
 
     ! -----------------------------------------------------------------------
@@ -1198,14 +1224,14 @@ contains
 
        allocate(solar_irrad(N_hires))
 
-       if (MCS%algorithm%solar_type == "toon") then
+       if (CS%algorithm%solar_type == "toon") then
           ! Allocate Solar continuum (irradiance) array. We do this here already,
           ! since it's handy to have it for estimating the albedo
 
           call calculate_solar_planck_function(6500.0d0, solar_dist, &
                solar_spectrum_regular(:,1), solar_irrad)
 
-       else if (MCS%algorithm%solar_type == "oco_hdf") then
+       else if (CS%algorithm%solar_type == "oco_hdf") then
           ! The OCO-HDF-type spectrum needs to be first re-gridded here
           call pwl_value_1d( &
                N_solar, &
@@ -1216,7 +1242,7 @@ contains
           solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
 
        else
-          call logger%error(fname, "Solar type: " // MCS%algorithm%solar_type%chars() // "is unknown.")
+          call logger%error(fname, "Solar type: " // CS%algorithm%solar_type%chars() // "is unknown.")
        end if
 
        ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
@@ -1313,8 +1339,8 @@ contains
     if (SV%num_aerosol_aod > 0) then
        call logger%debug(fname, ".. aerosol AOD priors")
        do i = 1, SV%num_aerosol_aod
-          if (MCS%window(i_win)%aerosol_retrieve_aod(SV%aerosol_aod_idx_lookup(i))) then
-             SV%svap(SV%idx_aerosol_aod(i)) = MCS%window(i_win)%aerosol_prior_aod(SV%aerosol_aod_idx_lookup(i))
+          if (CS_win%aerosol_retrieve_aod(SV%aerosol_aod_idx_lookup(i))) then
+             SV%svap(SV%idx_aerosol_aod(i)) = CS_win%aerosol_prior_aod(SV%aerosol_aod_idx_lookup(i))
           end if
        end do
     end if
@@ -1322,8 +1348,8 @@ contains
     if (SV%num_aerosol_height > 0) then
        call logger%debug(fname, ".. aerosol height priors")
        do i = 1, SV%num_aerosol_height
-          if (MCS%window(i_win)%aerosol_retrieve_height(SV%aerosol_height_idx_lookup(i))) then
-             SV%svap(SV%idx_aerosol_height(i)) = MCS%window(i_win)%aerosol_prior_height(SV%aerosol_height_idx_lookup(i))
+          if (CS_win%aerosol_retrieve_height(SV%aerosol_height_idx_lookup(i))) then
+             SV%svap(SV%idx_aerosol_height(i)) = CS_win%aerosol_prior_height(SV%aerosol_height_idx_lookup(i))
           end if
        end do
     end if
@@ -1332,7 +1358,7 @@ contains
     if (SV%num_gas > 0) then
        call logger%debug(fname, ".. gas scale factor priors")
        do i = 1, SV%num_gas
-          if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+          if (CS_win%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,1)) = mean(scale_first_guess(:))
           end if
        end do
@@ -1371,7 +1397,7 @@ contains
        ! have to pass them through the entire program all the time
        scn%num_levels = scn%atm%num_levels
        scn%num_gases = scn%atm%num_gases
-       scn%num_aerosols = MCS%window(i_win)%num_aerosols
+       scn%num_aerosols = CS_win%num_aerosols
        scn%num_stokes = n_stokes
 
        ! Allocate the optical property containers for the scene
@@ -1392,7 +1418,7 @@ contains
           ! which contains the more intricate calls to the subroutines
           ! that actually replace the VMR profiles. These prior gases
           ! tend to be functions of the scene (lon, lat, time etc.),
-          call replace_prior_VMR(scn, MCS%window(i_win)%gas_prior_type)
+          call replace_prior_VMR(scn, CS_win%gas_prior_type)
 
           ! Number of levels in the model atmosphere
           ! AS GIVEN BY THE ATMOSPHERE FILE
@@ -1439,7 +1465,7 @@ contains
 
           do i=1, num_gases
 
-             if (MCS%window(i_win)%gases(i) == "H2O") then
+             if (CS_win%gases(i) == "H2O") then
                 ! If H2O needs to be retrieved, take it from the MET atmosphere
                 ! specific humidty directly, rather than the H2O column of the
                 ! atmosphere text file.
@@ -1582,7 +1608,7 @@ contains
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
 
-       if ((num_gases > 0) .and. (MCS%algorithm%observation_mode == "downlooking")) then
+       if ((num_gases > 0) .and. (CS%algorithm%observation_mode == "downlooking")) then
 
 
           call logger%debug(fname, "Gases present in atmosphere - starting gas calculations.")
@@ -1676,7 +1702,7 @@ contains
 
                    ! From the user SV input, determine which levels belong to the
                    ! gas subcolumn retrieval.
-                   call set_gas_scale_levels(SV, j, i_win, scn%atm, scn%atm%psurf, &
+                   call set_gas_scale_levels(SV, j, CS_win, scn%atm, scn%atm%psurf, &
                         s_start, s_stop, do_gas_jac, success_scale_levels)
 
                    if (.not. success_scale_levels) then
@@ -1703,7 +1729,7 @@ contains
              ! CAUTION! This obviously requires that water is actually labelled
              ! H2O, and nothing else. "Standard names" like this need to be
              ! mentioned in the documentation / user guide.
-             if (MCS%window(i_win)%gases(j) == "H2O") then
+             if (CS_win%gases(j) == "H2O") then
                 is_H2O = .true.
              else
                 is_H2O = .false.
@@ -1735,8 +1761,8 @@ contains
                      scn%atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric T profile plus 1K perturbation
                      scn%atm%sh(:), & ! Atmospheric profile humidity
                      scn%atm%grav(:), & ! Gravity per level
-                     MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
-                     MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
+                     CS%gas(CS_win%gas_index(j)), & ! CS_gas object for this given gas
+                     CS_win%N_sublayers, & ! Number of sublayers for numeric integration
                      do_psurf_jac, & ! Do we require surface pressure jacobians?
                      scn%op%gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
                      scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
@@ -1757,8 +1783,8 @@ contains
                   scn%atm%T(:) + this_temp_offset, & ! Atmospheric T profile
                   scn%atm%sh(:), & ! Atmospheric profile humidity
                   scn%atm%grav(:), & ! Gravity per level
-                  MCS%gas(MCS%window(i_win)%gas_index(j)), & ! MCS%gas object for this given gas
-                  MCS%window(i_win)%N_sublayers, & ! Number of sublayers for numeric integration
+                  CS%gas(CS_win%gas_index(j)), & ! CS_gas object for this given gas
+                  CS_win%N_sublayers, & ! Number of sublayers for numeric integration
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
                   scn%op%gas_tau(:,:,j), & ! Output: Gas ODs
                   scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
@@ -1807,24 +1833,24 @@ contains
              ! Calculate layer-independent quantities, which don't depend on the
              ! aerosol distribution type. This mainly parses e.g. the miemom contents
              ! and puts them into the context of the retrieval window.
-             call aerosol_init(scn, i_win)
+             call aerosol_init(scn, i_win, CS_win, CS%aerosol)
 
              ! Let us allocate the scene aerosol type according to the type
              ! supplied on the configuration file.
 
              if (allocated(scene_aerosols)) deallocate(scene_aerosols)
 
-             if (MCS%window(i_win)%aerosol_distribution_shape%lower() == "gauss") then
+             if (CS_win%aerosol_distribution_shape%lower() == "gauss") then
                 allocate(gauss_aerosol :: scene_aerosols(scn%num_aerosols))
              else
                 call logger%fatal(fname, "Unknown aerosol distribution shape: " &
-                     // MCS%window(i_win)%aerosol_distribution_shape%chars())
+                     // CS_win%aerosol_distribution_shape%chars())
                 call logger%fatal(fname, "Only known: gauss")
                 stop 1
              end if
 
              ! This section can be outsourced as:
-             call insert_aerosols_in_scene(scn, scene_aerosols, SV, i_win)
+             call insert_aerosols_in_scene(SV, CS_win, CS%aerosol, scn, scene_aerosols)
 
           end if
 
@@ -1896,7 +1922,7 @@ contains
 
        ! Here we grab the index limits for the radiances for
        ! the choice of our microwindow and the given dispersion relation
-       call calculate_dispersion_limits(this_dispersion, i_win, &
+       call calculate_dispersion_limits(this_dispersion, CS_win, &
             l1b_wl_idx_min, l1b_wl_idx_max)
 
        ! Number of spectral points in the output resolution
@@ -1946,7 +1972,9 @@ contains
           ! fast RT methods are done within.
 
           call solve_RT_problem_XRTM( &
-               MCS%window(i_win), & ! The microwindow structure
+               CS_win, & ! The microwindow structure
+               CS%general, &
+               CS%aerosol, &
                SV, & ! The statevector
                scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate
@@ -1966,12 +1994,12 @@ contains
        this_solar(:,1) = this_solar_shift + &
             this_solar_stretch * solar_spectrum_regular(:, 1) / (1.0d0 - solar_doppler)
 
-       if (MCS%algorithm%solar_type == "toon") then
+       if (CS%algorithm%solar_type == "toon") then
           call calculate_solar_planck_function(6500.0d0, solar_dist, &
                this_solar(:,1), solar_irrad)
           ! And multiply to get the full solar irradiance in physical units
           this_solar(:,2) = solar_spectrum_regular(:, 2) * solar_irrad(:)
-       else if (MCS%algorithm%solar_type == "oco_hdf") then
+       else if (CS%algorithm%solar_type == "oco_hdf") then
 
           ! Have to manually re-allocate solar_irrad, which is done in the
           ! calculate_solar_planck_function subroutine.
@@ -2052,7 +2080,7 @@ contains
                   scn, K_hi_stokes(:, SV%idx_psurf(1),1))
           case default
              call logger%error(fname, "Surface pressure Jacobian not implemented " &
-                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                  // "for RT Model: " // CS_win%RT_model%chars())
              stop 1
           end select
        end if
@@ -2069,7 +2097,7 @@ contains
              end do
           case default
              call logger%error(fname, "Temperature offset Jacobian not implemented " &
-                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                  // "for RT Model: " // CS_win%RT_model%chars())
              stop 1
           end select
        end if
@@ -2078,7 +2106,7 @@ contains
        if (SV%num_gas > 0) then
           do i=1, SV%num_gas
              ! Jacobian for a scalar-type gas retrieval
-             if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+             if (CS_win%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
                 select case (RT_model)
                 case (RT_BEER_LAMBERT)
                    call calculate_BL_gas_subcolumn_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
@@ -2091,7 +2119,7 @@ contains
                    end do
                 case default
                    call logger%error(fname, "Gas sub-column Jacobian not implemented " &
-                        // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                        // "for RT Model: " // CS_win%RT_model%chars())
                 end select
              end if
           end do
@@ -2108,7 +2136,7 @@ contains
              end do
           case default
              call logger%error(fname, "AOD Jacobian not implemented " &
-                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                  // "for RT Model: " // CS_win%RT_model%chars())
              stop 1
           end select
        end if
@@ -2124,7 +2152,7 @@ contains
 
           case default
              call logger%error(fname, "Aerosol height Jacobian not implemented " &
-                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                  // "for RT Model: " // CS_win%RT_model%chars())
              stop 1
           end select
        end if
@@ -2146,7 +2174,7 @@ contains
              end do
           case default
              call logger%error(fname, "Albedo Jacobian not implemented " &
-                  // "for RT Model: " // MCS%window(i_win)%RT_model%chars())
+                  // "for RT Model: " // CS_win%RT_model%chars())
              stop 1
           end select
        end if
@@ -2328,7 +2356,8 @@ contains
        ! Calculate disperion Jacobians
        if (SV%num_dispersion > 0) then
           do i=1, SV%num_dispersion
-             call calculate_dispersion_jacobian(my_instrument, i, &
+             call calculate_dispersion_jacobian(my_instrument, &
+                  CS%general, CS_win, i, &
                   this_dispersion_coefs, band, i_win, i_fp, N_spec, &
                   this_ILS_delta_lambda, ILS_relative_response, &
                   l1b_wl_idx_min, l1b_wl_idx_max, &
@@ -2342,7 +2371,8 @@ contains
        if (SV%num_ILS_stretch > 0) then
           ! Loop over all required ILS stretch orders
           do i=1, SV%num_ils_stretch
-             call calculate_ILS_stretch_jacobian(my_instrument, i, SV, &
+             call calculate_ILS_stretch_jacobian(my_instrument, &
+                  CS_win, i, SV, &
                   band, i_win, i_fp, N_spec, &
                   ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
                   ILS_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
@@ -2362,7 +2392,7 @@ contains
        ! INVERSE SOLVER
        !---------------------------------------------------------------------
 
-       if (MCS%window(i_win)%inverse_method%lower() == "imap") then
+       if (CS_win%inverse_method%lower() == "imap") then
           ! Use iterative maximum a-posteriori solution (linear retrieval)
           ! (IMAP) as done by Christian Frankenberg
 
@@ -2384,7 +2414,7 @@ contains
           ! Update state vector
           SV%svsv = old_sv + tmp_v2
 
-       else if (MCS%window(i_win)%inverse_method%lower() == "lm") then
+       else if (CS_win%inverse_method%lower() == "lm") then
           ! Levenberg-Marquardt extension to Gauss-Newton
 
           ! K^T Se^-1 K
@@ -2403,7 +2433,7 @@ contains
           SV%svsv = SV%svsv + matmul(tmp_m2, tmp_v1 - tmp_v2)
        else
           call logger%error(fname, "Inverse method: " &
-               // MCS%window(i_win)%inverse_method%lower() // ", not known!")
+               // CS_win%inverse_method%lower() // ", not known!")
           stop 1
        end if
 
@@ -2427,7 +2457,7 @@ contains
        end do
 
        ! We limit the retrieved albedo, but only in downlooking mode
-       if (MCS%algorithm%observation_mode == "downlooking") then
+       if (CS%algorithm%observation_mode == "downlooking") then
           if (SV%num_albedo > 0) then
              if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
                 SV%svsv(SV%idx_albedo(1)) = 1.0d-4
@@ -2458,7 +2488,7 @@ contains
        ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. & ! Dsigma squire criterion is fulfilled
-            (iteration > MCS%window(i_win)%max_iterations) .or. & ! Number of iterations reach max value
+            (iteration > CS_win%max_iterations) .or. & ! Number of iterations reach max value
             ((chi2_rel_change < 0.01) .and. (chi2_rel_change >= 0.0d0)) .or. & ! Relative change in CHI2 is smaller than some value
             (num_divergent_steps > 1) & ! Number of divergent steps is reached
             ) then
@@ -2473,7 +2503,7 @@ contains
              call logger%debug(fname, "Exceeded max. allowed number of divergent steps.")
              converged = .false.
              results%converged(i_fp, i_fr) = 0
-          else if (iteration <= MCS%window(i_win)%max_iterations) then
+          else if (iteration <= CS_win%max_iterations) then
              converged = .true.
              results%converged(i_fp, i_fr) = 1
           end if
@@ -2498,7 +2528,7 @@ contains
              do j=1, num_gases
 
                 ! Skip this gas is not retrieved
-                if (.not. MCS%window(i_win)%gas_retrieved(j)) cycle
+                if (.not. CS_win%gas_retrieved(j)) cycle
 
                 ! Here we need to do the same thing as before when calculating
                 ! gas OD's. Take local copy of VMR profile, and re-scale the portions
@@ -2567,7 +2597,7 @@ contains
 
              deallocate(pwgts)
 
-             if (MCS%output%gas_averaging_kernels) then
+             if (CS%output%gas_averaging_kernels) then
                 ! Averaging kernels for gases are computationally slightly costly,
                 ! thus we skip this part if not requested.
 
@@ -2620,7 +2650,7 @@ contains
           ! so the first update is the 2nd iteration etc.
           results%num_iterations(i_fp, i_fr) = iteration
 
-          if (MCS%output%save_radiances) then
+          if (CS%output%save_radiances) then
              ! Save the radiances and noises - if required by the user
              final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
              measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
@@ -2657,7 +2687,7 @@ contains
           linear_prediction_chi2 = calculate_chi2(radiance_meas_work, radiance_tmp_work, &
                noise_work, N_spec - N_sv)
 
-          if (MCS%window(i_win)%allow_divergences) then
+          if (CS_win%allow_divergences) then
              ! Do we allow for divergent steps and the per-iteration adjustment of
              ! the LM-gamma parameter?
 
@@ -2703,7 +2733,7 @@ contains
        ! the retrieval for each iteration and wait for a return by the user.
        ! Also, various variables (SV, spectra, AK, gain matrix etc.) are written out.
 
-       if (MCS%algorithm%step_through) then
+       if (CS%algorithm%step_through) then
 
           call logger%debug(fname, "---------------------------------")
           write(tmp_str, '(A,G0.1,A,G0.1)') "Frame: ", i_fr, ", Footprint: ", i_fp
@@ -2835,7 +2865,7 @@ contains
                dsigma_sq, ' / ', dble(N_sv) * dsigma_scale
 
           call logger%debug(fname, trim(tmp_str))
-          if (MCS%window(i_win)%inverse_method%lower() == "lm") then
+          if (CS_win%inverse_method%lower() == "lm") then
              write(tmp_str, '(A,ES15.5)') "LM-gamma: ", lm_gamma
              call logger%debug(fname, trim(tmp_str))
 
@@ -2893,11 +2923,12 @@ contains
   !> @param i_win Window index for MCS
   !> @param Sa Prior covariance matrix
   !> @param Sa_inv Inverse of prior covariance matrix
-  subroutine populate_prior_covariance(SV, continuum, i_win, Sa, Sa_inv)
+  subroutine populate_prior_covariance(SV, CS_win, continuum, i_win, Sa, Sa_inv)
 
     implicit none
 
     type(statevector), intent(in) :: SV
+    type(CS_window_t), intent(in) :: CS_win
     double precision, intent(in) :: continuum
     integer, intent(in) :: i_win
     double precision, intent(inout) :: Sa(:,:)
@@ -2948,7 +2979,7 @@ contains
     if (SV%num_dispersion > 0) then
        do i=1, SV%num_dispersion
           Sa(SV%idx_dispersion(i), SV%idx_dispersion(i)) = &
-               MCS%window(i_win)%dispersion_cov(i)**2
+               CS_win%dispersion_cov(i)**2
                !(10.0d0 * MCS%window(i_win)%dispersion_pert(i))**2
        end do
     end if
@@ -2957,7 +2988,7 @@ contains
     if (SV%num_ils_stretch > 0) then
        do i=1, SV%num_ils_stretch
           Sa(SV%idx_ils_stretch(i), SV%idx_ils_stretch(i)) = &
-               MCS%window(i_win)%ils_stretch_cov(i)**2
+               CS_win%ils_stretch_cov(i)**2
                !(10.0d0 * MCS%window(i_win)%ils_stretch_pert(i))**2
        end do
     end if
@@ -2965,23 +2996,23 @@ contains
 
     ! Aerosol AOD covariances come from MCS
     do i = 1, SV%num_aerosol_aod
-       if (MCS%window(i_win)%aerosol_retrieve_aod(sv%aerosol_aod_idx_lookup(i))) then
+       if (CS_win%aerosol_retrieve_aod(sv%aerosol_aod_idx_lookup(i))) then
           Sa(SV%idx_aerosol_aod(i), SV%idx_aerosol_aod(i)) = &
-               MCS%window(i_win)%aerosol_aod_cov(sv%aerosol_aod_idx_lookup(i)) ** 2
+               CS_win%aerosol_aod_cov(sv%aerosol_aod_idx_lookup(i)) ** 2
        end if
     end do
 
     ! Aerosol height covariances come from MCS
     do i = 1, SV%num_aerosol_height
-       if (MCS%window(i_win)%aerosol_retrieve_height(sv%aerosol_height_idx_lookup(i))) then
+       if (CS_win%aerosol_retrieve_height(sv%aerosol_height_idx_lookup(i))) then
           Sa(SV%idx_aerosol_height(i), SV%idx_aerosol_height(i)) = &
-               MCS%window(i_win)%aerosol_height_cov(sv%aerosol_height_idx_lookup(i)) ** 2
+               CS_win%aerosol_height_cov(sv%aerosol_height_idx_lookup(i)) ** 2
        end if
     end do
 
     ! The scale factor covariances are taken from the configuration file / MCS
     do i=1, SV%num_gas
-       if (MCS%window(i_win)%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
+       if (CS_win%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
           Sa(SV%idx_gas(i,1), SV%idx_gas(i,1)) = &
                (SV%gas_retrieve_scale_cov(i) * SV%gas_retrieve_scale_cov(i))
        end if

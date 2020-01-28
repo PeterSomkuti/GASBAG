@@ -250,7 +250,9 @@ contains
        ! especially when logarithms are calculated. So I'm replacing them
        ! right here with a small value.
        ! (This really shouldn't occur anyway)
-       where (met_P_levels < 1d-10) met_P_levels = 1d-10
+       if (allocated(met_P_levels)) then
+           where (met_P_levels < 1d-10) met_P_levels = 1d-10
+       end if
 
        if (CS%algorithm%observation_mode == "downlooking") then
           ! These here also only make sense in a downlooking position.
@@ -444,7 +446,7 @@ contains
                lon, lat, altitude, relative_velocity, relative_solar_velocity)
           ! Grab the L1B stokes coefficients
           call my_instrument%read_stokes_coef(l1b_file_id, band, &
-               CS%general%N_fp, CS%general%N_frame, &
+               CS%general%N_fp, CS%general%N_frame, CS%algorithm%observation_mode, &
                stokes_coef)
 
           ! Read in Spike filter data, if it exists in this file
@@ -665,10 +667,10 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-             if (land_fraction(i_fp, i_fr) == 0.0d0) then
-                call logger%debug(fname, "Skipping water scene.")
-                cycle
-             end if
+             !if (land_fraction(i_fp, i_fr) == 0.0d0) then
+             !  call logger%debug(fname, "Skipping water scene.")
+             !   cycle
+             !end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -854,7 +856,7 @@ contains
     integer :: l1b_wl_idx_min, l1b_wl_idx_max
 
     ! Sounding time stuff
-    type(datetime) :: date ! Datetime object for sounding date/time
+    !type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
     ! Epoch, which is just the date split into an integer array
     integer :: epoch(7)
@@ -1130,16 +1132,18 @@ contains
 
     ! Epoch is needed by the MS3 solar doppler code
     scn%epoch(:) = 0
-    scn%epoch(1) = date%getYear()
-    scn%epoch(2) = date%getMonth()
-    scn%epoch(3) = date%getDay()
-    scn%epoch(4) = date%getHour()
-    scn%epoch(5) = date%getMinute()
-    scn%epoch(6) = date%getSecond()
+    scn%epoch(1) = scn%date%getYear()
+    scn%epoch(2) = scn%date%getMonth()
+    scn%epoch(3) = scn%date%getDay()
+    scn%epoch(4) = scn%date%getHour()
+    scn%epoch(5) = scn%date%getMinute()
+    scn%epoch(6) = scn%date%getSecond()
 
     ! ----------------------------------------------
     ! Print out some debug information for the scene
     ! ----------------------------------------------
+
+    write(*,*) "Epoch: ", scn%epoch(:)
 
     write(tmp_str, "(A, A)") "Date: ", scn%date%isoformat()
     call logger%debug(fname, trim(tmp_str))
@@ -1189,7 +1193,7 @@ contains
 
        ! For space-solar observation mode, the doppler is obviously different
        ! so we need to change the calculation slightly.
-       call solar_distance_and_velocity_v2(epoch, solar_dist, solar_rv)
+       call solar_distance_and_velocity_v2(scn%epoch, solar_dist, solar_rv)
 
        instrument_doppler = 0.0d0
        solar_doppler = solar_rv / SPEED_OF_LIGHT
@@ -1424,19 +1428,25 @@ contains
           iteration = iteration + 1
        end if
 
-       ! Copy over the initial atmosphere
-       scn%atm = initial_atm
-       scn%atm%ndry(:) = 0.0d0
+       ! Copy over the initial atmosphere, but only if an atmosphere
+       ! actually exists
 
-       ! Keep some useful values in the scene object, so we don't
-       ! have to pass them through the entire program all the time
-       scn%num_levels = scn%atm%num_levels
-       scn%num_gases = scn%atm%num_gases
-       scn%num_aerosols = CS_win%num_aerosols
-       scn%num_stokes = n_stokes
+       if (num_gases > 0) then
+
+          scn%atm = initial_atm
+          scn%atm%ndry(:) = 0.0d0
+
+          ! Keep some useful values in the scene object, so we don't
+          ! have to pass them through the entire program all the time
+          scn%num_levels = scn%atm%num_levels
+          scn%num_gases = scn%atm%num_gases
+          scn%num_aerosols = CS_win%num_aerosols
+
+       end if
 
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, num_gases)
+       scn%num_stokes = n_stokes
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
        scn%num_active_levels = -1
@@ -1612,10 +1622,12 @@ contains
           end if
        endif
 
-       ! Calculate mid-layer pressures
-       call calculate_layer_pressure(scn)
-       ! Calculate the scene gravity and altitude for levels
-       call scene_altitude(scn)
+       if (num_gases > 0) then
+          ! Calculate mid-layer pressures
+          call calculate_layer_pressure(scn)
+          ! Calculate the scene gravity and altitude for levels
+          call scene_altitude(scn)
+       end if
 
        K_hi(:,:) = 0.0d0
        K_hi_stokes(:,:,:) = 0.0d0
@@ -2849,13 +2861,14 @@ contains
           close(funit)
           call logger%debug(fname, "Written file: hires_spectra.dat (wl, radiance, stokes, solar)")
 
-          open(file="total_tau.dat", newunit=funit)
-          do i=1, N_hires
-             write(funit, *) scn%op%total_tau(i)
-          end do
-          close(funit)
-          call logger%debug(fname, "Written file: total_tau.dat (modelled)")
-
+          if (num_gases > 0) then
+             open(file="total_tau.dat", newunit=funit)
+             do i=1, N_hires
+                write(funit, *) scn%op%total_tau(i)
+             end do
+             close(funit)
+             call logger%debug(fname, "Written file: total_tau.dat (modelled)")
+          end if
 
           call logger%debug(fname, "---------------------------------")
 

@@ -591,7 +591,8 @@ contains
 
   end subroutine read_sounding_geometry
 
-  subroutine read_stokes_coef(l1b_file_id, band, N_fp, N_fr, stokes_coefs)
+  subroutine read_stokes_coef(l1b_file_id, band, N_fp, N_fr, &
+       observation_mode, stokes_coefs)
 
     implicit none
 
@@ -599,6 +600,7 @@ contains
     integer, intent(in) :: band
     integer, intent(in) :: N_fp
     integer, intent(in) :: N_fr
+    type(string), intent(in) :: observation_mode
     double precision, allocatable, intent(out) :: stokes_coefs(:,:,:)
 
     character(len=*), parameter :: fname = "read_stokes_coefs(oco2)"
@@ -608,6 +610,10 @@ contains
 
     call logger%debug(fname, "Trying to allocate stokes coef. array.")
     allocate(stokes_coefs(4, N_fp, N_fr))
+
+
+    if (observation_mode == "downlooking") then
+
 
     ! Hack - GeoCarb files have an extra dimension here. So let's check for that first
     call get_HDF5_dset_dims(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
@@ -630,6 +636,13 @@ contains
        deallocate(tmp_array5d)
 
     end if
+
+ else if (observation_mode == "space_solar") then
+
+    stokes_coefs(:,:,:) = 0.0d0
+    stokes_coefs(1,:,:) = 0.5d0
+
+ end if
 
   end subroutine read_stokes_coef
 

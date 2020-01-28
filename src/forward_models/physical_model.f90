@@ -370,6 +370,16 @@ contains
        ! We also check what type of gas priors the user wants to have
        call MCS_find_gas_priors(CS%window, CS%gas, i_win)
 
+       ! If available, we can try to open up a GASBAG prior file
+       if (CS%window(i_win)%GASBAG_prior_file /= "") then
+          call logger%info(fname, "Opening up GASBAG prior file: " // CS%window(i_win)%GASBAG_prior_file%chars())
+
+          call h5fopen_f(CS%window(i_win)%GASBAG_prior_file%chars(), H5F_ACC_RDONLY_F, &
+               CS%window(i_win)%GASBAG_prior_id, hdferr)
+          call check_hdf_error(hdferr, fname, "Error opening GASBAG prior  HDF file: " &
+               // trim(CS%window(i_win)%GASBAG_prior_file%chars()))
+       end if
+
        ! If we have gases, we want to read in the corresponding spectroscopy data
        ! We have to do this for every microwindow since the cross sections are being
        ! re-gridded for every microwindow.
@@ -380,7 +390,7 @@ contains
              j = CS%window(i_win)%gas_index(i)
 
              if (CS%gas(j)%type%lower() == "absco") then
-                call logger%trivia(fname, "Reading in ABSCO-type gas: " // CS%window(i_win)%gases(i))
+                call logger%info(fname, "Reading in ABSCO-type gas: " // CS%window(i_win)%gases(i))
                 call read_absco_HDF(CS%gas(j)%filename%chars(), CS%gas(j), absco_dims, &
                      CS%gas(j)%hitran_index)
              else
@@ -1384,6 +1394,16 @@ contains
     ! updated from the state vector.
     this_solar_shift = 0.0d0
     this_solar_stretch = 1.0d0
+
+    ! -----------------------------------------------------------------
+    ! If the user wants, replace the SV prior value from an earlier run
+    ! -----------------------------------------------------------------
+
+    if (CS_win%GASBAG_prior_file /= "") then
+       call replace_statevector_by_GASBAG(CS_win, CS%general, i_fp, i_fr, SV)
+    end if
+
+
 
     ! Retrival iteration loop
     iteration = 0

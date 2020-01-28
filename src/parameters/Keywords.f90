@@ -203,6 +203,10 @@ contains
        valid_options(this_idx,40) = "keep_scattering_constant"
        ! How do we distribute aerosols in the scene? Gaussian?
        valid_options(this_idx,41) = "aerosol_distribution_shape"
+       ! Do we use another GASBAG result file to slip in as priors?
+       valid_options(this_idx,42) = "gasbag_result_file_for_prior"
+       ! Which data do we replace as priors?
+       valid_options(this_idx,43) = "gasbag_priors"
 
     end do
 

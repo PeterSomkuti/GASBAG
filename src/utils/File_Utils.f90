@@ -53,7 +53,8 @@ module file_utils_mod
   public check_hdf_error, check_config_files_exist, get_HDF5_dset_dims, &
        check_fini_error, fini_extract, &
        write_DP_hdf_dataset, read_DP_hdf_dataset, &
-       write_INT_hdf_dataset, read_INT_hdf_dataset
+       write_INT_hdf_dataset, read_INT_hdf_dataset, &
+       read_one_arbitrary_value_dp
 
 contains
 
@@ -889,7 +890,59 @@ contains
 
   end subroutine read_mie_file
 
+  function read_one_arbitrary_value_dp(file_id, dset_name, i_fp, i_fr) result(value)
+
+    implicit none
+
+    integer(hid_t), intent(in) :: file_id
+    character(len=*), intent(in) :: dset_name
+    integer, intent(in) :: i_fp
+    integer, intent(in) :: i_fr
+
+    double precision :: tmp_value(1)
+    double precision :: value
+
+    character(len=*), parameter :: fname = "read_one_arbitrary_value"
+    integer(hid_t) :: dspace_id
+    integer(hid_t) :: dset_id
+    integer(hid_t) :: memspace_id
+    integer(hsize_t) :: hs_offset(2), hs_count(2)
+    integer(hsize_t) :: dim_mem(1)
+
+    integer :: hdferr
+
+    hs_offset(1) = i_fp - 1
+    hs_offset(2) = i_fr - 1
+
+    hs_count(1) = 1
+    hs_count(2) = 1
+
+    dim_mem(1) = 1
 
 
+!$OMP CRITICAL
+    call h5dopen_f(file_id, dset_name, dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error opening dataset at: " // trim(dset_name))
+
+    call h5dget_space_f(dset_id, dspace_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error getting dataspace id for " // trim(dset_name))
+
+    call h5sselect_hyperslab_f(dspace_id, H5S_SELECT_SET_F, hs_offset, hs_count, hdferr)
+    call check_hdf_error(hdferr, fname, "Error performing hyperslab selection.")
+
+    call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error creating simple memory space.")
+
+    call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tmp_value, dim_mem, &
+         hdferr, memspace_id, dspace_id)
+    call check_hdf_error(hdferr, fname, "Error reading data from " // trim(dset_name))
+
+    call h5dclose_f(dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error closing dataset id for " // trim(dset_name))
+!$OMP END CRITICAL
+
+    value = tmp_value(1)
+
+  end function read_one_arbitrary_value_dp
 
 end module file_utils_mod

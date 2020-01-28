@@ -201,6 +201,12 @@ module control_mod
      type(string), allocatable :: XRTM_solvers(:)
      !> Do we account for polarization?
      logical :: do_polarization
+     !> Where is the GASBAG result file?
+     type(string) :: GASBAG_prior_file
+     !> Which GASBAG results do we insert as priors
+     type(string) :: GASBAG_priors
+     !> GASBAG prior file HDF5 ID
+     integer(hid_t) :: GASBAG_prior_id
   end type CS_window_t
 
   type :: CS_input_t
@@ -761,9 +767,19 @@ contains
           ! required for a given retrieval setting, will be checked later
           ! on in the code, usually when it's needed the first time
 
+          call fini_extract(fini, win_str, 'gasbag_result_file_for_prior', &
+               .false., fini_char)
+          fini_string = trim(fini_char)
+          CS%window(window_nr)%GASBAG_prior_file = fini_string
+
+          call fini_extract(fini, win_str, 'gasbag_priors', &
+               .false., fini_char)
+          fini_string = trim(fini_char)
+          CS%window(window_nr)%GASBAG_priors = fini_string
+
           call fini_extract(fini, win_str, 'gas_prior_type', &
                .false., fini_char)
-          fini_string = fini_char
+          fini_string = trim(fini_char)
           CS%window(window_nr)%gas_prior_type_string = fini_string
 
 
@@ -1196,6 +1212,12 @@ contains
     integer :: i, j
     integer :: gas_idx, MCS_gas_pos
     logical :: found_gas
+
+
+    ! If the string is empty, just return
+    if (CS_win(i_win)%gas_prior_type_string == "") then
+       return
+    end if
 
     call CS_win(i_win)%gas_prior_type_string%split(&
          tokens=split_string, sep=' ', &

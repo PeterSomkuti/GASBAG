@@ -1,8 +1,14 @@
 module statevector_mod
 
+  ! User modules
+  use control_mod, only: CS_window_t, CS_gas_t, CS_aerosol_t, CS_general_t, MAX_GASES
+  use file_utils_mod, only: check_hdf_error, get_HDF5_dset_dims, read_one_arbitrary_value_dp
+  ! Third-party modules
   use logger_mod, only: logger => master_logger
-  use control_mod, only: CS_window_t, CS_gas_t, CS_aerosol_t, MAX_GASES
   use stringifor, only: string
+
+  ! System modules
+  use HDF5
 
   type statevector
      ! Number of state vector elements per type
@@ -903,6 +909,116 @@ contains
     allocate(sv%sv_post_cov(sv_count, sv_count))
 
   end subroutine initialize_statevector
+
+
+  subroutine replace_statevector_by_GASBAG(CS_win, CS_general, i_fp, i_fr, SV)
+
+    implicit none
+
+    type(CS_window_t), intent(in) :: CS_win
+    type(CS_general_t), intent(in) :: CS_general
+    integer, intent(in) :: i_fp
+    integer, intent(in) :: i_fr
+    type(statevector), intent(inout) :: SV
+
+    ! Local variables
+    character(len=*), parameter :: fname = "replace_statevector_by_GASBAG"
+    character(len=999) :: tmp_chr
+    type(string) :: tmp_str
+    type(string), allocatable :: split_str(:)
+    type(string), allocatable :: prior_str(:)
+
+    integer :: hdferr
+    integer :: hdftype
+    character(len=999) :: hdfvarname
+    logical :: groupexists
+
+    integer :: i, j
+    integer :: hdf_idx
+    integer :: hdf_n_vars
+    integer :: n_order
+
+
+    if (CS_win%GASBAG_priors == "") then
+       call logger%debug(fname, "gasbag_prior string is empty. No prior replacement.")
+       return
+    end if
+
+    ! Split the string into constitutents
+    call CS_win%GASBAG_priors%split(tokens=split_str, sep=' ')
+
+    do i=1, size(split_str)
+       call split_str(i)%split(tokens=prior_str, sep='|')
+
+       if (size(prior_str) /= 2) then
+          call logger%fatal(fname, "Prior string could not be processed: " // split_str(i)%chars())
+          stop 1
+       end if
+
+       if (prior_str(2)%lower() == "dispersion") then
+          call logger%debug(fname, "Replacing dispersion prior!")
+
+          ! Find out, what order dispersion we have in the result file
+          tmp_chr = "/RetrievalResults/physical/" // trim(prior_str(1)%chars())
+!$OMP CRITICAL
+          call h5lexists_f(CS_win%GASBAG_prior_id, trim(tmp_chr), groupexists, hdferr)
+!$OMP END CRITICAL
+          if (.not. groupexists) then
+             call logger%fatal(fname, trim(tmp_chr) // " does not exist!")
+             stop 1
+          end if
+
+          ! Obtain the total number of HDF variables in this group
+!$OMP CRITICAL
+          call h5gn_members_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_n_vars, hdferr)
+!$OMP END CRITICAL
+
+          n_order = 0
+          ! Loop through all group variables, and determine how many dispersion
+          ! entries with have.
+          do hdf_idx = 0, hdf_n_vars - 1
+!$OMP CRITICAL
+             call h5gget_obj_info_idx_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_idx, &
+                  hdfvarname, hdftype, hdferr)
+!$OMP END CRITICAL
+             tmp_str = trim(hdfvarname)
+
+             if (tmp_str%count(substring="dispersion_order") == 1) then
+                n_order = n_order + 1
+             end if
+          end do
+
+          ! Final value has to be divided by 3 (prior, result, uncertainty) to get the
+          ! total order of dispersion polynomial used in the prior file.
+          n_order = n_order / 3
+
+          ! Make sure that we have the same order in our current statevector
+          if (n_order /= SV%num_dispersion) then
+             call logger%fatal(fname, "Prior file SV dispersion order does not match current setup.")
+             stop 1
+          end if
+
+          do j = 0, n_order - 1
+             write(tmp_chr, '(A, A, A, G0.1, A, A)') &
+                  "/RetrievalResults/physical/" , trim(prior_str(1)%chars()), &
+                  "/dispersion_order_", j, "_", CS_general%code_name
+
+             call logger%debug(fname, "Trying to obtain prior value from: " // trim(tmp_chr))
+             SV%svap(SV%idx_dispersion(j + 1)) = &
+                  read_one_arbitrary_value_dp(CS_win%GASBAG_prior_id, trim(tmp_chr), i_fp, i_fr)
+          end do
+
+       else
+          call logger%fatal(fname, "Prior replacement for SV variable " // prior_str(2) &
+               // " is not implemented!")
+          stop 1
+       end if
+
+       deallocate(prior_str)
+    end do
+
+  end subroutine replace_statevector_by_GASBAG
+
 
 
 

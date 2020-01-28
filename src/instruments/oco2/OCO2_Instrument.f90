@@ -247,8 +247,6 @@ contains
 
   end subroutine read_all_spectra
 
-
-
   !> @brief Read one single spectrum from the L1B data
   !> @param l1b_file_id HDF File ID of the L1B file
   !> @param i_fr Frame index

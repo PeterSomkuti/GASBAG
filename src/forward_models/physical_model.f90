@@ -1143,8 +1143,6 @@ contains
     ! Print out some debug information for the scene
     ! ----------------------------------------------
 
-    write(*,*) "Epoch: ", scn%epoch(:)
-
     write(tmp_str, "(A, A)") "Date: ", scn%date%isoformat()
     call logger%debug(fname, trim(tmp_str))
 
@@ -1300,7 +1298,7 @@ contains
 
     ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
     if (SV%num_albedo > 0) then
-       call logger%debug(fname, ".. albedo priors")
+       call logger%debug(fname, "Inserting albedo priors")
        SV%svap(SV%idx_albedo(1)) = albedo_apriori
        do i=2, SV%num_albedo
           SV%svap(SV%idx_albedo(i)) = 0.0d0
@@ -1310,37 +1308,37 @@ contains
 
     ! Solar shift is set to zero
     if (SV%num_solar_shift == 1) then
-       call logger%debug(fname, ".. solar shift priors")
+       call logger%debug(fname, "Inserting solar shift priors")
        SV%svap(SV%idx_solar_shift(1)) = 0.0d0
     end if
 
     ! Solar stretch factor is set to one
     if (SV%num_solar_stretch == 1) then
-       call logger%debug(fname, ".. solar stretch priors")
+       call logger%debug(fname, "Inserting solar stretch priors")
        SV%svap(SV%idx_solar_stretch(1)) = 1.0d0
     end if
 
     ! Start SIF with zero
     if (SV%num_sif > 0) then
-       call logger%debug(fname, ".. SIF priors")
+       call logger%debug(fname, "Inserting SIF priors")
        SV%svap(SV%idx_sif(1)) = 0.0d0
     end if
 
     ! ZLO starts with zero too
     if (SV%num_zlo > 0) then
-       call logger%debug(fname, ".. ZLO priors")
+       call logger%debug(fname, "Inserting ZLO priors")
        SV%svap(SV%idx_zlo(1)) = 0.0d0
     end if
 
     ! Temperature offset starts with zero
     if (SV%num_temp > 0) then
-       call logger%debug(fname, ".. temperature shift priors")
+       call logger%debug(fname, "Inserting temperature shift priors")
        SV%svap(SV%idx_temp(1)) = 0.0d0
     end if
 
     ! Dispersion prior is taken from L1B
     if (SV%num_dispersion > 0) then
-       call logger%debug(fname, ".. dispersion priors")
+       call logger%debug(fname, "Inserting dispersion priors")
        ! Start with the L1b dispersion values as priors
        do i = 1, SV%num_dispersion
           SV%svap(SV%idx_dispersion(i)) = dispersion_coefs(i, i_fp, band)
@@ -1349,7 +1347,7 @@ contains
 
     ! ILS stretch - we assume the L1B is unstretched
     if (SV%num_ils_stretch > 0) then
-       call logger%debug(fname, ".. ILS stretch priors")
+       call logger%debug(fname, "Inserting ILS stretch priors")
        ! Set the first coefficient to 1.0d0, i.e. no stretch
        SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
        do i = 2, SV%num_ils_stretch
@@ -1360,13 +1358,13 @@ contains
 
     ! Surface pressure is taken from the MET data
     if (SV%num_psurf == 1) then
-       call logger%debug(fname, ".. surface pressure priors")
+       call logger%debug(fname, "Inserting surface pressure priors")
        SV%svap(SV%idx_psurf(1)) = met_psurf(i_fp, i_fr)
     end if
 
     ! Aerosol AOD taken from SV string
     if (SV%num_aerosol_aod > 0) then
-       call logger%debug(fname, ".. aerosol AOD priors")
+       call logger%debug(fname, "Inserting aerosol AOD priors")
        do i = 1, SV%num_aerosol_aod
           if (CS_win%aerosol_retrieve_aod(SV%aerosol_aod_idx_lookup(i))) then
              SV%svap(SV%idx_aerosol_aod(i)) = CS_win%aerosol_prior_aod(SV%aerosol_aod_idx_lookup(i))
@@ -1375,7 +1373,7 @@ contains
     end if
 
     if (SV%num_aerosol_height > 0) then
-       call logger%debug(fname, ".. aerosol height priors")
+       call logger%debug(fname, "Inserting aerosol height priors")
        do i = 1, SV%num_aerosol_height
           if (CS_win%aerosol_retrieve_height(SV%aerosol_height_idx_lookup(i))) then
              SV%svap(SV%idx_aerosol_height(i)) = CS_win%aerosol_prior_height(SV%aerosol_height_idx_lookup(i))
@@ -1385,7 +1383,7 @@ contains
 
     ! Gases. Scale factors are set to one in the beginning.
     if (SV%num_gas > 0) then
-       call logger%debug(fname, ".. gas scale factor priors")
+       call logger%debug(fname, "Inserting gas scale factor priors")
        do i = 1, SV%num_gas
           if (CS_win%gas_retrieve_scale(sv%gas_idx_lookup(i))) then
              SV%svap(SV%idx_gas(i,1)) = mean(scale_first_guess(:))
@@ -2020,8 +2018,8 @@ contains
 
           call solve_RT_problem_XRTM( &
                CS_win, & ! The microwindow structure
-               CS%general, &
-               CS%aerosol, &
+               CS%general, & ! The CS general structure
+               CS%aerosol, & ! The CS aerosol structure
                SV, & ! The statevector
                scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate

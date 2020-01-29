@@ -114,7 +114,6 @@ contains
     allocate(scn%op%albedo(N_hires))
     scn%op%albedo(:) = 0.0d0
 
-
     ! NOTE
     ! This explicitly does NOT include aerosols, as those are handled
     ! in the aerosol initialization routine.
@@ -126,7 +125,7 @@ contains
        scn%op%gas_tau(:,:,:) = 0.0d0
        allocate(scn%op%gas_tau_dpsurf(N_hires, scn%num_levels-1, N_gases))
        scn%op%gas_tau_dpsurf(:,:,:) = 0.0d0
-       allocate(scn%op%gas_tau_dvmr(N_hires, scn%num_levels-1, N_gases, 2))
+       allocate(scn%op%gas_tau_dvmr(2, N_hires, scn%num_levels-1, N_gases))
        scn%op%gas_tau_dvmr(:,:,:,:) = 0.0d0
        allocate(scn%op%gas_tau_dtemp(N_hires, scn%num_levels-1, N_gases))
        scn%op%gas_tau_dtemp(:,:,:) = 0.0d0
@@ -165,7 +164,7 @@ contains
 
 
   subroutine compute_coef_at_wl(scn, CS_aerosol, SV, wl, n_mom, n_derivs, ray_tau, &
-       aer_sca_tau, aer_ext_tau, coef, lcoef)
+       aer_sca_tau, coef, lcoef)
 
     type(scene), intent(in) :: scn
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
@@ -175,7 +174,6 @@ contains
     integer, intent(in) :: n_derivs
     double precision, intent(in) :: ray_tau(:)
     double precision, intent(in) :: aer_sca_tau(:,:)
-    double precision, intent(in) :: aer_ext_tau(:,:)
     double precision, allocatable, intent(inout) :: coef(:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
 
@@ -976,7 +974,7 @@ contains
           ! Check if this SV element is a scalar retrieval
           if (SV%idx_gas(j,1) == i) then
              if (CS_win%gas_retrieve_scale(sv%gas_idx_lookup(j))) then
-                if (CS_win%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) == -1.0) cycle
+                if (abs(CS_win%gas_retrieve_scale_start(sv%gas_idx_lookup(j), k) + 1.0) < 1e-10) cycle
 
                 lower_str = CS_win%gases(sv%gas_idx_lookup(j))%lower()
                 write(tmp_str, '(A)') trim(lower_str%chars() // "_scale_")

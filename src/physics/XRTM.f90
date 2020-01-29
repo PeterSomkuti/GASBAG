@@ -677,12 +677,10 @@ contains
     call logger%debug(fname, "Computing phase function coefficients and derivatives at band edges.")
     call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(1), n_mom, n_derivs, &
          scn%op%ray_tau(1,:), scn%op%aer_sca_tau(1,:,:), &
-         scn%op%aer_ext_tau(1,:,:), &
          coef_left, lcoef_left)
 
     call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(n_wl), n_mom, n_derivs, &
          scn%op%ray_tau(n_wl,:), scn%op%aer_sca_tau(n_wl,:,:), &
-         scn%op%aer_ext_tau(n_wl,:,:), &
          coef_right, lcoef_right)
 
     call logger%debug(fname, "Determining number of phase function coefficients per layer used in XRTM.")

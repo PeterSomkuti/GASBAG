@@ -57,10 +57,11 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
   # GCC writes a lot of bogus warnings when dealing with allocatable arrays, so
   # have to turn those warnings off.
-  set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
-  #set(warnings "-Wall -Wextra -Wpedantic")
+  #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
+  set(warnings "-Wall -Wextra -Wpedantic")
   set(opt "-O3 -mtune=native -march=native -ftree-vectorize")
-  set(bounds "-fbounds-check")
+  set(debug "-O0 -g -fcheck=all -fbacktrace -fno-omit-frame-pointer")
+  set(profile "-Og -pg -fbacktrace -fprofile-generate --coverage")
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
 
@@ -77,9 +78,9 @@ endif()
 
 
 set(CMAKE_Fortran_FLAGS "${dialect}")
-set(CMAKE_Fortran_FLAGS_DEBUG "-O0 -g ${bounds} -fcheck=all -fbacktrace -fno-omit-frame-pointer")
+set(CMAKE_Fortran_FLAGS_DEBUG "${debug} ${warnings}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
-set(CMAKE_Fortran_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-generate --coverage")
+set(CMAKE_Fortran_FLAGS_PROFILE "${profile}")
 
 set(CMAKE_CXX_FLAGS "-O3 -mtune=native -march=native -ftree-vectorize")
 #set(CMAKE_CXX_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
@@ -169,12 +170,14 @@ set_source_files_properties(
   ${third-party}
   PROPERTIES
   COMPILE_FLAGS "${opt}"
+  COMPILE_FLAGS_DEBUG ""
 )
 
 set_source_files_properties(
   ${xrtm_sources}
   PROPERTIES
   COMPILE_FLAGS "-Ofast -mtune=native -march=native -ftree-vectorize"
+  COMPILE_FLAGS_DEBUG ""
   )
 
 # Our code is definitely in the need of having warnings

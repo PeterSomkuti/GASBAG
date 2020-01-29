@@ -7,7 +7,9 @@
 !> one to extract the cross section value from a given (wavelength,H2O,p,T)-coordinate
 !> via linear interpolation (get_CS_value_at). The other function (calculate_gas_tau)
 !> does the physics to calculate the layer and sub-layer ODs, and calls the other
-!> to grab the cross section values needed for the calculations.
+!> to grab the cross section values needed for the calculations. Some notation in this
+!> code is more explicit than in other parts of the program, in hopes that the compiler
+!> can optimize this performance-critical section of the code a bit better.
 
 module gas_tau_mod
 
@@ -38,40 +40,57 @@ contains
   !> @param ndry Number of dry air molecules
   !> @param success Was the calculation successful?
   !>
+  !> @details
   !> "calculate_gas_tau" uses Gauss-Kronrod integration to calculate per-layer
   !> gas optical depths for a given gas. This is probably quite similar to the
   !> OCO full-physics way of doing it, but somewhat optimized for speed, since
   !> all variables are loaded into memory. Using pre-gridded spectroscopy makes
   !> this a bit faster than having to interpolate into the ABSCO wavelength grid.
-  subroutine calculate_gas_tau(pre_gridded, is_H2O, num_active_levels, &
-       wl, gas_vmr, psurf, p, T, sh, grav, &
-       gas, N_sub, need_psurf_jac, &
-       gas_tau, gas_tau_dpsurf, gas_tau_dvmr, &
+  subroutine calculate_gas_tau(pre_gridded, &
+       is_H2O, &
+       N_levels, &
+       N_active_levels, &
+       N_wl, &
+       wl, &
+       gas_vmr, &
+       psurf, &
+       p, &
+       T, &
+       sh, &
+       grav, &
+       gas, &
+       N_sub, &
+       need_psurf_jac, &
+       gas_tau, &
+       gas_tau_dpsurf, &
+       gas_tau_dvmr, &
        success)
 
     implicit none
     logical, intent(in) :: pre_gridded
     logical, intent(in) :: is_H2O
-    integer, intent(in) :: num_active_levels
-    double precision, intent(in) :: wl(:)
-    double precision, intent(in) :: gas_vmr(:)
+    integer, intent(in) :: N_levels
+    integer, intent(in) :: N_active_levels
+    integer, intent(in) :: N_wl
+    double precision, intent(in) :: wl(N_wl)
+    double precision, intent(in) :: gas_vmr(N_levels)
     double precision, intent(in) :: psurf
-    double precision, intent(in) :: p(:)
-    double precision, intent(in) :: T(:)
-    double precision, intent(in) :: sh(:)
-    double precision, intent(in) :: grav(:)
+    double precision, intent(in) :: p(N_levels)
+    double precision, intent(in) :: T(N_levels)
+    double precision, intent(in) :: sh(N_levels)
+    double precision, intent(in) :: grav(N_levels)
     type(CS_gas_t), intent(in) :: gas
     integer, intent(in) :: N_sub
     logical, intent(in) :: need_psurf_jac
 
-    double precision, intent(inout) :: gas_tau(:,:)
-    double precision, intent(inout) :: gas_tau_dpsurf(:,:)
-    double precision, intent(inout) :: gas_tau_dvmr(:,:,:)
+    double precision, intent(inout) :: gas_tau(N_wl, N_levels-1)
+    double precision, intent(inout) :: gas_tau_dpsurf(N_wl, N_levels-1)
+    double precision, intent(inout) :: gas_tau_dvmr(2, N_wl, N_levels-1)
 
     logical, intent(inout) :: success
 
 
-    character(len=999) :: tmp_str ! Temporary string
+    ! character(len=999) :: tmp_str ! Temporary string
     character(len=*), parameter :: fname = "calculate_gas_tau" ! Function name
     logical :: log_scaling ! Are we interpolating in log-p space? (rather than linear p space)
     ! Placeholders to store the lower and higher (in altitude, i.e. layer boundaries)
@@ -95,20 +114,17 @@ contains
     double precision :: this_M_pert
     double precision :: C_tmp
     double precision :: ndry
-    double precision, allocatable :: gas_tmp(:), this_CS_value(:)
-    integer, allocatable :: wl_left_indices(:)
+    double precision :: gas_tmp(N_wl)
+    double precision :: this_CS_value(N_wl)
+    integer :: wl_left_indices(N_wl)
 
     ! Variables related to the Gauss-Kronrod weights
     double precision, allocatable :: GK_abscissae(:), GK_weights(:), G_weights(:)
     double precision, allocatable :: GK_abscissae_f(:), GK_weights_f(:), G_weights_f(:)
     double precision :: GK_abscissae_f_pert(N_sub), GK_weights_f_pert(N_sub), G_weights_f_pert(N_sub)
 
-    ! Various counter and size variables
-    integer :: N_lay, N_lev, N_wl
     integer :: j,k,l
 
-    allocate(this_CS_value(size(wl)))
-    allocate(wl_left_indices(size(wl)))
 
     ! Notes to Gauss-Kronrod integration:
     ! According to GK-rules, the knots ("x-coords") and weights are symmetric
@@ -133,15 +149,9 @@ contains
     allocate(GK_weights_f(N_sub))
     allocate(G_weights_f(N_sub))
 
-    N_lev = size(gas_vmr)
-    N_lay = N_lev - 1
-    N_wl = size(wl)
-
     ! Maybe some time later we will let the user decide if log-scaling should be
     ! used or not, but I don't see a reason why you would ever NOT want to use this.
     log_scaling = .true.
-
-    allocate(gas_tmp(N_wl))
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
@@ -173,12 +183,12 @@ contains
     call kronrod((N_sub-1)/2, 1d-6, GK_abscissae, GK_weights, G_weights)
 
     ! Traverse the atmosphere layers(!), starting from the bottom to the top
-    do l=num_active_levels, 2, -1
+    do l=N_active_levels, 2, -1
 
        ! First, grab the lower (altitude-wise) and higher values for
        ! p,T,sh from the atmosphere profiles for whatever layer l we're in.
 
-       if (l == num_active_levels) then
+       if (l == N_active_levels) then
           ! BOA layer - psurf should be between lowermost level and
           ! the level above (ideally). But this will extrapolate linearly
           ! anyway, which might cause some trouble.
@@ -321,8 +331,9 @@ contains
 
           if (log_scaling) this_p = exp(this_p)
 
-          this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p, &
-               this_T, this_H2O, wl_left_indices(:))
+          this_CS_value = get_CS_value_at(pre_gridded, gas, &
+               N_wl, wl(1:N_wl), &
+               this_p, this_T, this_H2O, wl_left_indices(1:N_wl))
 
           if (is_H2O) then
              H2O_corr = 1.0d0
@@ -346,20 +357,20 @@ contains
           ! ----------------------------------------------------------------------------------------------
           ! Add sublayer contribution to full layer tau
           ! ----------------------------------------------------------------------------------------------
-          gas_tau(:,l-1) = gas_tau(:,l-1) + (ndry * this_CS_value(:) * this_VMR)
+          gas_tau(1:N_wl,l-1) = gas_tau(1:N_wl,l-1) + (ndry * this_CS_value(1:N_wl) * this_VMR)
           ! Jacobians of tau w.r.t. changes in level VMR. Layer gas tau can change in two
           ! ways: either change the VMR at the level above (index 1, higher), or below (index 2, lower)
 
           ! "Higher" (i.e. closer to TOA)
-          gas_tau_dvmr(:,l-1,1) = gas_tau_dvmr(:,l-1,1) + (ndry * this_CS_value(:) * (this_p_fac))
+          gas_tau_dvmr(1,1:N_wl,l-1) = gas_tau_dvmr(1,1:N_wl,l-1) + (ndry * this_CS_value(1:N_wl) * (this_p_fac))
           ! "Lower" (i.e. closer to surface)
-          gas_tau_dvmr(:,l-1,2) = gas_tau_dvmr(:,l-1,2) + (ndry * this_CS_value(:) * (1.0d0 - this_p_fac))
+          gas_tau_dvmr(2,1:N_wl,l-1) = gas_tau_dvmr(2,1:N_wl,l-1) + (ndry * this_CS_value(1:N_wl) * (1.0d0 - this_p_fac))
           ! ----------------------------------------------------------------------------------------------
 
           ! The same is required in the case of surface pressure jacobians,
           ! but we obviously only do this for the BOA layer
 
-          if (need_psurf_jac .and. (l == num_active_levels)) then
+          if (need_psurf_jac .and. (l == N_active_levels)) then
 
              this_p_pert = GK_abscissae_f_pert(k)
 
@@ -378,8 +389,10 @@ contains
 
              if (log_scaling) this_p_pert = exp(this_p_pert)
 
-             this_CS_value = get_CS_value_at(pre_gridded, gas, wl(:), this_p_pert, &
-                  this_T_pert, this_H2O_pert, wl_left_indices(:))
+             this_CS_value = get_CS_value_at(pre_gridded, gas, &
+                  N_wl, wl(1:N_wl), &
+                  this_p_pert, this_T_pert, &
+                  this_H2O_pert, wl_left_indices(1:N_wl))
 
              if (is_H2O) then
                 H2O_corr = 1.0d0
@@ -393,27 +406,27 @@ contains
 
              if (log_scaling) then
                 ! this_p_pert is already exponentiated here!!
-                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) &
+                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * this_CS_value(1:N_wl) &
                 * this_VMR_pert * C_tmp * this_p_pert
              else
-                gas_tmp(:) = GK_weights_f_pert(k) * this_CS_value(:) &
+                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * this_CS_value(1:N_wl) &
                      * this_VMR_pert * C_tmp
              end if
 
-             gas_tau_dpsurf(:,l-1) = gas_tau_dpsurf(:,l-1) + gas_tmp(:)
+             gas_tau_dpsurf(1:N_wl,l-1) = gas_tau_dpsurf(1:N_wl,l-1) + gas_tmp(1:N_wl)
 
           end if
        end do
 
-       if (need_psurf_jac .and. (l == num_active_levels)) then
+       if (need_psurf_jac .and. (l == N_active_levels)) then
           ! Get the difference: tau(psurf - psurb_perturb) - tau(psurf)
-          gas_tau_dpsurf(:,l-1) = (gas_tau_dpsurf(:,l-1) - gas_tau(:,l-1)) / PSURF_PERTURB
+          gas_tau_dpsurf(1:N_wl,l-1) = (gas_tau_dpsurf(1:N_wl,l-1) - gas_tau(1:N_wl,l-1)) / PSURF_PERTURB
        end if
 
-       if (need_psurf_jac .and. (l < num_active_levels)) then
+       if (need_psurf_jac .and. (l < N_active_levels)) then
           ! Copy the non-BOA layer ODs to the gas_tau_dpsurf array, as the
           ! surface pressure Jacobian merely affects the BOA layer ODs
-          gas_tau_dpsurf(:,l-1) = 0.0d0
+          gas_tau_dpsurf(1:N_wl,l-1) = 0.0d0
        end if
     end do
 
@@ -432,17 +445,20 @@ contains
   !> @param H2O H2O VMR
   !> @param wl_left_idx Positions of wl in gas%wl array
   !> @param CS_value Cross section values for wavelengths wl
-  pure function get_CS_value_at(pre_gridded, gas, wl, p, T, H2O, wl_left_idx) result(CS_value)
+  pure function get_CS_value_at(pre_gridded, gas, N_wl, wl, p, T, H2O, wl_left_idx) result(CS_value)
 
     implicit none
     logical, intent(in) :: pre_gridded
     type(CS_gas_t), intent(in) :: gas
-    double precision, intent(in) :: wl(:), p, T, H2O
-    integer, intent(in) :: wl_left_idx(:)
+    integer, intent(in) :: N_wl
+    double precision, intent(in) :: wl(N_wl)
+    double precision, intent(in) :: p, T, H2O
+    integer, intent(in) :: wl_left_idx(N_wl)
 
-    double precision :: CS_value(size(wl))
+    double precision :: CS_value(N_wl)
 
-    character(len=*), parameter :: fname = "get_CS_value_at" ! Function name
+    ! character(len=*), parameter :: fname = "get_CS_value_at" ! Function name
+
     ! These here are the indices between which the CS array will
     ! be linearly interpolated: e.g. idx_(left, right)_(pressure)
     integer :: idx_l_p, idx_r_p ! Pressure
@@ -579,7 +595,7 @@ contains
          (gas%T(idx_rr_T, idx_r_p) - gas%T(idx_rl_T, idx_r_p))
 
 
-    do i=1, size(wl)
+    do i=1, N_wl
 
        if (.not. pre_gridded) then
 

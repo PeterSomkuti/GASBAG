@@ -20,7 +20,7 @@ module physical_model_mod
 
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
-  use control_mod
+  use control_mod, only: CS_t
   !only: CS_t, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, &
   !     MCS_find_gases, MCS_find_aerosols, MCS_find_gas_priors
   use instruments_mod, only: generic_instrument
@@ -275,6 +275,10 @@ contains
     num_fp = CS%general%N_fp
     ! Grab number of bands
     num_band = CS%general%N_bands
+
+
+    ! test
+
 
     !---------------------------------------------------------------------
     ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
@@ -684,8 +688,8 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       !frame_start = 685
-       !frame_stop = 800
+       frame_start = 685
+       frame_stop = 800
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -695,7 +699,7 @@ contains
        ! earlier (less total iterations to process) and will then just sit idle, whereas
        ! those threads can be assigned new soundings with dynamic scheduling.
 
-       !$OMP PARALLEL DO SHARED(retr_count, mean_duration, CS) SCHEDULE(dynamic, num_fp) &
+       !$OMP PARALLEL DO SHARED(retr_count, mean_duration, CS) SCHEDULE(guided) &
        !$OMP PRIVATE(i_fp, i_fr, &
        !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
@@ -950,7 +954,8 @@ contains
     ! ----------------
     ! Number of gases, total levels, and number of active levels
     ! (changes with surface pressure)
-    integer :: num_levels, num_active_levels
+    integer :: num_levels = -1
+    integer :: num_active_levels = -1
 
     ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
     double precision, allocatable :: this_vmr_profile(:,:), prior_vmr_profile(:,:)
@@ -1037,12 +1042,12 @@ contains
     ! Chi2-related variables. Chi2 of last and this current iteration,
     ! chi2 calculated from a linear prediction, and the chi2 ratio needed
     ! to adjust lm_gamma and determine a divergent step.
-    double precision :: old_chi2
-    double precision :: this_chi2
-    double precision :: linear_prediction_chi2
-    double precision :: chi2_ratio
-    double precision :: chi2_rel_change
-    double precision :: last_successful_chi2
+    double precision :: old_chi2 = -1.0
+    double precision :: this_chi2 = -1.0
+    double precision :: linear_prediction_chi2 = -1.0
+    double precision :: chi2_ratio = -1.0
+    double precision :: chi2_rel_change = -1.0
+    double precision :: last_successful_chi2 = -1.0
 
     ! Iteration-related
     ! Current iteration number (starts at 1), number of divergent steps allowed.
@@ -1292,7 +1297,7 @@ contains
 
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
-    N_spec_hi = size(this_solar, 1)
+    N_spec_hi = N_hires
 
     ! Need one copy of the state vector the save last iteration's
     ! values, as well as the last successful iteration.
@@ -1386,7 +1391,7 @@ contains
 
        else if (CS%algorithm%solar_type == "oco_hdf") then
           ! The OCO-HDF-type spectrum needs to be first re-gridded here
-          call pwl_value_1d( &
+          call pwl_value_1d_v2( &
                N_solar, &
                solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
                N_hires, &
@@ -1632,13 +1637,13 @@ contains
 
           call logger%debug(fname, "Resampling MET profiles.")
 
-          call pwl_value_1d( &
+          call pwl_value_1d_v2( &
                size(met_P_levels, 1), &
                log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
                size(scn%atm%p), &
                log(scn%atm%p), scn%atm%T)
 
-          call pwl_value_1d( &
+          call pwl_value_1d_v2( &
                size(met_P_levels, 1), &
                log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
                size(scn%atm%p), &
@@ -1956,7 +1961,9 @@ contains
                 call calculate_gas_tau( &
                      .true., & ! We are using pre-gridded spectroscopy!
                      is_H2O, & ! Is this gas H2O?
+                     num_levels, & ! Number of levels
                      num_active_levels, & ! Number of active levels
+                     N_hires, & ! Number of hires spectral points
                      scn%op%wl, & ! The high-resolution wavelength grid
                      this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                      scn%atm%psurf, & ! Surface pressure
@@ -1969,7 +1976,7 @@ contains
                      do_psurf_jac, & ! Do we require surface pressure jacobians?
                      scn%op%gas_tau_dtemp(:,:,j), & ! Output: Gas ODs
                      scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                     scn%op%gas_tau_dvmr(:,:,j,:), & ! Output: dTau/dVMR
+                     scn%op%gas_tau_dvmr(:,:,:,j), & ! Output: dTau/dVMR
                      success_gas) ! Output: Was the calculation successful?
 
              end if
@@ -1978,7 +1985,9 @@ contains
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
                   is_H2O, & ! Is this gas H2O?
+                  num_levels, & ! Number of levels
                   num_active_levels, & ! Number of active levels
+                  N_hires, & ! Number of hires spectral points
                   scn%op%wl, & ! The high-resolution wavelength grid
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   scn%atm%psurf, & ! Surface pressure
@@ -1991,7 +2000,7 @@ contains
                   do_psurf_jac, & ! Do we require surface pressure jacobians?
                   scn%op%gas_tau(:,:,j), & ! Output: Gas ODs
                   scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
-                  scn%op%gas_tau_dvmr(:,:,j,:), & ! Output: dTau/dVMR
+                  scn%op%gas_tau_dvmr(:,:,:,j), & ! Output: dTau/dVMR
                   success_gas) ! Output: Was the calculation successful?
 
 
@@ -2135,6 +2144,7 @@ contains
        center_pixel_hi = int(N_spec_hi / 2)
 
        ! Allocate various arrays that depend on N_spec
+       !
        allocate(K(N_spec, N_sv))
        allocate(gain_matrix(N_sv, N_spec))
        allocate(radiance_meas_work(N_spec))
@@ -3231,8 +3241,8 @@ contains
     end if
 
     if (SV%num_temp > 0) then
-       ! Put ZLO prior covariance at the continuum level of the band
-       Sa(SV%idx_temp(1), SV%idx_temp(1)) = sqrt(5.0d0)
+       ! Set temperature covariance to some value (?)
+       Sa(SV%idx_temp(1), SV%idx_temp(1)) = sqrt(10.0d0)
     end if
 
     if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1.0d6

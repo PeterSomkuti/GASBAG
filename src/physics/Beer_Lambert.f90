@@ -169,7 +169,7 @@ contains
 
       integer :: N_gas
       integer :: i_gas, i_SV
-      integer :: i,j,k
+      integer :: i
 
       logical :: ILS_success
 
@@ -211,16 +211,16 @@ contains
             if (i == 1) then
                ! TOA layer
                dI_dVMR(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                    * scn%op%gas_tau_dvmr(:,i,i_gas,1)
+                    * scn%op%gas_tau_dvmr(1,:,i,i_gas)
             else if (i == num_active_levels) then
                ! BOA layer
                dI_dVMR(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                    * scn%op%gas_tau_dvmr(:,i-1,i_gas,2)
+                    * scn%op%gas_tau_dvmr(1,:,i-1,i_gas)
             else
                ! everything in between
                dI_dVMR(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
-                    (scn%op%gas_tau_dvmr(:,i-1,i_gas,2) + &
-                    scn%op%gas_tau_dvmr(:,i,i_gas,1))
+                    (scn%op%gas_tau_dvmr(2,:,i-1,i_gas) + &
+                    scn%op%gas_tau_dvmr(1,:,i,i_gas))
             end if
 
             call oco_type_convolution(scn%op%wl, &

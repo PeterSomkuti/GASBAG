@@ -100,6 +100,8 @@ module control_mod
      type(string) :: basisfunction_file
      !> Order of albedo-polynomial to be retrieved (number + 1)
      integer :: albedo_order
+     !> Number of solar irradiance scaling coefficients to be retrieved
+     integer :: solar_irrad_scale_order
      !> Number of dispersion coefficients to be retrieved
      integer :: dispersion_order
      !> Dispersion perturbation value for Jacobians
@@ -868,6 +870,9 @@ contains
 
           call fini_extract(fini, win_str, 'albedo_order', .false., fini_int)
           CS%window(window_nr)%albedo_order = fini_int
+
+          call fini_extract(fini, win_str, 'solar_irrad_scale_order', .false., fini_int)
+          CS%window(window_nr)%solar_irrad_scale_order = fini_int
 
           call fini_extract(fini, win_str, 'ils_stretch_order', .false., fini_int)
           CS%window(window_nr)%ils_stretch_order = fini_int

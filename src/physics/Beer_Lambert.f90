@@ -97,6 +97,27 @@ contains
 
     end subroutine calculate_BL_albedo_jacobian
 
+    !> @brief Solar irradiance scaling  Jacobian for BL-type RT
+    !> @param TOA_radiance The TOA radiance array WITHOUT ZLO and SIF
+    !> @param scn Scene object
+    !> @param center_pixel Which pixel is the reference?
+    !> @param scale_coeff Which albedo order?
+    !> @param scale_jacobian dI/dSolarIrradScaleCoeff
+    subroutine calculate_BL_solar_irrad_scale_jacobian(solar_radiance_unscaled, &
+         scn, center_pixel, scale_coeff, scale_jacobian)
+
+      implicit none
+      double precision, intent(in) :: solar_radiance_unscaled(:)
+      type(scene), intent(in) :: scn
+      integer, intent(in) :: center_pixel
+      integer, intent(in) :: scale_coeff
+      double precision, intent(inout) :: scale_jacobian(:)
+
+      scale_jacobian(:) = solar_radiance_unscaled(:) * &
+           ((scn%op%wl(:) - scn%op%wl(center_pixel)) ** dble(scale_coeff-1))
+      
+    end subroutine calculate_BL_solar_irrad_scale_jacobian
+
     !> @brief Gas sub-column Jacobian for BL-type RT
     !> @param TOA_radiance The TOA radiance array WITHOUT ZLO and SIF
     !> @param scn Scene object

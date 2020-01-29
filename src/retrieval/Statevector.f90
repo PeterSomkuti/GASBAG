@@ -24,6 +24,7 @@ module statevector_mod
      integer :: num_ils_stretch
      integer :: num_aerosol_aod
      integer :: num_aerosol_height
+     integer :: num_solar_irrad_scale
 
 
      integer, dimension(:), allocatable :: idx_albedo
@@ -37,6 +38,7 @@ module statevector_mod
      integer, dimension(:), allocatable :: idx_ils_stretch
      integer, dimension(:), allocatable :: idx_aerosol_aod
      integer, dimension(:), allocatable :: idx_aerosol_height
+     integer, dimension(:), allocatable :: idx_solar_irrad_scale
 
      ! Lookup arrays that tell us which aerosol/gas this statevector
      ! element belongs to.
@@ -88,6 +90,7 @@ contains
     if (allocated(SV%idx_ils_stretch)) deallocate(SV%idx_ils_stretch)
     if (allocated(SV%idx_aerosol_aod)) deallocate(SV%idx_aerosol_aod)
     if (allocated(SV%idx_aerosol_height)) deallocate(SV%idx_aerosol_height)
+    if (allocated(SV%idx_solar_irrad_scale)) deallocate(SV%idx_solar_irrad_scale)
 
     if (allocated(SV%svap)) deallocate(SV%svap)
     if (allocated(SV%svsv)) deallocate(SV%svsv)
@@ -121,14 +124,14 @@ contains
     SV%num_ils_stretch = -1
     SV%num_aerosol_aod = -1
     SV%num_aerosol_height = -1
+    SV%num_solar_irrad_scale = -1
 
   end subroutine clear_SV
 
 
-  subroutine parse_and_initialize_SV(i_win, num_levels, CS_win, CS_gas, CS_aerosol, SV)
+  subroutine parse_and_initialize_SV(num_levels, CS_win, CS_gas, CS_aerosol, SV)
 
     implicit none
-    integer, intent(in) :: i_win
     integer, intent(in) :: num_levels
     type(CS_window_t) :: CS_win
     type(CS_gas_t) :: CS_gas(:)
@@ -169,6 +172,7 @@ contains
     integer :: num_ils_stretch_parameters = 0
     integer :: num_aerosol_aod_parameters = 0
     integer :: num_aerosol_height_parameters = 0
+    integer :: num_solar_irrad_scale_parameters = 0
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
@@ -181,16 +185,17 @@ contains
 
     ! These are the known state vector elements - only these will be properly
     ! parsed. The order in which they are defined is not significant.
-    known_SV(1) = "albedo"
-    known_SV(2) = "dispersion"
-    known_SV(3) = "sif"
-    known_SV(4) = "psurf"
-    known_SV(5) = "solar_shift"
-    known_SV(6) = "solar_stretch"
-    known_SV(7) = "zlo"
-    known_SV(8) = "temp"
-    known_SV(9) = "ils_stretch"
-    last_known = 9
+    known_SV(1) =  "albedo"
+    known_SV(2) =  "dispersion"
+    known_SV(3) =  "sif"
+    known_SV(4) =  "psurf"
+    known_SV(5) =  "solar_shift"
+    known_SV(6) =  "solar_stretch"
+    known_SV(7) =  "zlo"
+    known_SV(8) =  "temp"
+    known_SV(9) =  "ils_stretch"
+    known_SV(10) = "solar_irrad_scale"
+    last_known = 10
 
     ! Add gases as 'known' state vector elements. CAUTION! There is
     ! obviously a danger if someone decides to name their gas "psurf".
@@ -290,6 +295,20 @@ contains
 
        end if
 
+       ! We are retrieving solar irradiance scaling!
+       if (split_string(i)%lower() == "solar_irrad_scale") then
+
+          ! Albedo order needs to be >= 0
+          if (CS_win%solar_irrad_scale_order < 0) then
+             call logger%fatal(fname, "We are retrieving solar irradiance scaling, but order " &
+                  // "needs to be >= 0. Check if you've supplied a sensible value (or at all).")
+             stop 1
+          else
+             ! Albedo order 0 means simple factor, order 1 is with slope etc.
+             num_solar_irrad_scale_parameters = CS_win%solar_irrad_scale_order + 1
+          end if
+
+       end if
 
        ! We are retrieving DISPERSION!
        if (split_string(i)%lower() == "dispersion") then
@@ -581,6 +600,7 @@ contains
          num_ils_stretch_parameters, &
          num_aerosol_aod_parameters, &
          num_aerosol_height_parameters, &
+         num_solar_irrad_scale_parameters, &
          gas_retr_count)
 
   end subroutine parse_and_initialize_SV
@@ -592,17 +612,26 @@ contains
        count_albedo, count_sif, count_dispersion, count_psurf, &
        count_solar_shift, count_solar_stretch, count_zlo, &
        count_temp, count_ils_stretch, count_aerosol_aod, &
-       count_aerosol_height, &
+       count_aerosol_height, count_solar_irrad_scale, &
        gas_retr_count)
 
     implicit none
     type(CS_window_t), intent(in) :: CS_win
     integer, intent(in) :: num_levels
     type(statevector), intent(inout) :: sv
-    integer, intent(in) :: count_albedo, count_sif, &
-         count_dispersion, count_psurf, count_solar_shift, &
-         count_solar_stretch, count_zlo, count_temp, count_ils_stretch, &
-         count_aerosol_aod, count_aerosol_height, gas_retr_count(:)
+    integer, intent(in) :: count_albedo
+    integer, intent(in) :: count_sif
+    integer, intent(in) :: count_dispersion
+    integer, intent(in) :: count_psurf
+    integer, intent(in) :: count_solar_shift
+    integer, intent(in) :: count_solar_stretch
+    integer, intent(in) :: count_zlo
+    integer, intent(in) :: count_temp
+    integer, intent(in) :: count_ils_stretch
+    integer, intent(in) :: count_aerosol_aod
+    integer, intent(in) :: count_aerosol_height
+    integer, intent(in) :: count_solar_irrad_scale
+    integer, intent(in) :: gas_retr_count(:)
 
     integer :: count_gas
     character(len=*), parameter :: fname = "initialize_statevector"
@@ -622,6 +651,7 @@ contains
     sv%num_ils_stretch = count_ils_stretch
     sv%num_aerosol_aod = count_aerosol_aod
     sv%num_aerosol_height = count_aerosol_height
+    sv%num_solar_irrad_scale = count_solar_irrad_scale
     sv%num_gas = 0
 
     sv_count = 0
@@ -642,6 +672,23 @@ contains
     else
        allocate(sv%idx_albedo(1))
        sv%idx_albedo(1) = -1
+    end if
+
+    ! Solar irradiance scaling: arbitrary number of parameters allowed
+    if (sv%num_solar_irrad_scale > 0) then
+
+       write(tmp_str, '(A, G0.1)') "Number of solar irradiance scaling SV elements: ", &
+            sv%num_solar_irrad_scale
+       call logger%info(fname, trim(tmp_str))
+
+       allocate(sv%idx_solar_irrad_scale(sv%num_solar_irrad_scale))
+       do i=1, sv%num_solar_irrad_scale
+          sv_count = sv_count + 1
+          sv%idx_solar_irrad_scale(i) = sv_count
+       end do
+    else
+       allocate(sv%idx_solar_irrad_scale(1))
+       sv%idx_solar_irrad_scale(1) = -1
     end if
 
     ! SIF: we can do only two things here, SIF magnitude and slope

@@ -131,11 +131,12 @@ module physical_model_mod
   double precision, allocatable :: solar_spectrum(:,:)
   !> The solar (pseudo-transmittance) spectrum on the regular wavelength grid (wavelength, transmission)
   double precision, allocatable :: solar_spectrum_regular(:,:)
-  !> The number of solar spectrum points (as read from the file)
+  !> The solar continuum read from an OCO-like HDF-file (wavelegnth, radiance)
   double precision, allocatable :: solar_continuum_from_hdf(:,:)
+  !> The number of solar spectrum points (as read from the file)
   integer :: N_solar
 
-  !> On request, we can pre-load ALL spectra from the L1B file
+  !> On request, we can pre-load ALL spectra from the L1B file (pixel, footprint, frame)
   double precision, dimension(:,:,:), allocatable :: all_L1B_radiances
   !> Final modelled radiances (pixel, footprint, frame)
   double precision, dimension(:,:,:), allocatable :: final_radiance
@@ -162,8 +163,52 @@ contains
   !> @brief The physical_retrieval routine reads in all the necessary L1b and MET
   !> data and prepares for the forward model to be run.
   !> @param my_instrument Instrument entity
+  !> @param CS Control structure entity
+  !> @details
+  !> The "physical_retrieval" subroutine is roughly set up in the following way.
   !>
-  !> TODO Detailed description of the workings
+  !> Set-up phase
+  !> ------------
+  !> First, the MET file is opened and read in (if required), along with some
+  !> other L1B file variables. These variables are generally arrays which are
+  !> to be accessed throughout every single retrieval, e.g. a temperature profile,
+  !> or a surface pressure, or the stokes coefficients for a particular scene.
+  !> To improve performance, all these variables are read in AT ONCE during this
+  !> set-up phase and kept in memory for the duration of the retrieval process.
+  !> This obviously places some burden on the memory resources, however memory
+  !> is cheap and plentiful. For OCO-2-type granule sizes of ~60k scenes, the
+  !> memory footprint does not seem to exceed a few GBs.
+  !>
+  !> Retrieval window loop
+  !> ---------------------
+  !> GASBAG is configured on a "window" basis, where "window" has the meaning
+  !> of one (!) single-band retrieval configuration, consiting of all required
+  !> parameters that define a retrieval. The user can populate the configuration
+  !> file with many such configurations, and GASBAG will process all of them in
+  !> order of labelling. After the set-up phase, the program enters the loop which
+  !> iterates over all retrieval windows. For each window, GASBAG assesses which
+  !> gases and aerosols are used and loads those into memory.  The spectroscopy
+  !> data associated with each gas is processed and loaded, as is the solar model,
+  !> and all other data which are to be accessed by every retrieved scene, such as
+  !> sounding location and scene geometry, etc. Result containers are set up, and
+  !> the initial state vector is populated.
+  !>
+  !> After all this is done, two inner loops within the retrieval window loop
+  !> are executed, which iterates over footprint/frame (across-track, along-track).
+  !> This double inner loop is threaded via OpenMP, allowing to spread the
+  !> computation onto several physical and logical cores. The speed-up is not
+  !> quite linear, as there is some overhead, depending on the retrieval set-up.
+  !> If GASBAG is configured to read-in the L1B radiances one-by-one, then the
+  !> bottleneck due to OMP_CRITICAL directives is significant. Since HDF5 does
+  !> not allow for parallel access for read, we have to use OMP_CRITICAL to make
+  !> sure that only one thread at a time is accessing and reading the L1B file.
+  !> This means that the OpenMP scheduler has to keep other threads on hold.
+  !> A feature was added to GASBAG to read-in the L1B spectra during the set-up
+  !> phase, which should reduce that bottleneck. However a similar bottleneck is
+  !> currently identified for the logger, where we also have to wait to make sure
+  !> that only one thread at a time is writing to the logfile.
+  !>
+  !>
   subroutine physical_retrieval(my_instrument, CS)
 
     implicit none
@@ -202,8 +247,6 @@ contains
     logical :: this_converged
     ! Number of iterations used by physical_fm
     integer :: this_iterations
-    ! File unit for debugging only..
-    integer :: funit
     ! CPU time stamps and mean duration for performance analysis
     double precision :: cpu_time_start, cpu_time_stop, mean_duration
     integer :: frame_start, frame_skip, frame_stop
@@ -530,7 +573,7 @@ contains
        solar_spectrum_regular(:,1) = hires_grid
 
        call logger%debug(fname, "Re-gridding solar transmission spectrum")
-       call pwl_value_1d( &
+       call pwl_value_1d_v2( &
             N_solar, &
             solar_spectrum(:,1), solar_spectrum(:,2), &
             N_hires, &
@@ -574,6 +617,7 @@ contains
        ! Aerosol AOD
        ! Aerosol height
        ! Temperature offset
+       ! Solar irradiance scaling, arbitrary(?) polyomial order
 
        ! Parsing the statevector string, that was passed in the window
        ! section and initialize the state vector SV accordingly. This subroutine
@@ -583,7 +627,7 @@ contains
        ! For the beginning, we start by initialising it with the number of levels
        ! as obtained from the initial_atm
 
-       call parse_and_initialize_SV(i_win, size(initial_atm%p), &
+       call parse_and_initialize_SV(size(initial_atm%p), &
             CS%window(i_win), CS%gas, CS%aerosol, &
             global_SV)
        call logger%info(fname, "Initialised SV structure")
@@ -798,6 +842,7 @@ contains
   !> @param band Band number
   !> @param CS_win Control structure for this(!) retrieval window
   !> @param CS_gas Control structure for all gases
+  !> @param this_iterations The number of iterations this retrieval took
   !> @param converged Whether this retrieval has converged or not
   !>
   !> This function performs the full physical retrieval, and returns whether
@@ -858,8 +903,6 @@ contains
     ! Sounding time stuff
     !type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
-    ! Epoch, which is just the date split into an integer array
-    integer :: epoch(7)
 
     ! Instrument stuff
     ! Instrument doppler shift based on relative motion between ground footprint
@@ -896,15 +939,18 @@ contains
     double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_tmp(:)
     ! Per-iteration values for the solar shift value and the solar stretch factor
     double precision :: this_solar_shift, this_solar_stretch
+    ! Unscaled solar irradiance if we retrieve solar irradiance scale factor
+    double precision, allocatable :: solar_unscaled(:)
 
 
     ! Scene object
     type(scene) :: scn
 
     ! Atmosphere stuff
+    ! ----------------
     ! Number of gases, total levels, and number of active levels
     ! (changes with surface pressure)
-    integer :: num_gases, num_levels, num_active_levels
+    integer :: num_levels, num_active_levels
 
     ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
     double precision, allocatable :: this_vmr_profile(:,:), prior_vmr_profile(:,:)
@@ -915,15 +961,15 @@ contains
     logical :: is_H2O
 
     ! Albedo
+    ! ----------------
     ! Prior albedo value estimated from the radiances
     double precision :: albedo_apriori
-    ! Per-wavelength albedo for hires and low-res spectra
-    double precision, allocatable :: albedo(:)
 
     ! Do we need/want to calculate surface pressure Jacobians?
     logical :: do_psurf_jac
 
     ! SIF
+    ! ----------------
     ! Per-iteration SIF radiance
     double precision :: this_sif_radiance
     ! ZLO - same as SIF essentially
@@ -933,6 +979,7 @@ contains
     double precision :: this_temp_offset
 
     ! Gases
+    ! ----------------
     ! Do we want to calculate gas Jacobians
     logical :: do_gas_jac
     ! Was the calculation of gas ODs successful?
@@ -1019,11 +1066,15 @@ contains
     ! File unit for debugging
     integer :: funit
 
-    ! DEBUG STUFF
+    ! CPU time counters to measure durations
     double precision :: cpu_conv_start, cpu_conv_stop
     double precision :: cpu_gas_start, cpu_gas_stop
 
+    ! ----------
+    !
     ! Initialize
+    !
+    ! ----------
     CS_win = CS%window(i_win)
     converged = .false.
     this_iterations = 0
@@ -1035,12 +1086,13 @@ contains
     l1b_file_id = CS%input%l1b_file_id
     output_file_id = CS%output%output_file_id
 
-    ! Ingest scene geometry and store them into the scene
-    ! object.
+    ! Ingest scene geometry and store them into the scene object
     scn%SZA = SZA(i_fp, i_fr)
     scn%VZA = VZA(i_fp, i_fr)
+
     scn%mu0 = cos(DEG2RAD * scn%SZA)
     scn%mu = cos(DEG2RAD * scn%VZA)
+
     scn%SAA = SAA(i_fp, i_fr)
     scn%VAA = VAA(i_fp, i_fr)
 
@@ -1048,11 +1100,21 @@ contains
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
 
+    ! -------------------------------------
+    !
     ! Set the used radiative transfer model
+    ! 
+    ! -------------------------------------
+
     if (CS_win%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
        ! Beer Lambert is intensity-only right now
        n_stokes = 1
+       ! If the user requested polarization, let them know that they're
+       ! asking for something 'wrong'
+       if (CS_win%do_polarization) then
+          call logger%debug(fname, "BEER-LAMBERT is scalar only! Change config file!")
+       end if
     else if (CS_win%RT_model%lower() == "xrtm") then
        RT_model = RT_XRTM
 
@@ -1068,20 +1130,28 @@ contains
        stop 1
     end if
 
-    ! What is the total number of gases in this window,
-    ! regardless of whether they are retrieved or not.
-    if (allocated(CS_win%gases)) then
-       num_gases = CS_win%num_gases
-    else
-       num_gases = 0
-    end if
-
+    ! --------------------------------------------------
+    !
     ! Use user-supplied value for convergence critertion
+    !
+    ! --------------------------------------------------
+
     dsigma_scale = CS_win%dsigma_scale
     if (dsigma_scale < 0.0d0) then
        call logger%warning(fname, "Requested dsigma_scale is < 0, setting to 1.0.")
        dsigma_scale = 1.0d0
     end if
+
+    ! -------------------------------------------------
+    !
+    ! Read L1B spectra / spectrum from the L1B
+    !
+    ! Either a single spectrum is read from the L1B
+    ! using a hyperslab selection, or the corresponding
+    ! slice from the "all_L1B_radiances" is copied over
+    ! for use in this particular retrieval.
+    !
+    ! -------------------------------------------------
 
     select type(my_instrument)
     type is (oco2_instrument)
@@ -1095,8 +1165,22 @@ contains
           call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
                CS%general%N_spec(band), radiance_l1b)
        end if
+    end select
+
+
+    ! ----------------------------------------------------------
+    !
+    ! Grab the date and time of the retrieval and turn it into a
+    ! datatime object. This is required to calculate the solar
+    ! irradiance mostly via solar doppler and solar angular size.
+    !
+    ! ----------------------------------------------------------
+
+    select type(my_instrument)
+    type is (oco2_instrument)
        ! Convert the date-time-string object in the L1B to a date-time-object "date"
-       call my_instrument%convert_time_string_to_date(frame_time_strings(i_fr), &
+       call my_instrument%convert_time_string_to_date(&
+            frame_time_strings(i_fr), &
             scn%date, success_time_convert)
     end select
 
@@ -1105,25 +1189,6 @@ contains
     if (.not. success_time_convert) then
        call logger%error(fname, "Time string conversion error!")
        return
-    end if
-
-
-    ! Estimate a smart first guess for the gas scale factor, if the user supplied
-    ! values for expected delta tau etc.
-    if (allocated(CS_win%smart_scale_first_guess_wl_in)) then
-
-       allocate(scale_first_guess(size(CS_win%smart_scale_first_guess_wl_in)))
-
-       call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
-            radiance_l1b, &
-            CS_win%smart_scale_first_guess_wl_in(:), &
-            CS_win%smart_scale_first_guess_wl_out(:), &
-            CS_win%smart_scale_first_guess_delta_tau(:), &
-            scn%SZA, scn%VZA, scale_first_guess)
-    else
-       ! Otherwise just start with 1.0
-       allocate(scale_first_guess(1))
-       scale_first_guess(1) = 1.0d0
     end if
 
 
@@ -1138,40 +1203,6 @@ contains
     scn%epoch(4) = scn%date%getHour()
     scn%epoch(5) = scn%date%getMinute()
     scn%epoch(6) = scn%date%getSecond()
-
-    ! ----------------------------------------------
-    ! Print out some debug information for the scene
-    ! ----------------------------------------------
-
-    write(tmp_str, "(A, A)") "Date: ", scn%date%isoformat()
-    call logger%debug(fname, trim(tmp_str))
-
-    write(tmp_str, "(A, F5.1)") "Day of the year: ", doy_dp
-    call logger%debug(fname, trim(tmp_str))
-
-    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
-         "SZA: ", scn%SZA, " - SAA: ", scn%SAA, &
-         " - VZA: ", scn%VZA, " - VAA: ", scn%VAA
-    call logger%debug(fname, trim(tmp_str))
-
-    write(tmp_str, "(A, F8.2, A, F8.2, A, ES15.3)") &
-         "Lon.: ", scn%lon, &
-         " Lat.: ", scn%lat, &
-         " Alt.: ", scn%alt
-    call logger%debug(fname, trim(tmp_str))
-
-    ! Dispersion array that contains the wavelenghts per pixel
-    allocate(this_dispersion(size(radiance_l1b)))
-    allocate(this_dispersion_tmp(size(radiance_l1b)))
-
-    ! The dispersion coefficients use to generate this soundings' dispersion
-    ! has the same size as the L1b dispersion coefficient array
-    allocate(this_dispersion_coefs(size(dispersion_coefs, 1)))
-    allocate(this_dispersion_coefs_pert(size(dispersion_coefs, 1)))
-
-    ! Allocate the micro-window bounded solar arrays
-    allocate(this_solar(N_hires, 2))
-    allocate(dsolar_dlambda(N_hires))
 
     ! The "instrument doppler shift" is caused by the relative velocity
     ! between the point on the surface and the spacecraft. Obviously, this
@@ -1197,12 +1228,99 @@ contains
        solar_doppler = solar_rv / SPEED_OF_LIGHT
     end if
 
+    ! ----------------------------------------------------------
+    !
+    ! Estimate a smart first guess for the gas scale factor,
+    ! if the user supplied values for expected delta tau etc.
+    !
+    ! This technique, when used with SENSIBLE VALUES, provides
+    ! a speed-up for non-scattering retrievals, as the retrieval
+    ! has a good first guess to start the inversion.
+    ! Otherwise, the iteration numbers will be increased for
+    ! e.g. CO2 single band retrievals that have undergone
+    ! strong scattering due to clouds for example.
+    !
+    ! ----------------------------------------------------------
+
+    if (allocated(CS_win%smart_scale_first_guess_wl_in)) then
+
+       allocate(scale_first_guess(size(CS_win%smart_scale_first_guess_wl_in)))
+
+       call estimate_first_guess_scale_factor(dispersion(:, i_fp, band), &
+            radiance_l1b, &
+            CS_win%smart_scale_first_guess_wl_in(:), &
+            CS_win%smart_scale_first_guess_wl_out(:), &
+            CS_win%smart_scale_first_guess_delta_tau(:), &
+            scn%SZA, scn%VZA, scale_first_guess)
+    else
+       ! Otherwise just start with 1.0
+       allocate(scale_first_guess(1))
+       scale_first_guess(1) = 1.0d0
+    end if
+
+    ! ----------------------------------------------
+    !
+    ! Print out some debug information for the scene
+    ! 
+    ! ----------------------------------------------
+
+    write(tmp_str, "(A, A)") "Date: ", scn%date%isoformat()
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, F5.1)") "Day of the year: ", doy_dp
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
+         "SZA: ", scn%SZA, " - SAA: ", scn%SAA, &
+         " - VZA: ", scn%VZA, " - VAA: ", scn%VAA
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, F8.2, A, F8.2, A, ES15.3)") &
+         "Lon.: ", scn%lon, &
+         " Lat.: ", scn%lat, &
+         " Alt.: ", scn%alt
+    call logger%debug(fname, trim(tmp_str))
+
+    ! -------------------------------------------------------
+    !
+    ! Allocation for arrays that are determined pre-retrieval
+    !
+    ! These array sizes stay constant, regardless of the
+    ! retrieval iteration outcomes
+    !
+    ! -------------------------------------------------------
+
     ! Set up retrieval quantities:
     N_sv = size(SV%svap)
     N_spec_hi = size(this_solar, 1)
 
+    ! Need one copy of the state vector the save last iteration's
+    ! values, as well as the last successful iteration.
+    allocate(old_sv(size(SV%svsv)))
+    allocate(last_successful_sv(size(SV%svsv)))
+
     ! Set the initial LM-Gamma parameter
+    ! This parameter can potentiall be changed throughout the retrieval,
+    ! so we take a local copy.
     lm_gamma = CS_win%lm_gamma
+
+    ! Dispersion array that contains the wavelenghts per pixel
+    allocate(this_dispersion(size(radiance_l1b)))
+    allocate(this_dispersion_tmp(size(radiance_l1b)))
+
+    ! The dispersion coefficients use to generate this soundings' dispersion
+    ! has the same size as the L1b dispersion coefficient array
+    allocate(this_dispersion_coefs(size(dispersion_coefs, 1)))
+    allocate(this_dispersion_coefs_pert(size(dispersion_coefs, 1)))
+
+    ! Allocate the micro-window bounded solar arrays
+    allocate(this_solar(N_hires, 2))
+    allocate(dsolar_dlambda(N_hires))
+
+    ! Allocate radiance arrays
+    allocate(radiance_calc_work_hi(N_spec_hi))
+    allocate(radiance_calc_work_hi_stokes(N_spec_hi, n_stokes))
+    allocate(radiance_tmp_hi_nosif_nozlo(N_spec_hi, n_stokes))
 
     ! Output-resolution K is allocated within the loop, as the
     ! number of pixels might change, while the hi-res K stays the same
@@ -1213,11 +1331,14 @@ contains
     allocate(K_hi_stokes(N_spec_hi, N_sv, n_stokes))
     K_hi_stokes(:,:,:) = 0.0d0
 
-
     ! Allocate OE-related matrices here
     call logger%debug(fname, "Allocating and initializing OE matrices.")
+
     allocate(Sa(N_sv, N_sv))
+    Sa(:,:) = 0.0d0
     allocate(Sa_inv(N_sv, N_sv))
+    Sa_inv(:,:) = 0.0d0
+
     allocate(Shat_inv(N_sv, N_sv))
     allocate(Shat(N_sv, N_sv))
     allocate(Shat_corr(N_sv, N_sv))
@@ -1226,25 +1347,30 @@ contains
     allocate(KtSeK(N_sv, N_sv))
     allocate(AK(N_sv, N_sv))
 
-    allocate(radiance_calc_work_hi(N_spec_hi))
-    allocate(radiance_calc_work_hi_stokes(N_spec_hi, n_stokes))
-    allocate(radiance_tmp_hi_nosif_nozlo(N_spec_hi, n_stokes))
-    allocate(albedo(N_spec_hi))
 
-    Sa_inv(:,:) = 0.0d0
-    Sa(:,:) = 0.0d0
 
+    ! ------------------------------------------------------------------
+    !
     ! Separate function to populate the prior covariance - this contains
     ! a good number of hard-coded values, which in future should be
     ! given through the config file.
+    !
+    ! TODO
+    !
+    ! ------------------------------------------------------------------
+
     call populate_prior_covariance(SV, CS_win, &
          percentile(radiance_l1b, 98.0d0), &
-         i_win, Sa, Sa_inv)
+         Sa, Sa_inv)
 
     ! -----------------------------------------------------------------------
+    !
     ! Get the albedo prior estimated through the L1B radiances using a simple
-    ! Lambertian model.
+    ! Lambertian model. Also, use this opportunity to pre-allocate the solar
+    ! continuum arrays and downsample it.
+    ! 
     ! -----------------------------------------------------------------------
+
     albedo_apriori = -1.0d0
     select type(my_instrument)
     type is (oco2_instrument)
@@ -1268,6 +1394,7 @@ contains
 
           solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
 
+
        else
           call logger%error(fname, "Solar type: " // CS%algorithm%solar_type%chars() // "is unknown.")
        end if
@@ -1288,12 +1415,22 @@ contains
        end if
     end if
 
-    ! -----------------------------------------------------------------------
 
-
-    ! ------------------------------------------
-    ! We can now populate the prior state vector
-    ! ------------------------------------------
+    ! -------------------------------------------------------
+    !
+    ! Populate the prior / first guess state vector
+    !
+    ! This section of the code is very explicit, however
+    ! we do not have any fancy templating in GASBAG, so
+    ! there always will be explicit branches. I have thought
+    ! about creating state vector element TYPEs that could
+    ! be called through a generic function, but that would
+    ! also require a "SELECT TYPE" case guard which needs to
+    ! be explictly written out for each type.
+    ! The current way looks verbose, but is also easy to
+    ! understand and change.
+    !
+    ! ------------------------------------------------------
     call logger%debug(fname, "Populating the state vector with priors.")
 
     ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
@@ -1305,7 +1442,15 @@ contains
        end do
     end if
 
-
+    if (SV%num_solar_irrad_scale > 0) then
+       call logger%debug(fname, "Inserting solar irradiance scaling priors")
+       SV%svap(SV%idx_solar_irrad_scale(1)) =  maxval(radiance_l1b) &
+            / (maxval(solar_irrad) * stokes_coef(1, i_fp, i_fr))
+       do i=2, SV%num_solar_irrad_scale
+          SV%svap(SV%idx_solar_irrad_scale(i)) = 0.0d0
+       end do
+    end if
+    
     ! Solar shift is set to zero
     if (SV%num_solar_shift == 1) then
        call logger%debug(fname, "Inserting solar shift priors")
@@ -1391,12 +1536,6 @@ contains
        end do
     end if
 
-    ! Regardless of whether they are retrieved or not, the solar shift and stretch
-    ! are set to 'default' values here. If we retrieve them, this value is then just
-    ! updated from the state vector.
-    this_solar_shift = 0.0d0
-    this_solar_stretch = 1.0d0
-
     ! -----------------------------------------------------------------
     ! If the user wants, replace the SV prior value from an earlier run
     ! -----------------------------------------------------------------
@@ -1405,16 +1544,28 @@ contains
        call replace_statevector_by_GASBAG(CS_win, CS%general, i_fp, i_fr, SV)
     end if
 
+    ! -----------------------------------------------------------------
+    ! Set these variables before the iteration loop is executed.
+    ! -----------------------------------------------------------------
 
-
-    ! Retrival iteration loop
     iteration = 0
     num_divergent_steps = 0
     keep_iterating = .true.
     divergent_step = .false.
 
-    allocate(old_sv(size(SV%svsv)))
-    allocate(last_successful_sv(size(SV%svsv)))
+    ! Regardless of whether they are retrieved or not, the solar shift and stretch
+    ! are set to 'default' values here. If we retrieve them, this value is then just
+    ! updated from the state vector.
+    this_solar_shift = 0.0d0
+    this_solar_stretch = 1.0d0
+
+    ! -----------------------------------------------------------------
+    !
+    !
+    !      Retrival iteration loop
+    !
+    !
+    ! -----------------------------------------------------------------
 
 
     call logger%debug(fname, "Starting iteration loop.")
@@ -1422,6 +1573,9 @@ contains
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
 
+       ! Increase iteration count. If last iteration was divergent,
+       ! do not increase. The iteration count only counts successful
+       ! iterations, similar to how the UoL-FP / OCO (?) code does it.
        if (.not. divergent_step) then
           iteration = iteration + 1
        end if
@@ -1429,7 +1583,7 @@ contains
        ! Copy over the initial atmosphere, but only if an atmosphere
        ! actually exists
 
-       if (num_gases > 0) then
+       if (CS_win%num_gases > 0) then
 
           scn%atm = initial_atm
           scn%atm%ndry(:) = 0.0d0
@@ -1443,13 +1597,13 @@ contains
        end if
 
        ! Allocate the optical property containers for the scene
-       call allocate_optical_properties(scn, N_hires, num_gases)
+       call allocate_optical_properties(scn, N_hires, CS_win%num_gases)
        scn%num_stokes = n_stokes
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
        scn%num_active_levels = -1
 
-       if (num_gases > 0) then
+       if (CS_win%num_gases > 0) then
           ! An atmosphere is only required if there are gases present in the
           ! microwindow.
           scn%atm%psurf = met_psurf(i_fp, i_fr)
@@ -1506,7 +1660,7 @@ contains
              return
           end if
 
-          do i=1, num_gases
+          do i=1, CS_win%num_gases
 
              if (CS_win%gases(i) == "H2O") then
                 ! If H2O needs to be retrieved, take it from the MET atmosphere
@@ -1592,8 +1746,12 @@ contains
                 scn%op%albedo(:) = scn%op%albedo(:) + SV%svsv(SV%idx_albedo(i)) &
                      * ((scn%op%wl(:) - scn%op%wl(center_pixel_hi)) ** (dble(i-1)))
              end do
+          else
+             ! If we don't have albedo in the state vector, we must replace it by the prior
+             ! value here.
+             scn%op%albedo(:) = albedo_apriori
           endif
-
+          
           ! If solar parameters are retrieved, update the solar shift and stretch from the
           ! state vector. Otherwise the values stay at 0/1 respectively.
           if (SV%num_solar_shift == 1) this_solar_shift = SV%svsv(SV%idx_solar_shift(1))
@@ -1620,7 +1778,7 @@ contains
           end if
        endif
 
-       if (num_gases > 0) then
+       if (CS_win%num_gases > 0) then
           ! Calculate mid-layer pressures
           call calculate_layer_pressure(scn)
           ! Calculate the scene gravity and altitude for levels
@@ -1653,14 +1811,14 @@ contains
        ! and their VMRs. This branch of the code will only be entered if we have at least
        ! one gas present. Otherwise, gas_tau will stay unallocated.
 
-       if ((num_gases > 0) .and. (CS%algorithm%observation_mode == "downlooking")) then
+       if ((CS_win%num_gases > 0) .and. (CS%algorithm%observation_mode == "downlooking")) then
 
 
           call logger%debug(fname, "Gases present in atmosphere - starting gas calculations.")
           call cpu_time(cpu_gas_start)
 
-          allocate(this_vmr_profile(num_levels, num_gases))
-          allocate(prior_vmr_profile(num_levels, num_gases))
+          allocate(this_vmr_profile(num_levels, CS_win%num_gases))
+          allocate(prior_vmr_profile(num_levels, CS_win%num_gases))
 
           this_vmr_profile(:,:) = 0.0d0
           prior_vmr_profile(:,:) = 0.0d0
@@ -1729,7 +1887,7 @@ contains
              return
           end if
 
-          do j=1, num_gases
+          do j=1, CS_win%num_gases
              ! Main gas loop. This loops over all present gases in the
              ! microwindow, and depending on whether we want to retrieve
              ! this gas or not, the code determines the partial column
@@ -1894,7 +2052,7 @@ contains
                 stop 1
              end if
 
-             ! This section can be outsourced as:
+             ! Take the scene aerosols, and insert them into the scene.
              call insert_aerosols_in_scene(SV, CS_win, CS%aerosol, scn, scene_aerosols)
 
           end if
@@ -2008,8 +2166,13 @@ contains
        select case (RT_model)
        case (RT_BEER_LAMBERT)
 
-          call calculate_BL_radiance(scn, &
-               radiance_calc_work_hi_stokes(:, 1))
+
+          if (CS%algorithm%observation_mode == "downlooking") then
+             call calculate_BL_radiance(scn, &
+                  radiance_calc_work_hi_stokes(:, 1))
+          else if (CS%algorithm%observation_mode == "space_solar") then
+             radiance_calc_work_hi_stokes(:, 1) = 1.0d0
+          end if
 
        case (RT_XRTM)
 
@@ -2062,6 +2225,29 @@ contains
 
        end if
 
+       ! If solar irradiance scaling is retrieved, apply it here.
+       if (SV%num_solar_irrad_scale > 0) then
+
+          if (allocated(solar_unscaled)) deallocate(solar_unscaled)
+
+          allocate(solar_unscaled, mold=solar_irrad)
+          allocate(solar_tmp(N_hires))
+
+          solar_tmp(:) = 0.0d0
+
+          do i = 1, SV%num_solar_irrad_scale
+             solar_tmp(:) = solar_tmp(:) + &
+                  this_solar(:,2) * SV%svsv(SV%idx_solar_irrad_scale(i)) &
+                  * ((scn%op%wl(:) - scn%op%wl(center_pixel_hi)) ** (dble(i-1)))
+          end do
+
+          solar_unscaled(:) = this_solar(:,2)
+          this_solar(:,2) = solar_tmp(:)
+          
+          deallocate(solar_tmp)
+       end if
+
+
        ! If we retrieve either solar shift or stretch (or both), then we
        ! need to know the partial derivative of the solar spectrum w.r.t.
        ! wavelength: dsolar_dlambda
@@ -2080,6 +2266,7 @@ contains
        ! Multiply with the solar spectrum for physical units and add SIF and ZLO contributions.
        ! For various Jacobian calculations we also need the radiance MINUS the additive
        ! contributions, so we store them in a separate array.
+
        do q=1, n_stokes
           radiance_tmp_hi_nosif_nozlo(:,q) = this_solar(:,2) * radiance_calc_work_hi_stokes(:,q)
           if (q == 1) then
@@ -2189,6 +2376,7 @@ contains
        if (SV%num_aerosol_height > 0) then
           select case (RT_model)
           case (RT_XRTM)
+
              do i=1, SV%num_aerosol_height
                 do q=1, n_stokes
                    K_hi_stokes(:, SV%idx_aerosol_height(i), q) = this_solar(:,2) * dI_dAHeight(:,i,q)
@@ -2207,6 +2395,7 @@ contains
           select case (RT_model)
           case (RT_BEER_LAMBERT)
              do i=1, SV%num_albedo
+
                 call calculate_BL_albedo_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
                      scn, center_pixel_hi, i, K_hi_stokes(:, SV%idx_albedo(i), 1))
              end do
@@ -2214,7 +2403,6 @@ contains
              do i=1, SV%num_albedo
                 do q=1, n_stokes
                    K_hi_stokes(:, SV%idx_albedo(i), q) = this_solar(:,2) * dI_dsurf(:,i,q)
-                   !     * (scn%op%wl(:) - scn%op%wl(center_pixel_hi))**(dble(i-1))
                 end do
              end do
           case default
@@ -2223,6 +2411,24 @@ contains
              stop 1
           end select
        end if
+
+       ! Solar irradiance scaling Jacobians
+       if (SV%num_solar_irrad_scale > 0) then
+          select case (RT_model)
+          case (RT_BEER_LAMBERT)
+
+             do i=1, SV%num_solar_irrad_scale
+                call calculate_BL_solar_irrad_scale_jacobian(&
+                     solar_unscaled(:) * radiance_calc_work_hi_stokes(:,1) / this_solar(:,2), &
+                     scn, center_pixel_hi, i, &
+                     K_hi_stokes(:, SV%idx_solar_irrad_scale(i), 1))
+             end do
+          case default
+               call logger%error(fname, "Solar irradiance scaling Jacobian not implemented " &
+                  // "for RT Model: " // CS_win%RT_model%chars())
+               stop 1
+            end select
+         end if
 
 
        ! -------------------------------------------------------------
@@ -2570,7 +2776,7 @@ contains
              ! Allocate array for pressure weights
              allocate(pwgts(num_active_levels))
 
-             do j=1, num_gases
+             do j=1, CS_win%num_gases
 
                 ! Skip this gas is not retrieved
                 if (.not. CS_win%gas_retrieved(j)) cycle
@@ -2859,7 +3065,7 @@ contains
           close(funit)
           call logger%debug(fname, "Written file: hires_spectra.dat (wl, radiance, stokes, solar)")
 
-          if (num_gases > 0) then
+          if (CS_win%num_gases > 0) then
              open(file="total_tau.dat", newunit=funit)
              do i=1, N_hires
                 write(funit, *) scn%op%total_tau(i)
@@ -2886,7 +3092,7 @@ contains
           call logger%debug(fname, trim(tmp_str))
 
           do i=1, N_sv
-             write(tmp_str, '(I3.1,A25,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+             write(tmp_str, '(I3.1,A30,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
                   i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
                   SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i)), AK(i,i)
              call logger%debug(fname, trim(tmp_str))
@@ -2939,6 +3145,7 @@ contains
           call destroy_aerosol(scn)
        end if
 
+       ! Deallocate the arrays that are used again in the next iteration
        if (allocated(this_vmr_profile)) deallocate(this_vmr_profile)
        if (allocated(prior_vmr_profile)) deallocate(prior_vmr_profile)
 
@@ -2969,14 +3176,13 @@ contains
   !> @param i_win Window index for MCS
   !> @param Sa Prior covariance matrix
   !> @param Sa_inv Inverse of prior covariance matrix
-  subroutine populate_prior_covariance(SV, CS_win, continuum, i_win, Sa, Sa_inv)
+  subroutine populate_prior_covariance(SV, CS_win, continuum, Sa, Sa_inv)
 
     implicit none
 
     type(statevector), intent(in) :: SV
     type(CS_window_t), intent(in) :: CS_win
     double precision, intent(in) :: continuum
-    integer, intent(in) :: i_win
     double precision, intent(inout) :: Sa(:,:)
     double precision, intent(inout) :: Sa_inv(:,:)
 
@@ -2992,6 +3198,16 @@ contains
              Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(i))
           else
              Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(1)) ** dble(i)
+          end if
+       end do
+    end if
+
+    if (SV%num_solar_irrad_scale > 0) then
+       do i=1, SV%num_solar_irrad_scale
+          if (i==1) then
+             Sa(SV%idx_solar_irrad_scale(i), SV%idx_solar_irrad_scale(i)) = 0.1d0
+          else
+             Sa(SV%idx_solar_irrad_scale(i), SV%idx_solar_irrad_scale(i)) = 0.1d0
           end if
        end do
     end if

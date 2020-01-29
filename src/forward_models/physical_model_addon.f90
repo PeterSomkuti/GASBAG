@@ -886,6 +886,13 @@ contains
           end if
        end do
 
+       do j=1, SV%num_solar_irrad_scale
+          if (SV%idx_solar_irrad_scale(j) == i) then
+             write(tmp_str, '(A,G0.1)') "solar_irrad_scale_order_", j-1
+             results%sv_names(i) = trim(tmp_str)
+          end if
+       end do
+
        ! SIF name (really only one at this point)
        do j=1, SV%num_sif
           if (SV%idx_sif(j) == i) then

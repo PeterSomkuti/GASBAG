@@ -207,6 +207,8 @@ contains
        valid_options(this_idx,42) = "gasbag_result_file_for_prior"
        ! Which data do we replace as priors?
        valid_options(this_idx,43) = "gasbag_priors"
+       ! Solar irradiance scaling
+       valid_options(this_idx,44) = "solar_irrad_scale_order"
 
     end do
 

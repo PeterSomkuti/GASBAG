@@ -958,10 +958,29 @@ contains
   end subroutine initialize_statevector
 
 
-  subroutine replace_statevector_by_GASBAG(CS_win, CS_general, i_fp, i_fr, SV)
+  !> @brief Replace statevector prior with former GASBAG run
+  !> @param first_call Is this the first call?
+  !> @param CS_win Control window object
+  !> @param CS_general Control general object
+  !> @param i_fp Footprint index
+  !> @param i_fr Frame index
+  !> @param SV Statevector
+  !>
+  !> @details
+  !> This subroutine can slot-in former GASBAG results as a prior value for
+  !> this current run. It treats every state vector (SV) element explicitly, and
+  !> has a section for each supported SV element type. On the very first call
+  !> it checks whether the former result file actually has the requested value
+  !> in the requested window. On every other call, this check is not performed,
+  !> and the value is straight-out read from the former result file.
+  !> The code will still throw an error if reading that value is not successful.
+  !>
+  !>
+  subroutine replace_statevector_by_GASBAG(first_call, CS_win, CS_general, i_fp, i_fr, SV)
 
     implicit none
 
+    logical, intent(in) :: first_call
     type(CS_window_t), intent(in) :: CS_win
     type(CS_general_t), intent(in) :: CS_general
     integer, intent(in) :: i_fp
@@ -1005,47 +1024,56 @@ contains
        if (prior_str(2)%lower() == "dispersion") then
           call logger%debug(fname, "Replacing dispersion prior!")
 
-          ! Find out, what order dispersion we have in the result file
-          tmp_chr = "/RetrievalResults/physical/" // trim(prior_str(1)%chars())
-!$OMP CRITICAL
-          call h5lexists_f(CS_win%GASBAG_prior_id, trim(tmp_chr), groupexists, hdferr)
-!$OMP END CRITICAL
-          if (.not. groupexists) then
-             call logger%fatal(fname, trim(tmp_chr) // " does not exist!")
-             stop 1
-          end if
 
-          ! Obtain the total number of HDF variables in this group
-!$OMP CRITICAL
-          call h5gn_members_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_n_vars, hdferr)
-!$OMP END CRITICAL
+          ! We only check the consistency between GASBAG prior file and the current
+          ! retrieval set-up once (during the first call).
 
-          n_order = 0
-          ! Loop through all group variables, and determine how many dispersion
-          ! entries with have.
-          do hdf_idx = 0, hdf_n_vars - 1
+          if (first_call) then
+             ! Find out, what order dispersion we have in the result file. This section should
+             ! only be required once per thread.
+             tmp_chr = "/RetrievalResults/physical/" // trim(prior_str(1)%chars())
 !$OMP CRITICAL
-             call h5gget_obj_info_idx_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_idx, &
-                  hdfvarname, hdftype, hdferr)
+             call h5lexists_f(CS_win%GASBAG_prior_id, trim(tmp_chr), groupexists, hdferr)
 !$OMP END CRITICAL
-             tmp_str = trim(hdfvarname)
-
-             if (tmp_str%count(substring="dispersion_order") == 1) then
-                n_order = n_order + 1
+             if (.not. groupexists) then
+                call logger%fatal(fname, trim(tmp_chr) // " does not exist!")
+                call logger%fatal(fname, "You requested a GASBAG window that isn't there.")
+                stop 1
              end if
-          end do
 
-          ! Final value has to be divided by 3 (prior, result, uncertainty) to get the
-          ! total order of dispersion polynomial used in the prior file.
-          n_order = n_order / 3
+             ! Obtain the total number of HDF variables in this group
+!$OMP CRITICAL
+             call h5gn_members_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_n_vars, hdferr)
 
-          ! Make sure that we have the same order in our current statevector
-          if (n_order /= SV%num_dispersion) then
-             call logger%fatal(fname, "Prior file SV dispersion order does not match current setup.")
-             stop 1
+             n_order = 0
+             ! Loop through all group variables, and determine how many dispersion
+             ! entries with have.
+
+             do hdf_idx = 0, hdf_n_vars - 1
+                call h5gget_obj_info_idx_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_idx, &
+                     hdfvarname, hdftype, hdferr)
+                tmp_str = trim(hdfvarname)
+
+                if (tmp_str%count(substring="dispersion_order") == 1) then
+                   n_order = n_order + 1
+                end if
+             end do
+
+
+             ! Final value has to be divided by 3 (prior, result, uncertainty) to get the
+             ! total order of dispersion polynomial used in the prior file.
+             n_order = n_order / 3
+
+             ! Make sure that we have the same order in our current statevector
+             if (n_order /= SV%num_dispersion) then
+                call logger%fatal(fname, "Prior file SV dispersion order does not match current setup.")
+                stop 1
+             end if
+!$OMP END CRITICAL
           end if
 
-          do j = 0, n_order - 1
+!$OMP CRITICAL
+          do j = 0, CS_win%dispersion_order
              write(tmp_chr, '(A, A, A, G0.1, A, A)') &
                   "/RetrievalResults/physical/" , trim(prior_str(1)%chars()), &
                   "/dispersion_order_", j, "_", CS_general%code_name
@@ -1054,8 +1082,9 @@ contains
              SV%svap(SV%idx_dispersion(j + 1)) = &
                   read_one_arbitrary_value_dp(CS_win%GASBAG_prior_id, trim(tmp_chr), i_fp, i_fr)
           end do
-
+!$OMP END CRITICAL
        else
+
           call logger%fatal(fname, "Prior replacement for SV variable " // prior_str(2) &
                // " is not implemented!")
           stop 1

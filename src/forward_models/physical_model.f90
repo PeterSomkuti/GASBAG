@@ -21,8 +21,6 @@ module physical_model_mod
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, write_DP_hdf_dataset, &
        read_DP_hdf_dataset, write_INT_hdf_dataset
   use control_mod, only: CS_t
-  !only: CS_t, MAX_WINDOWS, MAX_GASES, MAX_AEROSOLS, &
-  !     MCS_find_gases, MCS_find_aerosols, MCS_find_gas_priors
   use instruments_mod, only: generic_instrument
   use oco2_mod
   use solar_model_mod
@@ -239,6 +237,8 @@ contains
     integer :: num_frames, num_fp, num_pixel, num_band
     ! Loop variables
     integer :: i, j, i_fp, i_fr, i_win, band
+    ! First call (in this thread)
+    logical :: first_call
     ! Thread number for openMP
     integer :: this_thread
     ! Retrieval count
@@ -275,10 +275,6 @@ contains
     num_fp = CS%general%N_fp
     ! Grab number of bands
     num_band = CS%general%N_bands
-
-
-    ! test
-
 
     !---------------------------------------------------------------------
     ! INSTRUMENT-DEPENDENT SET UP OF L1B AND MET DATA
@@ -688,8 +684,12 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       frame_start = 685
-       frame_stop = 800
+       !frame_start = 685
+       !frame_stop = 800
+
+       ! This will be a variable in private scope within OpenMP, so every thread
+       ! will see their own version of it, and thus have their own "first call".
+       first_call = .true.
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -700,7 +700,7 @@ contains
        ! those threads can be assigned new soundings with dynamic scheduling.
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration, CS) SCHEDULE(guided) &
-       !$OMP PRIVATE(i_fp, i_fr, &
+       !$OMP PRIVATE(i_fp, i_fr, first_call, &
        !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
 
@@ -724,6 +724,7 @@ contains
              ! Do the retrieval for this particular sounding -----------------------
              this_converged = physical_FM( &
                   my_instrument, &
+                  first_call, &
                   i_fp, &
                   i_fr, &
                   band, &
@@ -732,6 +733,9 @@ contains
                   this_iterations &
                   )
              ! ---------------------------------------------------------------------
+
+             ! After the first call, set this to false. 
+             if (.not. first_call) first_call = .false.
 
 #ifdef _OPENMP
              cpu_time_stop = omp_get_wtime()
@@ -840,6 +844,7 @@ contains
 
   !> @brief Physical-type forward model / retrieval
   !> @param my_instrument Instrument instance
+  !> @param first_call Is this the first call to this subroutine?
   !> @param i_fp Footprint index
   !> @param i_fr Frame index
   !> @param i_win Window index for CS
@@ -853,12 +858,14 @@ contains
   !> it converged or not. It accesses all the L1B/MET arrays defined in the module
   !> for fast readout and processing. The OE scheme is based on Rodgers (2000),
   !> and so far we are doing the LM-modification to the Gauss-Newton scheme.
-  function physical_FM(my_instrument, i_fp, i_fr, band, i_win, &
+  function physical_FM(my_instrument, first_call, &
+       i_fp, i_fr, band, i_win, &
        CS, this_iterations) result(converged)
 
     implicit none
 
     class(generic_instrument), intent(in) :: my_instrument
+    logical, intent(in) :: first_call
     integer, intent(in) :: i_fr
     integer, intent(in) :: i_fp
     integer, intent(in) :: band
@@ -868,6 +875,7 @@ contains
     logical :: converged
 
 
+    ! CS window object
     type(CS_window_t) :: CS_win
     ! HDF file id handlers for L1B and output file
     integer(hid_t) :: l1b_file_id, output_file_id
@@ -1546,7 +1554,7 @@ contains
     ! -----------------------------------------------------------------
 
     if (CS_win%GASBAG_prior_file /= "") then
-       call replace_statevector_by_GASBAG(CS_win, CS%general, i_fp, i_fr, SV)
+       call replace_statevector_by_GASBAG(first_call, CS_win, CS%general, i_fp, i_fr, SV)
     end if
 
     ! -----------------------------------------------------------------
@@ -1567,7 +1575,7 @@ contains
     ! -----------------------------------------------------------------
     !
     !
-    !      Retrival iteration loop
+    !      Retrival inversion iteration loop
     !
     !
     ! -----------------------------------------------------------------
@@ -1676,6 +1684,17 @@ contains
              end if
           end do
 
+       if (num_levels < 0) then
+          call logger%error(fname, "Error in calculating the total number of atmospheric levels.")
+          return
+       end if
+
+       if (num_active_levels < 0) then
+          call logger%error(fname, "Error in calculating the active number of atmospheric levels.")
+          return
+       end if
+
+
        else
 
           ! If we don't do gases, just set this variable to zero, mainly to avoid
@@ -1686,15 +1705,6 @@ contains
        end if
 
 
-       if (num_levels < 0) then
-          call logger%error(fname, "Error in calculating the total number of atmospheric levels.")
-          return
-       end if
-
-       if (num_active_levels < 0) then
-          call logger%error(fname, "Error in calculating the active number of atmospheric levels.")
-          return
-       end if
 
 
        if (iteration == 1) then
@@ -1822,6 +1832,9 @@ contains
           call logger%debug(fname, "Gases present in atmosphere - starting gas calculations.")
           call cpu_time(cpu_gas_start)
 
+          ! For the gas calculations, we need to use a "current" VMR profile for
+          ! a specific gas. The prior VMR profiles are needed later for the scaling
+          ! AKs.
           allocate(this_vmr_profile(num_levels, CS_win%num_gases))
           allocate(prior_vmr_profile(num_levels, CS_win%num_gases))
 
@@ -1850,10 +1863,10 @@ contains
 
              ! For dI/dtau and dI/domega, we need one element for
              ! a) Every retrieved gas subcolumn
-             ! b) Temperature jacobian
+             ! b) One temperature jacobian
              ! c) Every retrieved albedo parameter
-             ! d) Aerosol AOD
-             ! e) Aerosol height
+             ! d) Every retrieved aerosol OD
+             ! e) Every retrieved aerosol height
 
              if (SV%num_gas > 0) then
                 allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))

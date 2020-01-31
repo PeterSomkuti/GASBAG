@@ -59,8 +59,8 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # have to turn those warnings off.
   #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
   set(warnings "-Wall -Wextra -Wpedantic")
-  set(opt "-O3 -mtune=native -march=native -ftree-vectorize")
-  set(debug "-O0 -g -fcheck=all -fbacktrace -fno-omit-frame-pointer")
+  set(opt "-O3 -mfpmath=sse -mtune=native -march=native -fopt-info-missed=missed.all")
+  set(debug "-O0 -g3 -fcheck=all -fbacktrace -fno-omit-frame-pointer")
   set(profile "-Og -pg -fbacktrace -fprofile-generate --coverage")
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
@@ -82,7 +82,7 @@ set(CMAKE_Fortran_FLAGS_DEBUG "${debug} ${warnings}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "${profile}")
 
-set(CMAKE_CXX_FLAGS "-O3 -mtune=native -march=native -ftree-vectorize")
+set(CMAKE_CXX_FLAGS "-O3 -mtune=native -march=native -fopt-info-missed=missed.all")
 #set(CMAKE_CXX_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile

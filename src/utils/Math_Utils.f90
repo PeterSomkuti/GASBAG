@@ -376,15 +376,15 @@ contains
             wl_kernels_absolute(N_ils_pix, idx_pix), &
             user_L=idx_hires_ILS_min)
 
-       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
-          call logger%error(fname, "idx_hires_ILS_min out of bounds.")
-          return
-       end if
+       !if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
+       !   call logger%error(fname, "idx_hires_ILS_min out of bounds.")
+       !   return
+       !end if
 
-       if ((idx_hires_ILS_max < 1) .or. (idx_hires_ILS_max > size(wl_input))) then
-          call logger%error(fname, "idx_hires_ILS_max out of bounds.")
-          return
-       end if
+       !if ((idx_hires_ILS_max < 1) .or. (idx_hires_ILS_max > size(wl_input))) then
+       !   call logger%error(fname, "idx_hires_ILS_max out of bounds.")
+       !   return
+       !end if
 
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min + 1
 
@@ -427,7 +427,7 @@ contains
     integer :: n, info
 
     ! Store A in Ainv to prevent it from being overwritten by LAPACK
-    mat_out(:,:) = mat_in(:,:)
+    mat_out = mat_in
     n = size(mat_in,1)
 
     ! DGETRF computes an LU factorization of a general M-by-N matrix A

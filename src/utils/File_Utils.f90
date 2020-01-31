@@ -890,6 +890,12 @@ contains
 
   end subroutine read_mie_file
 
+  !> @brief Takes a single double precision value from an HDF file/variable
+  !> @param file_id HDF5 file ID
+  !> @param dset_name Dataset name
+  !> @param i_fp Footprint index
+  !> @param i_fr Frame index
+  !> @param value Return value
   function read_one_arbitrary_value_dp(file_id, dset_name, i_fp, i_fr) result(value)
 
     implicit none
@@ -920,7 +926,6 @@ contains
     dim_mem(1) = 1
 
 
-!$OMP CRITICAL
     call h5dopen_f(file_id, dset_name, dset_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening dataset at: " // trim(dset_name))
 
@@ -939,7 +944,6 @@ contains
 
     call h5dclose_f(dset_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error closing dataset id for " // trim(dset_name))
-!$OMP END CRITICAL
 
     value = tmp_value(1)
 

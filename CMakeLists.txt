@@ -59,7 +59,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # have to turn those warnings off.
   #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
   set(warnings "-Wall -Wextra -Wpedantic")
-  set(opt "-O3 -mfpmath=sse -mtune=native -march=native -fopt-info-missed=missed.all")
+  set(opt "-O2 -mfpmath=sse -mtune=native -march=native")
   set(debug "-O0 -g3 -fcheck=all -fbacktrace -fno-omit-frame-pointer")
   set(profile "-Og -pg -fbacktrace -fprofile-generate --coverage")
 
@@ -82,7 +82,7 @@ set(CMAKE_Fortran_FLAGS_DEBUG "${debug} ${warnings}")
 set(CMAKE_Fortran_FLAGS_RELEASE "${opt}")
 set(CMAKE_Fortran_FLAGS_PROFILE "${profile}")
 
-set(CMAKE_CXX_FLAGS "-O3 -mtune=native -march=native -fopt-info-missed=missed.all")
+set(CMAKE_CXX_FLAGS "-O2 -ffree-line-length-0")
 #set(CMAKE_CXX_FLAGS_PROFILE "-Og -pg -fbacktrace -fprofile-arcs -ftest-coverage")
 
 # Here are the standard modules we need in order to compile
@@ -112,54 +112,68 @@ file(GLOB_RECURSE generated ${CMAKE_CURRENT_BINARY_DIR}/generated/*.?90)
 
 set(xrtm_sources
   ####
-  third-party/xrtm/src/xrtm_adding.c
-  third-party/xrtm/src/xrtm_adding_a.c
-  third-party/xrtm/src/xrtm_brdf.c
-  third-party/xrtm/src/xrtm_brdf_a.c
-  third-party/xrtm/src/xrtm_doub_rts.c
-  third-party/xrtm/src/xrtm_doubling.c
-  third-party/xrtm/src/xrtm_eig_bvp.c
-  third-party/xrtm/src/xrtm_eig_bvp_a.c
-  third-party/xrtm/src/xrtm_eig_rts.c
-  third-party/xrtm/src/xrtm_eig_rts_a.c
-  third-party/xrtm/src/xrtm_eig_util.c
-  third-party/xrtm/src/xrtm_eig_util_a.c
-  third-party/xrtm/src/xrtm_fd.c
-  third-party/xrtm/src/xrtm_interface.c
-  third-party/xrtm/src/xrtm_matrix.c
-  third-party/xrtm/src/xrtm_mem_bvp.c
-  third-party/xrtm/src/xrtm_model.c
-  third-party/xrtm/src/xrtm_model_a.c
-  third-party/xrtm/src/xrtm_pade_rts.c
-  third-party/xrtm/src/xrtm_radiance.c
-  third-party/xrtm/src/xrtm_radiance_a.c
-  third-party/xrtm/src/xrtm_save_tree.c
-  third-party/xrtm/src/xrtm_scatter.c
-  third-party/xrtm/src/xrtm_scatter_a.c
-  third-party/xrtm/src/xrtm_single.c
-  third-party/xrtm/src/xrtm_single_a.c
-  third-party/xrtm/src/xrtm_sos.c
-  third-party/xrtm/src/xrtm_source.c
-  third-party/xrtm/src/xrtm_source_a.c
-  third-party/xrtm/src/xrtm_stacks.c
-  third-party/xrtm/src/xrtm_support.c
-  third-party/xrtm/src/xrtm_two_os.c
-  third-party/xrtm/src/xrtm_utility.c
-  third-party/xrtm/src/xrtm_utility_a.c
-  third-party/xrtm/src/xrtm_work.c
-  third-party/xrtm/src/xrtm_external.c
+third-party/xrtm/src/version.c
+third-party/xrtm/src/xrtm_adding_a.c
+third-party/xrtm/src/xrtm_adding.c
+third-party/xrtm/src/xrtm_brdf_a.c
+third-party/xrtm/src/xrtm_brdf.c
+third-party/xrtm/src/xrtm_derivs.c
+third-party/xrtm/src/xrtm_doubling.c
+third-party/xrtm/src/xrtm_doub_rts.c
+third-party/xrtm/src/xrtm_eig_bvp_a.c
+third-party/xrtm/src/xrtm_eig_bvp.c
+third-party/xrtm/src/xrtm_eig_rts_a.c
+third-party/xrtm/src/xrtm_eig_rts.c
+third-party/xrtm/src/xrtm_eig_util_a.c
+third-party/xrtm/src/xrtm_eig_util.c
+third-party/xrtm/src/xrtm_external.c
+third-party/xrtm/src/xrtm_four_stream.c
+third-party/xrtm/src/xrtm_interface.c
+third-party/xrtm/src/xrtm_matrix.c
+third-party/xrtm/src/xrtm_mem_bvp.c
+third-party/xrtm/src/xrtm_model_a.c
+third-party/xrtm/src/xrtm_model.c
+third-party/xrtm/src/xrtm_pade_rts.c
+third-party/xrtm/src/xrtm_radiance_a.c
+third-party/xrtm/src/xrtm_radiance.c
+third-party/xrtm/src/xrtm_save_tree.c
+third-party/xrtm/src/xrtm_scatter_a.c
+third-party/xrtm/src/xrtm_scatter.c
+third-party/xrtm/src/xrtm_sfi.c
+third-party/xrtm/src/xrtm_single_a.c
+third-party/xrtm/src/xrtm_single.c
+third-party/xrtm/src/xrtm_six_stream.c
+third-party/xrtm/src/xrtm_sos.c
+third-party/xrtm/src/xrtm_source_a.c
+third-party/xrtm/src/xrtm_source.c
+third-party/xrtm/src/xrtm_stacks.c
+third-party/xrtm/src/xrtm_support.c
+third-party/xrtm/src/xrtm_two_os.c
+third-party/xrtm/src/xrtm_two_stream.c
+third-party/xrtm/src/xrtm_utility_a.c
+third-party/xrtm/src/xrtm_utility.c
+third-party/xrtm/src/xrtm_work.c
   ####
-  third-party/xrtm/misc/gmath_matrix.c
-  third-party/xrtm/misc/gmath_vector.c
-  third-party/xrtm/misc/gstruct.c
-  third-party/xrtm/misc/gutil_alloc.c
-  third-party/xrtm/misc/gutil_error.c
-  third-party/xrtm/misc/gutil_parse.c
-  third-party/xrtm/misc/rtutil_math.c
-  third-party/xrtm/misc/rtutil_scat_io.c
-  third-party/xrtm/misc/rtutil_support.c
+third-party/xrtm/misc/gindex_name_value.c
+third-party/xrtm/misc/glist.c
+third-party/xrtm/misc/gmath_mat2d3d.c
+third-party/xrtm/misc/gmath_matrix.c
+third-party/xrtm/misc/gmath_vector.c
+third-party/xrtm/misc/gstruct.c
+third-party/xrtm/misc/gutil_alloc.c
+third-party/xrtm/misc/gutil_cmp.c
+third-party/xrtm/misc/gutil_error.c
+third-party/xrtm/misc/gutil_parse.c
+third-party/xrtm/misc/gutil_sort.c
+third-party/xrtm/misc/gutil_string.c
+third-party/xrtm/misc/rtutil_math.c
+third-party/xrtm/misc/rtutil_scat_fft.c
+third-party/xrtm/misc/rtutil_scat_io.c
+third-party/xrtm/misc/rtutil_size_dist.c
+third-party/xrtm/misc/rtutil_support.c
+third-party/xrtm/misc/zeroin.c
   ####
-  third-party/xrtm/interfaces/xrtm_int_f90_util.c
+third-party/xrtm/interfaces/xrtm_int_f90_util.c
           )
 
 
@@ -176,7 +190,7 @@ set_source_files_properties(
 set_source_files_properties(
   ${xrtm_sources}
   PROPERTIES
-  COMPILE_FLAGS "-Ofast -mtune=native -march=native -ftree-vectorize"
+  COMPILE_FLAGS "-O2 -fno-strict-aliasing"
   COMPILE_FLAGS_DEBUG ""
   )
 

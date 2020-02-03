@@ -64,6 +64,8 @@ contains
     ! by default. Also, only return upwelling radiances.
     xrtm_options = ior(XRTM_OPTION_CALC_DERIVS, XRTM_OPTION_PSA)
     xrtm_options = ior(xrtm_options, XRTM_OPTION_UPWELLING_OUTPUT)
+    xrtm_options = ior(xrtm_options, XRTM_OPTION_OUTPUT_AT_LEVELS)
+    xrtm_options = ior(xrtm_options, XRTM_OPTION_SOURCE_SOLAR)
 
     ! Surface kernels
     xrtm_kernels(1) = XRTM_KERNEL_LAMBERTIAN
@@ -85,6 +87,12 @@ contains
              xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_SINGLE)
              num_solvers = num_solvers + 1
              call logger%debug(fname, "Using XRTM in single-scattering mode")
+          else if (tmp_str == "TWO_STREAM") then
+             ! Dedicated 2-Stream solver
+             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_TWO_STREAM)
+             xrtm_options = ior(xrtm_options, XRTM_OPTION_SFI)
+             num_solvers = num_solvers + 1
+             call logger%debug(fname, "Using XRTM in two-stream mode")
           else if (tmp_str == "EIG_BVP") then
              ! Quadrature (LIDORT-like)
              call logger%debug(fname, "Using XRTM in discrete-ordinate mode")
@@ -148,8 +156,8 @@ contains
 
 
   subroutine create_XRTM(xrtm, xrtm_options, xrtm_solvers, &
-       max_coef, n_quad, n_stokes, n_derivs, n_layers, n_kernels, &
-       n_kernel_quad, xrtm_kernels, success)
+       max_coef, n_quad, n_stokes, n_derivs, n_layers, &
+       n_kernels, n_kernel_quad, xrtm_kernels, success)
     implicit none
 
     type(xrtm_type), intent(inout) :: xrtm
@@ -170,7 +178,8 @@ contains
 
     success = .false.
 
-    call xrtm_create_f90(xrtm, &  ! XRTM object
+    call xrtm_create_f90( &
+         xrtm, &  ! XRTM object
          xrtm_options, & ! XRTM option bitmask
          xrtm_solvers, & ! XRTM solver bitmask
          max_coef, & ! Number of phase matrix Legendre coefficients
@@ -178,6 +187,7 @@ contains
          n_stokes, & ! Number of stokes coefficients
          n_derivs, & ! Number of derivatives to calculate
          n_layers, & ! Number of layers in model atmosphere
+         1, & ! Number of solar zeniths
          n_kernels, & ! Number of surface kernels (needs to match up with xrtm_kernels)
          n_kernel_quad, & ! Number of surface kernel quadratures to use
          xrtm_kernels, & ! Which surface kernels to use
@@ -741,7 +751,7 @@ contains
          coef_left=coef_left, & ! per-wl phasefunction coefficients
          lcoef_left=lcoef_left, & ! per-wl phasefunction derivatives
          coef_right=coef_right, & ! per-wl phasefunction coefficients
-         lcoef_right=lcoef_right)! per-wl phasefunction derivatives
+         lcoef_right=lcoef_right) ! per-wl phasefunction derivatives
 
 
     if (.not. xrtm_success) then
@@ -936,6 +946,20 @@ contains
     call xrtm_set_fourier_tol_f90(xrtm, .0001d0, xrtm_error)
     if (xrtm_error /= 0) then
        call logger%error(fname, "Error calling xrtm_set_fourier_tol_f90")
+       return
+    endif
+
+    ! I don't know what these are?
+    ! Isotropic surface signal?
+    call xrtm_set_F_iso_top_f90(xrtm, 0.0d0, xrtm_error)
+     if (xrtm_error /= 0) then
+       call logger%error(fname, "Error calling xrtm_set_F_iso_top_f90(")
+       return
+    endif
+
+    call xrtm_set_F_iso_bot_f90(xrtm, 0.0d0, xrtm_error)
+     if (xrtm_error /= 0) then
+       call logger%error(fname, "Error calling xrtm_set_F_iso_bot_f90(")
        return
     endif
 
@@ -1179,6 +1203,7 @@ contains
        do l=1, size(xrtm_separate_solvers)
 
           call cpu_time(cpu_start2)
+
           ! Calculate TOA radiance!
           call xrtm_radiance_f90(xrtm, & ! XRTM object
                xrtm_separate_solvers(l), & ! XRTM solver bitmask

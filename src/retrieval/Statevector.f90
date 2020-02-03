@@ -985,6 +985,10 @@ contains
   !> @param CS_general Control general object
   !> @param SV Statevector
   !> @param former_results Former results container
+  !>
+  !> @details
+  !> From the configuration directive, we are reading in the entire
+  !> array
   subroutine preload_former_results(CS_win, CS_general, SV, former_results)
 
     implicit none
@@ -1139,15 +1143,8 @@ contains
   !> @param SV Statevector
   !>
   !> @details
-  !> This subroutine can slot-in former GASBAG results as a prior value for
-  !> this current run. It treats every state vector (SV) element explicitly, and
-  !> has a section for each supported SV element type. On the very first call
-  !> it checks whether the former result file actually has the requested value
-  !> in the requested window. On every other call, this check is not performed,
-  !> and the value is straight-out read from the former result file.
-  !> The code will still throw an error if reading that value is not successful.
-  !>
-  !>
+  !> This subroutine slots in the SV priors from the "former_results"
+  !> container that was read-in earlier.
   subroutine replace_statevector_with_former(former_results, i_fp, i_fr, SV)
 
     implicit none

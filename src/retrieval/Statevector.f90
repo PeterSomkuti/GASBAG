@@ -2,7 +2,8 @@ module statevector_mod
 
   ! User modules
   use control_mod, only: CS_window_t, CS_gas_t, CS_aerosol_t, CS_general_t, MAX_GASES
-  use file_utils_mod, only: check_hdf_error, get_HDF5_dset_dims, read_one_arbitrary_value_dp
+  use file_utils_mod, only: check_hdf_error, get_HDF5_dset_dims, read_one_arbitrary_value_dp, &
+       read_DP_hdf_dataset
   ! Third-party modules
   use logger_mod, only: logger => master_logger
   use stringifor, only: string
@@ -66,6 +67,13 @@ module statevector_mod
      double precision, dimension(:), allocatable :: svsv, svap, sver
      double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
   end type statevector
+
+  type former_results_t
+     !> Dispersion results (dispersion order, footprint, frame)
+     double precision, allocatable :: dispersion(:,:,:)
+     !> Do we replace dispersion?
+     logical :: replace_dispersion = .false.
+  end type former_results_t
 
 
   public initialize_statevector, parse_and_initialize_SV, &
@@ -958,37 +966,36 @@ contains
   end subroutine initialize_statevector
 
 
-  !> @brief Replace statevector prior with former GASBAG run
-  !> @param first_call Is this the first call?
-  !> @param CS_win Control window object
-  !> @param CS_general Control general object
-  !> @param i_fp Footprint index
-  !> @param i_fr Frame index
-  !> @param SV Statevector
-  !>
-  !> @details
-  !> This subroutine can slot-in former GASBAG results as a prior value for
-  !> this current run. It treats every state vector (SV) element explicitly, and
-  !> has a section for each supported SV element type. On the very first call
-  !> it checks whether the former result file actually has the requested value
-  !> in the requested window. On every other call, this check is not performed,
-  !> and the value is straight-out read from the former result file.
-  !> The code will still throw an error if reading that value is not successful.
-  !>
-  !>
-  subroutine replace_statevector_by_GASBAG(first_call, CS_win, CS_general, i_fp, i_fr, SV)
+
+  subroutine destroy_former_results(former_results)
 
     implicit none
 
-    logical, intent(in) :: first_call
+    type(former_results_t), intent(inout) :: former_results
+
+    if (allocated(former_results%dispersion)) deallocate(former_results%dispersion)
+    former_results%replace_dispersion = .false.
+
+  end subroutine destroy_former_results
+
+  
+
+  !> @brief Read-in former GASBAG results
+  !> @param CS_win Control window object
+  !> @param CS_general Control general object
+  !> @param SV Statevector
+  !> @param former_results Former results container
+  subroutine preload_former_results(CS_win, CS_general, SV, former_results)
+
+    implicit none
+
     type(CS_window_t), intent(in) :: CS_win
     type(CS_general_t), intent(in) :: CS_general
-    integer, intent(in) :: i_fp
-    integer, intent(in) :: i_fr
-    type(statevector), intent(inout) :: SV
+    type(statevector), intent(in) :: SV
+    type(former_results_t), intent(inout) :: former_results
 
     ! Local variables
-    character(len=*), parameter :: fname = "replace_statevector_by_GASBAG"
+    character(len=*), parameter :: fname = "preload_former_results"
     character(len=999) :: tmp_chr
     type(string) :: tmp_str
     type(string), allocatable :: split_str(:)
@@ -1003,6 +1010,9 @@ contains
     integer :: hdf_idx
     integer :: hdf_n_vars
     integer :: n_order
+    integer(hsize_t), allocatable :: dset_dims(:)
+    double precision, allocatable :: tmp_dp(:,:)
+
 
 
     if (CS_win%GASBAG_priors == "") then
@@ -1024,65 +1034,89 @@ contains
        if (prior_str(2)%lower() == "dispersion") then
           call logger%debug(fname, "Replacing dispersion prior!")
 
+          ! Let the container know that we're replacing dispersion
+          former_results%replace_dispersion = .true.
 
           ! We only check the consistency between GASBAG prior file and the current
           ! retrieval set-up once (during the first call).
 
-          if (first_call) then
-             ! Find out, what order dispersion we have in the result file. This section should
-             ! only be required once per thread.
-             tmp_chr = "/RetrievalResults/physical/" // trim(prior_str(1)%chars())
-!$OMP CRITICAL
-             call h5lexists_f(CS_win%GASBAG_prior_id, trim(tmp_chr), groupexists, hdferr)
-!$OMP END CRITICAL
-             if (.not. groupexists) then
-                call logger%fatal(fname, trim(tmp_chr) // " does not exist!")
-                call logger%fatal(fname, "You requested a GASBAG window that isn't there.")
-                stop 1
-             end if
+          ! Find out, what order dispersion we have in the result file. This section should
+          ! only be required once per thread.
+          tmp_chr = "/RetrievalResults/physical/" // trim(prior_str(1)%chars())
 
-             ! Obtain the total number of HDF variables in this group
-!$OMP CRITICAL
-             call h5gn_members_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_n_vars, hdferr)
+          call h5lexists_f(CS_win%GASBAG_prior_id, trim(tmp_chr), groupexists, hdferr)
 
-             n_order = 0
-             ! Loop through all group variables, and determine how many dispersion
-             ! entries with have.
-
-             do hdf_idx = 0, hdf_n_vars - 1
-                call h5gget_obj_info_idx_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_idx, &
-                     hdfvarname, hdftype, hdferr)
-                tmp_str = trim(hdfvarname)
-
-                if (tmp_str%count(substring="dispersion_order") == 1) then
-                   n_order = n_order + 1
-                end if
-             end do
-
-
-             ! Final value has to be divided by 3 (prior, result, uncertainty) to get the
-             ! total order of dispersion polynomial used in the prior file.
-             n_order = n_order / 3
-
-             ! Make sure that we have the same order in our current statevector
-             if (n_order /= SV%num_dispersion) then
-                call logger%fatal(fname, "Prior file SV dispersion order does not match current setup.")
-                stop 1
-             end if
-!$OMP END CRITICAL
+          if (.not. groupexists) then
+             call logger%fatal(fname, trim(tmp_chr) // " does not exist!")
+             call logger%fatal(fname, "You requested a GASBAG window that isn't there.")
+             stop 1
           end if
 
-!$OMP CRITICAL
+          ! Obtain the total number of HDF variables in this group
+          call h5gn_members_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_n_vars, hdferr)
+
+          n_order = 0
+          ! Loop through all group variables, and determine how many dispersion
+          ! entries with have.
+
+          do hdf_idx = 0, hdf_n_vars - 1
+
+             call h5gget_obj_info_idx_f(CS_win%GASBAG_prior_id, trim(tmp_chr), hdf_idx, &
+                  hdfvarname, hdftype, hdferr)
+
+             tmp_str = trim(hdfvarname)
+
+             if (tmp_str%count(substring="dispersion_order") == 1) then
+                n_order = n_order + 1
+             end if
+          end do
+
+
+          ! Final value has to be divided by 3 (prior, result, uncertainty) to get the
+          ! total order of dispersion polynomial used in the prior file.
+          n_order = n_order / 3
+
+          ! Make sure that we have the same order in our current statevector
+          if (n_order /= SV%num_dispersion) then
+             call logger%fatal(fname, "Prior file SV dispersion order does not match current setup.")
+             stop 1
+          end if
+
+          ! We have all the info now to populate the "former_results" structure
+          allocate(former_results%dispersion(n_order, CS_general%N_fp, CS_general%N_frame))
+          former_results%dispersion(:,:,:) = -9999.99d0
+
           do j = 0, CS_win%dispersion_order
              write(tmp_chr, '(A, A, A, G0.1, A, A)') &
                   "/RetrievalResults/physical/" , trim(prior_str(1)%chars()), &
                   "/dispersion_order_", j, "_", CS_general%code_name
 
-             call logger%debug(fname, "Trying to obtain prior value from: " // trim(tmp_chr))
-             SV%svap(SV%idx_dispersion(j + 1)) = &
-                  read_one_arbitrary_value_dp(CS_win%GASBAG_prior_id, trim(tmp_chr), i_fp, i_fr)
+             ! Make one last check to see if the dimensions of the arrays are the same
+             call get_HDF5_dset_dims(CS_win%GASBAG_prior_id, trim(tmp_chr), dset_dims)
+
+             if (dset_dims(1) /= CS_general%N_fp) then
+                call logger%fatal(fname, "Number of footprints does not agree with GASBAG prior file.")
+                stop 1
+             end if
+
+             if (dset_dims(2) /= CS_general%N_frame) then
+                call logger%fatal(fname, "Number of frames does not agree with GASBAG prior file.")
+                stop 1
+             end if
+
+             deallocate(dset_dims)
+
+             ! Read the data into a tempoorary array, and then put it into the former_results
+             ! container.
+             call read_DP_hdf_dataset(CS_win%GASBAG_prior_id, trim(tmp_chr), tmp_dp, dset_dims)
+
+             former_results%dispersion(j+1,:,:) = tmp_dp(:,:)
+
+             deallocate(tmp_dp)
+             deallocate(dset_dims)
+
           end do
-!$OMP END CRITICAL
+
        else
 
           call logger%fatal(fname, "Prior replacement for SV variable " // prior_str(2) &
@@ -1093,7 +1127,48 @@ contains
        deallocate(prior_str)
     end do
 
-  end subroutine replace_statevector_by_GASBAG
+  end subroutine preload_former_results
+
+
+  !> @brief Replace statevector prior with former GASBAG run
+  !> @param first_call Is this the first call?
+  !> @param CS_win Control window object
+  !> @param CS_general Control general object
+  !> @param i_fp Footprint index
+  !> @param i_fr Frame index
+  !> @param SV Statevector
+  !>
+  !> @details
+  !> This subroutine can slot-in former GASBAG results as a prior value for
+  !> this current run. It treats every state vector (SV) element explicitly, and
+  !> has a section for each supported SV element type. On the very first call
+  !> it checks whether the former result file actually has the requested value
+  !> in the requested window. On every other call, this check is not performed,
+  !> and the value is straight-out read from the former result file.
+  !> The code will still throw an error if reading that value is not successful.
+  !>
+  !>
+  subroutine replace_statevector_with_former(former_results, i_fp, i_fr, SV)
+
+    implicit none
+
+    type(former_results_t), intent(in) :: former_results
+    integer, intent(in) :: i_fp
+    integer, intent(in) :: i_fr
+    type(statevector), intent(inout) :: SV
+
+    ! Local variables
+    character(len=*), parameter :: fname = "replace_statevector_with_former"
+    integer :: i
+
+
+    if (former_results%replace_dispersion) then
+       do i = 1, SV%num_dispersion
+          SV%svap(SV%idx_dispersion(i)) = former_results%dispersion(i, i_fp, i_fr)
+       end do
+    end if
+
+  end subroutine replace_statevector_with_former
 
 
 

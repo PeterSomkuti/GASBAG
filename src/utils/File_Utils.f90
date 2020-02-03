@@ -925,24 +925,32 @@ contains
 
     dim_mem(1) = 1
 
-
+!$OMP CRITICAL
     call h5dopen_f(file_id, dset_name, dset_id, hdferr)
+!$OMP END CRITICAL
     call check_hdf_error(hdferr, fname, "Error opening dataset at: " // trim(dset_name))
-
+!$OMP CRITICAL
     call h5dget_space_f(dset_id, dspace_id, hdferr)
+!$OMP END CRITICAL
     call check_hdf_error(hdferr, fname, "Error getting dataspace id for " // trim(dset_name))
 
+!$OMP CRITICAL
     call h5sselect_hyperslab_f(dspace_id, H5S_SELECT_SET_F, hs_offset, hs_count, hdferr)
+!$OMP END CRITICAL
     call check_hdf_error(hdferr, fname, "Error performing hyperslab selection.")
 
+!$OMP CRITICAL
     call h5screate_simple_f(1, dim_mem, memspace_id, hdferr)
+!$OMP END CRITICAL
     call check_hdf_error(hdferr, fname, "Error creating simple memory space.")
-
+!$OMP CRITICAL
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, tmp_value, dim_mem, &
          hdferr, memspace_id, dspace_id)
+!$OMP END CRITICAL
     call check_hdf_error(hdferr, fname, "Error reading data from " // trim(dset_name))
-
+!$OMP CRITICAL
     call h5dclose_f(dset_id, hdferr)
+!$OMP END CRITICAL
     call check_hdf_error(hdferr, fname, "Error closing dataset id for " // trim(dset_name))
 
     value = tmp_value(1)

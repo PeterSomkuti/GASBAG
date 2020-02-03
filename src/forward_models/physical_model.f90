@@ -63,6 +63,8 @@ module physical_model_mod
   double precision, allocatable :: hires_grid(:)
   !> Number of gridpoints on the high resolution grid
   integer :: N_hires
+  !> Results from previous GASBAG runs, if needed
+  type(former_results_t) :: former_results
   !> Dispersion/wavelength array (detector pixel, footprint, band)
   double precision, allocatable :: dispersion(:,:,:)
   !> Sounding IDs (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
@@ -640,6 +642,10 @@ contains
        call assign_SV_names_to_result(results, global_SV, CS%window(i_win))
 
 
+       ! Read-in of some former retrieval results for use as new prior
+       call preload_former_results(CS%window(i_win), CS%general, global_SV, former_results)
+
+
        call logger%info(fname, "Starting main retrieval loop!")
 
        frame_start = 1
@@ -822,6 +828,9 @@ contains
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
        call destroy_result_container(results)
+
+       ! Clear former GASBAG results container
+       call destroy_former_results(former_results)
 
        ! We also de-allocate ABSCO-related fields for safety. The ABSCO read routine
        ! will overwrite the data anyway, but you know .. bad practice.
@@ -1554,7 +1563,7 @@ contains
     ! -----------------------------------------------------------------
 
     if (CS_win%GASBAG_prior_file /= "") then
-       call replace_statevector_by_GASBAG(first_call, CS_win, CS%general, i_fp, i_fr, SV)
+       call replace_statevector_with_former(former_results, i_fp, i_fr, SV)
     end if
 
     ! -----------------------------------------------------------------

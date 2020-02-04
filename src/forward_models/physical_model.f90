@@ -42,9 +42,6 @@ module physical_model_mod
   use doppler_solar_module
   use stringifor
 
-  ! XRTM
-  use xrtm_int_f90
-
   ! System modules
   use ISO_FORTRAN_ENV
   use OMP_LIB
@@ -239,8 +236,6 @@ contains
     integer :: num_frames, num_fp, num_pixel, num_band
     ! Loop variables
     integer :: i, j, i_fp, i_fr, i_win, band
-    ! First call (in this thread)
-    logical :: first_call
     ! Thread number for openMP
     integer :: this_thread
     ! Retrieval count
@@ -693,10 +688,6 @@ contains
        !frame_start = 685
        !frame_stop = 800
 
-       ! This will be a variable in private scope within OpenMP, so every thread
-       ! will see their own version of it, and thus have their own "first call".
-       first_call = .true.
-
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
        ! soundings to each thread is constantly re-visited. It probably takes a tiny
@@ -706,7 +697,7 @@ contains
        ! those threads can be assigned new soundings with dynamic scheduling.
 
        !$OMP PARALLEL DO SHARED(retr_count, mean_duration, CS) SCHEDULE(guided) &
-       !$OMP PRIVATE(i_fp, i_fr, first_call, &
+       !$OMP PRIVATE(i_fp, i_fr, &
        !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
 
@@ -730,7 +721,6 @@ contains
              ! Do the retrieval for this particular sounding -----------------------
              this_converged = physical_FM( &
                   my_instrument, &
-                  first_call, &
                   i_fp, &
                   i_fr, &
                   band, &
@@ -740,8 +730,6 @@ contains
                   )
              ! ---------------------------------------------------------------------
 
-             ! After the first call, set this to false. 
-             if (.not. first_call) first_call = .false.
 
 #ifdef _OPENMP
              cpu_time_stop = omp_get_wtime()
@@ -853,7 +841,6 @@ contains
 
   !> @brief Physical-type forward model / retrieval
   !> @param my_instrument Instrument instance
-  !> @param first_call Is this the first call to this subroutine?
   !> @param i_fp Footprint index
   !> @param i_fr Frame index
   !> @param i_win Window index for CS
@@ -867,14 +854,18 @@ contains
   !> it converged or not. It accesses all the L1B/MET arrays defined in the module
   !> for fast readout and processing. The OE scheme is based on Rodgers (2000),
   !> and so far we are doing the LM-modification to the Gauss-Newton scheme.
-  function physical_FM(my_instrument, first_call, &
-       i_fp, i_fr, band, i_win, &
-       CS, this_iterations) result(converged)
+  function physical_FM( &
+       my_instrument, &
+       i_fp, &
+       i_fr, &
+       band, &
+       i_win, &
+       CS, &
+       this_iterations) result(converged)
 
     implicit none
 
     class(generic_instrument), intent(in) :: my_instrument
-    logical, intent(in) :: first_call
     integer, intent(in) :: i_fr
     integer, intent(in) :: i_fp
     integer, intent(in) :: band
@@ -975,7 +966,8 @@ contains
     integer :: num_active_levels = -1
 
     ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
-    double precision, allocatable :: this_vmr_profile(:,:), prior_vmr_profile(:,:)
+    double precision, allocatable :: this_vmr_profile(:,:)
+    double precision, allocatable :: prior_vmr_profile(:,:)
 
     ! Start and end positions in the atmosphere of the gas scalar
     integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
@@ -1091,6 +1083,7 @@ contains
     ! CPU time counters to measure durations
     double precision :: cpu_conv_start, cpu_conv_stop
     double precision :: cpu_gas_start, cpu_gas_stop
+    double precision :: cpu_iter_start, cpu_iter_stop
 
     ! ----------
     !
@@ -1293,8 +1286,10 @@ contains
     call logger%debug(fname, trim(tmp_str))
 
     write(tmp_str, "(A, F6.2, A, F6.2, A, F6.2, A, F6.2)") &
-         "SZA: ", scn%SZA, " - SAA: ", scn%SAA, &
-         " - VZA: ", scn%VZA, " - VAA: ", scn%VAA
+         "SZA: ", scn%SZA, &
+         " - SAA: ", scn%SAA, &
+         " - VZA: ", scn%VZA, &
+         " - VAA: ", scn%VAA
     call logger%debug(fname, trim(tmp_str))
 
     write(tmp_str, "(A, F8.2, A, F8.2, A, ES15.3)") &
@@ -1594,6 +1589,8 @@ contains
 
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
+
+       call cpu_time(cpu_iter_start)
 
        ! Increase iteration count. If last iteration was divergent,
        ! do not increase. The iteration count only counts successful
@@ -2768,6 +2765,7 @@ contains
 
        chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
 
+
        ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. & ! Dsigma squire criterion is fulfilled
@@ -3008,6 +3006,9 @@ contains
        end if
 
 
+
+       call cpu_time(cpu_iter_stop)
+
        !---------------------------------------------------------------------
        ! STEP-THROUGH MODE
        !---------------------------------------------------------------------
@@ -3157,8 +3158,12 @@ contains
              call logger%debug(fname, trim(tmp_str))
           end if
 
+          call logger%debug(fname, "-----------------------------------")
+          write(tmp_str, '(A, F15.7)') "Iteration time (s): ", cpu_iter_stop - cpu_iter_start
+          call logger%debug(fname, trim(tmp_str))
+
           ! Halt the execution here and wait for user keypress
-          call logger%debug(fname, "---------------------------------")
+          call logger%debug(fname, "-----------------------------------")
           call logger%debug(fname, "Press ENTER to continue")
           read(*,*)
 

@@ -33,18 +33,21 @@ contains
   !> @param xrtm_solvers Integer bitmask for XRTM solvers
   !> @param xrtm_kernels Integer array specifying which surface kernels
   !> @param success Did any error occur?
-  subroutine setup_XRTM(xrtm_options_string, xrtm_solvers_string, &
+  subroutine setup_XRTM( &
+       xrtm_options_string, &
+       xrtm_solvers_string, &
        do_polarization, &
-       xrtm_options, xrtm_solvers, &
-       xrtm_separate_solvers, xrtm_kernels, success)
+       xrtm_options, &
+       xrtm_solvers, &
+       xrtm_kernels, &
+       success)
 
     implicit none
     type(string), allocatable, intent(in) :: xrtm_options_string(:)
     type(string), allocatable, intent(in) :: xrtm_solvers_string(:)
     logical, intent(in) :: do_polarization
-    integer, intent(inout) :: xrtm_options
-    integer, intent(inout) :: xrtm_solvers
-    integer, allocatable, intent(inout) :: xrtm_separate_solvers(:)
+    integer, allocatable, intent(inout) :: xrtm_options(:)
+    integer, allocatable, intent(inout) :: xrtm_solvers(:)
     integer, intent(inout) :: xrtm_kernels(:)
     logical, intent(inout) :: success
 
@@ -56,108 +59,126 @@ contains
 
     success = .false.
 
+    if (.not. allocated(xrtm_solvers_string)) then
+       call logger%fatal(fname, "XRTM solver strings not allocated! Aborting.")
+       return
+    end if
+
+    num_solvers = size(xrtm_solvers_string)
+
+    allocate(xrtm_options(num_solvers))
+    allocate(xrtm_solvers(num_solvers))
+
     ! Initialize XRTM options and solvers with 0
-    xrtm_options = 0
-    xrtm_solvers = 0
+    xrtm_options(:) = 0
+    xrtm_solvers(:) = 0
 
-    ! Do weighting functions and pseudo-spherical geometry
-    ! by default. Also, only return upwelling radiances.
-    xrtm_options = ior(XRTM_OPTION_CALC_DERIVS, XRTM_OPTION_PSA)
-    xrtm_options = ior(xrtm_options, XRTM_OPTION_UPWELLING_OUTPUT)
-    xrtm_options = ior(xrtm_options, XRTM_OPTION_OUTPUT_AT_LEVELS)
-    xrtm_options = ior(xrtm_options, XRTM_OPTION_SOURCE_SOLAR)
-
-    ! Surface kernels
+    ! Surface kernels, for the time being make Lambert only
     xrtm_kernels(1) = XRTM_KERNEL_LAMBERTIAN
 
-    num_solvers = 0
-    ! Populate solvers bit field, depending on requested options
-    if (allocated(xrtm_solvers_string)) then
-       do i=1, size(xrtm_solvers_string)
-          ! Grab local copy of string
-          tmp_str = xrtm_solvers_string(i)
+    ! Populate and option bit fields, depending on requested options,
+    ! for each solver separately.
 
-          if (tmp_str == "TWO_OS") then
-             ! Vijay-like 2OS, gives you SECOND ORDER ONLY
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_TWO_OS)
-             num_solvers = num_solvers + 1
-             call logger%debug(fname, "Using XRTM in 2-orders-of-scattering mode")
-          else if (tmp_str == "SINGLE") then
-             ! Single scattering only
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_SINGLE)
-             num_solvers = num_solvers + 1
-             call logger%debug(fname, "Using XRTM in single-scattering mode")
-          else if (tmp_str == "TWO_STREAM") then
-             ! Dedicated 2-Stream solver
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_TWO_STREAM)
-             xrtm_options = ior(xrtm_options, XRTM_OPTION_SFI)
-             num_solvers = num_solvers + 1
-             call logger%debug(fname, "Using XRTM in two-stream mode")
-          else if (tmp_str == "EIG_BVP") then
-             ! Quadrature (LIDORT-like)
-             call logger%debug(fname, "Using XRTM in discrete-ordinate mode")
-             call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
-             num_solvers = num_solvers + 1
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_EIG_BVP)
-             !xrtm_options = ior(xrtm_options, XRTM_OPTION_N_T_TMS)
-             !xrtm_options = ior(xrtm_options, XRTM_OPTION_DELTA_M)
-          else if (tmp_str == "MEM_BVP") then
-             ! Quadrature (LIDORT-like)
-             call logger%debug(fname, "Using XRTM in matrix exponential discrete-ordinate mode")
-             num_solvers = num_solvers + 1
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_MEM_BVP)
-          else if (tmp_str == "SOS") then
-             ! Pade approximation and adding
-             call logger%debug(fname, "Using XRTM in successive-orders-of-scattering mode")
-             call logger%debug(fname, "-rt_streams- is used to infer scattering order")
-             num_solvers = num_solvers + 1
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_SOS)
-          else if (tmp_str == "PADE_ADD") then
-             ! Pade approximation and adding
-             call logger%debug(fname, "Using XRTM in Pade-adding mode")
-             num_solvers = num_solvers + 1
-             xrtm_solvers = ior(xrtm_solvers, XRTM_SOLVER_PADE_ADD)
-          else
-             call logger%error(fname, "XRTM solver option is not implemented, and will be ignored: " &
-                  // tmp_str%chars())
-          end if
-       end do
-    end if
+    do i=1, num_solvers
 
-    ! XRTM solvers come as a 32-bit mask, and during the set-up stage,
-    ! XRTM ingests the inclusive-or combined one such that we can
-    ! then call every solver individually. This little piece of
-    ! code simply creates an array with integers, where each
-    ! array element is one specific solver that we can hand
-    ! off to "xrtm_radiance".
-    ! Then feed each separate solver (integer value) into a separate
-    ! element of the "separate_solvers" array.
-    allocate(xrtm_separate_solvers(num_solvers))
-    i = 1
-    do j = 0, 31
-       if (iand(xrtm_solvers, int(2**j)) /= 0) then
-          xrtm_separate_solvers(i) = int(2**j)
-          i = i + 1
+       ! Do weighting functions and pseudo-spherical geometry
+       ! by default. Also, only return upwelling radiances.
+       xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_CALC_DERIVS)
+       xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_PSA)
+       xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_UPWELLING_OUTPUT)
+       xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_OUTPUT_AT_LEVELS)
+       xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SOURCE_SOLAR)
+
+       ! If polarization is requested, we run
+       ! the RT models in vector mode
+       if (do_polarization) then
+          call logger%debug(fname, "Using XRTM in vector mode.")
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_VECTOR)
+       else
+          call logger%debug(fname, "Using XRTM in scalar mode.")
        end if
-    end do
 
-    ! If polarization is requested, we run
-    ! the RT models in vector mode
-    if (do_polarization) then
-       call logger%debug(fname, "Using XRTM in vector mode.")
-       xrtm_options = ior(xrtm_options, XRTM_OPTION_VECTOR)
-    else
-       call logger%debug(fname, "Using XRTM in scalar mode.")
-    end if
+       ! Grab local copy of string
+       tmp_str = xrtm_solvers_string(i)
+
+       if (tmp_str == "TWO_OS") then
+
+          ! Vijay-like 2OS, gives you SECOND ORDER ONLY
+          call logger%debug(fname, "Using XRTM in 2-orders-of-scattering mode")
+          xrtm_solvers(i) = XRTM_SOLVER_TWO_OS
+
+       else if (tmp_str == "SINGLE") then
+
+          ! Single scattering only
+          call logger%debug(fname, "Using XRTM in single-scattering mode")
+          xrtm_solvers(i) = XRTM_SOLVER_SINGLE
+          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+
+       else if (tmp_str == "TWO_STREAM") then
+
+          ! Dedicated 2-Stream solver
+          call logger%debug(fname, "Using XRTM in two-stream mode")
+          xrtm_solvers(i) = XRTM_SOLVER_TWO_STREAM
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SFI)
+
+       else if (tmp_str == "EIG_BVP") then
+
+          ! Quadrature (LIDORT-like)
+          call logger%debug(fname, "Using XRTM in discrete-ordinate mode")
+          call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
+          xrtm_solvers(i) = XRTM_SOLVER_EIG_BVP
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SFI)
+          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+
+       else if (tmp_str == "MEM_BVP") then
+
+          ! Quadrature (LIDORT-like)
+          call logger%debug(fname, "Using XRTM in matrix exponential discrete-ordinate mode")
+          xrtm_solvers(i) = XRTM_SOLVER_MEM_BVP
+
+       else if (tmp_str == "SOS") then
+
+          ! Pade approximation and adding
+          call logger%debug(fname, "Using XRTM in successive-orders-of-scattering mode")
+          call logger%debug(fname, "-rt_streams- is used to infer scattering order")
+          xrtm_solvers(i) = XRTM_SOLVER_SOS
+
+       else if (tmp_str == "PADE_ADD") then
+
+          ! Pade approximation and adding
+          call logger%debug(fname, "Using XRTM in Pade-adding mode")
+          xrtm_solvers(i) = XRTM_SOLVER_PADE_ADD
+
+       else
+
+          call logger%error(fname, "XRTM solver option is not implemented, and will be ignored: " &
+               // tmp_str%chars())
+
+       end if
+       
+    end do
 
     success = .true.
 
   end subroutine setup_XRTM
 
 
-  subroutine create_XRTM(xrtm, xrtm_options, xrtm_solvers, &
-       max_coef, n_quad, n_stokes, n_derivs, n_layers, &
-       n_kernels, n_kernel_quad, xrtm_kernels, success)
+  subroutine create_XRTM( &
+       xrtm, &
+       xrtm_options, &
+       xrtm_solvers, &
+       max_coef, &
+       n_quad, &
+       n_stokes, &
+       n_derivs, &
+       n_layers, &
+       n_kernels, &
+       n_kernel_quad, &
+       xrtm_kernels, &
+       success)
+    
     implicit none
 
     type(xrtm_type), intent(inout) :: xrtm
@@ -174,10 +195,16 @@ contains
     logical, intent(inout) :: success
 
     character(len=*), parameter :: fname = "create_XRTM"
+    character(len=999) :: tmp_str
     integer :: xrtm_error
 
     success = .false.
 
+    write(tmp_str, '(A, G0.1)') "XRTM Option bit mask: ", xrtm_options
+    call logger%debug(fname, trim(tmp_str))
+    write(tmp_str, '(A, G0.1)') "XRTM Solver bit mask: ", xrtm_solvers
+    call logger%debug(fname, trim(tmp_str))
+    
     call xrtm_create_f90( &
          xrtm, &  ! XRTM object
          xrtm_options, & ! XRTM option bitmask
@@ -206,9 +233,19 @@ contains
   end subroutine create_XRTM
 
 
-  subroutine solve_RT_problem_XRTM(CS_win, CS_general, CS_aerosol, &
-       SV, scn, n_stokes, &
-       radiance_calc_work_hi_stokes, dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, &
+  subroutine solve_RT_problem_XRTM( &
+       CS_win, &
+       CS_general, &
+       CS_aerosol, &
+       SV, &
+       scn, &
+       n_stokes, &
+       radiance_calc_work_hi_stokes, &
+       dI_dgas, &
+       dI_dsurf, &
+       dI_dTemp, &
+       dI_dAOD, &
+       dI_dAHeight, &
        xrtm_success)
 
     type(CS_window_t), intent(in) :: CS_win
@@ -243,11 +280,9 @@ contains
     ! XRTM Radiative Transfer model handler
     type(xrtm_type) :: xrtm
     ! Actual options variable
-    integer :: xrtm_options
+    integer, allocatable :: xrtm_options(:)
     ! Actual solvers variable
-    integer :: xrtm_solvers
-    ! Solvers separated into individual one's
-    integer, allocatable :: xrtm_separate_solvers(:)
+    integer, allocatable :: xrtm_solvers(:)
     ! XRTM surface kernels
     integer :: xrtm_kernels(1)
     ! XRTM error variable
@@ -259,7 +294,7 @@ contains
     !
     integer, allocatable :: n_coef(:)
     !
-    integer :: j
+    integer :: i, j
 
 
     ! Initialize success variable
@@ -315,7 +350,7 @@ contains
 
 
        ! This function "translates" our verbose configuration file options
-       ! into proper XRTM language and sets the corresponding options.
+       ! into proper XRTM language and sets the corresponding options and solvers.
 
        call setup_XRTM( &
             CS_win%xrtm_options, &
@@ -323,7 +358,6 @@ contains
             CS_win%do_polarization, &
             xrtm_options, &
             xrtm_solvers, &
-            xrtm_separate_solvers, &
             xrtm_kernels, &
             xrtm_success)
 
@@ -332,111 +366,128 @@ contains
           return
        end if
 
-       xrtm_n_derivs = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + SV%num_aerosol_height
+       xrtm_n_derivs = ( &
+            + SV%num_gas &
+            + SV%num_temp &
+            + SV%num_albedo &
+            + SV%num_aerosol_aod &
+            + SV%num_aerosol_height &
+            )
 
-       ! --------------------------------------
-       ! Derive the number of quadrature points
-       !
-       ! If more than one was supplied by the user,
-       ! simply grab the first value and ignore the
-       ! rest for monochromatic calculations. At least
-       ! one value has to be present. Of course this
-       ! option is only required for RT solvers that
-       ! require some notion of "streams", such as
-       ! BVP.
-       ! --------------------------------------
-
-       if ( &
-            (iand(xrtm_solvers, XRTM_SOLVER_EIG_BVP) /= 0) .or. &
-            (iand(xrtm_solvers, XRTM_SOLVER_TWO_OS) /= 0) &
-            ) then
-
-          ! Is it even allocated?
-          if (.not. allocated(CS_win%RT_streams)) then
-             call logger%fatal(fname, "You MUST supply a -rt_streams- option!")
-             stop 1
-          end if
-
-          ! And if allocated, does it have the right size?
-          if (size(CS_win%RT_streams) < 1) then
-             call logger%fatal(fname, "You need to supply at least one value for -rt_streams-")
-             stop 1
-          end if
-
-          ! And then finally it needs to have the right value
-          if (CS_win%RT_streams(1) < 2) then
-             write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", CS_win%RT_streams(1)
-             call logger%fatal(fname, trim(tmp_str))
-             stop 1
-          end if
-
-          xrtm_streams = CS_win%RT_streams(1) / 2
-
-       else
-
-          call logger%debug(fname, "Setting RT streams to 1 per hemisphere.")
-          xrtm_streams = 1
-
-       end if
-
-
-       call create_XRTM( &
-            xrtm, & ! XRTM handler
-            xrtm_options, & ! XRTM options bitmask
-            xrtm_solvers, & ! XRTM solvers combined bitmask
-            max(3, scn%max_pfmom), & ! Max coef - either 3 for Rayleigh, or whatever we have for aerosols
-            xrtm_streams, & ! Quadrature points
-            n_stokes, & ! Number of stokes coeffs
-            xrtm_n_derivs, & ! Number of derivatives
-            num_lay, & ! Number of layers
-            1, & ! Number of surface kernels
-            50, & ! Number of kernel quadrature points
-            xrtm_kernels, & ! XRTM surface kernels
-            xrtm_success) ! Call successful?
-
-       if (.not. xrtm_success) then
-          call logger%error(fname, "Call to create_XRTM unsuccessful.")
-          call xrtm_destroy_f90(xrtm, xrtm_error)
-          return
-       end if
-
-       ! This calculates all radiances and weighting functions. It DOES NOT map the weighting function
-       ! array back to partial derivatives. This is done right at the end of this subroutine.
-       ! (bad idea?)
-
+       ! Allocate the arrays which hold the radiances and weighting functions
        allocate(monochr_radiance(size(scn%op%wl), scn%num_stokes))
        allocate(monochr_weighting_functions(size(scn%op%wl), scn%num_stokes, xrtm_n_derivs))
 
-       call XRTM_monochromatic( &
-            xrtm, &
-            xrtm_separate_solvers, &
-            xrtm_n_derivs, &
-            scn, &
-            SV, &
-            CS_win, &
-            CS_general, &
-            CS_aerosol, &
-            monochr_radiance, &
-            monochr_weighting_functions, &
-            xrtm_success)
+       monochr_radiance(:,:) = 0.0d0
+       monochr_weighting_functions(:,:,:) = 0.0d0
 
-       if (.not. xrtm_success) then
-          call logger%error(fname, "Call to XRTM_monochromatic unsuccessful.")
-          return
-       end if
+       do i = 1, size(xrtm_solvers)
+
+          ! --------------------------------------
+          ! Derive the number of quadrature points
+          !
+          ! If more than one was supplied by the user,
+          ! simply grab the first value and ignore the
+          ! rest for monochromatic calculations. At least
+          ! one value has to be present. Of course this
+          ! option is only required for RT solvers that
+          ! require some notion of "streams", such as
+          ! BVP.
+          ! --------------------------------------
+
+          if ( &
+               (iand(xrtm_solvers(i), XRTM_SOLVER_EIG_BVP) /= 0) .or. &
+               (iand(xrtm_solvers(i), XRTM_SOLVER_TWO_OS) /= 0) &
+               ) then
+
+             ! Is it even allocated?
+             if (.not. allocated(CS_win%RT_streams)) then
+                call logger%fatal(fname, "You MUST supply a -rt_streams- option!")
+                stop 1
+             end if
+
+             ! And if allocated, does it have the right size?
+             if (size(CS_win%RT_streams) < 1) then
+                call logger%fatal(fname, "You need to supply at least one value for -rt_streams-")
+                stop 1
+             end if
+
+             ! And then finally it needs to have the right value
+             if (CS_win%RT_streams(1) < 2) then
+                write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", CS_win%RT_streams(1)
+                call logger%fatal(fname, trim(tmp_str))
+                stop 1
+             end if
+
+             xrtm_streams = CS_win%RT_streams(1) / 2
+
+          else
+
+             call logger%debug(fname, "Setting RT streams to 1 per hemisphere.")
+             xrtm_streams = 1
+
+          end if
+
+          ! This is where the XRTM handler is created
+
+          call create_XRTM( &
+               xrtm, & ! XRTM handler
+               xrtm_options(i), & ! XRTM options bitmask
+               xrtm_solvers(i), & ! XRTM solvers combined bitmask
+               max(3, scn%max_pfmom), & ! Max coef - either 3 for Rayleigh, or whatever we have for aerosols
+               xrtm_streams, & ! Quadrature points
+               n_stokes, & ! Number of stokes coeffs
+               xrtm_n_derivs, & ! Number of derivatives
+               num_lay, & ! Number of layers
+               1, & ! Number of surface kernels
+               50, & ! Number of kernel quadrature points
+               xrtm_kernels, & ! XRTM surface kernels
+               xrtm_success) ! Call successful?
+
+          if (.not. xrtm_success) then
+             call logger%error(fname, "Call to create_XRTM unsuccessful.")
+             call xrtm_destroy_f90(xrtm, xrtm_error)
+             return
+          end if
+
+          ! This calculates all radiances and weighting functions. It DOES NOT map the weighting function
+          ! array back to partial derivatives. This is done right at the end of this subroutine.
+          ! NOTE
+          ! The results of this particular XRTM pass are ADDED to the radiance and derivative arrays,
+          ! so all contributions added up here.
+
+          call XRTM_monochromatic( &
+               xrtm, &
+               xrtm_solvers(i), &
+               xrtm_n_derivs, &
+               scn, &
+               SV, &
+               CS_win, &
+               CS_general, &
+               CS_aerosol, &
+               monochr_radiance, &
+               monochr_weighting_functions, &
+               xrtm_success)
+
+          if (.not. xrtm_success) then
+             call logger%error(fname, "Call to XRTM_monochromatic unsuccessful.")
+             return
+          end if
+
+          ! After calculations are done, we really don't need the XRTM object anymore,
+          ! so independent of the success, we can safely destroy it.
+          !
+          ! XRTM must be destroyed at some point, otherwise it will just keep
+          ! creating arrays and filling up memory (quickly!). Why not destroy
+          ! it right here - all the results are transferred to various arrays
+          ! so we do not really need the XRTM instance anymore.
+          ! If the calculation of radiances failed for whatever reason, the program
+          ! returns here anyway such that XRTM is destroyed as well.
+          call xrtm_destroy_f90(xrtm, xrtm_error)
+
+       end do
 
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
-
-       ! After calculations are done, we really don't need the XRTM object anymore,
-       ! so independent of the success, we can safely destroy it.
-       !
-       ! XRTM must be destroyed at some point, otherwise it will just keep
-       ! creating arrays and filling up memory (quickly!). Why not destroy
-       ! it right here - all the results are transferred to various arrays
-       ! so we do not really need the XRTM instance anymore.
-       ! If the calculation of radiances failed for whatever reason, the program
-       ! returns here anyway such that XRTM is destroyed as well.
-       call xrtm_destroy_f90(xrtm, xrtm_error)
 
        if (.not. xrtm_success) then
           call logger%error(fname, "Call to calculate_XRTM_radiance unsuccessful.")
@@ -455,11 +506,12 @@ contains
           dI_dTemp(:,:) = monochr_weighting_functions(:,:,SV%num_gas + 1)
        end if
 
-       ! Store surface jacobian
+       ! Store surface Jacobian
        do j=1, SV%num_albedo
           dI_dsurf(:,j,:) = monochr_weighting_functions(:,:,SV%num_gas + SV%num_temp + j)
        end do
 
+       ! Store aerosol optical depth Jacobians
        do j=1, SV%num_aerosol_aod
           dI_dAOD(:,j,:) = monochr_weighting_functions(:,:,SV%num_gas + SV%num_temp + SV%num_albedo + j)
           ! If this AOD retrieval is in log-space, we need to multiply by
@@ -469,6 +521,7 @@ contains
           end if
        end do
 
+       ! Store aerosol layer height Jacobians
        do j=1, SV%num_aerosol_height
           dI_dAHeight(:,j,:) = monochr_weighting_functions(:,:, &
                SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j)
@@ -495,12 +548,21 @@ contains
 
 
   !> @brief Calculates radiances and weighting functions for all wavelengths in the band
-  subroutine XRTM_monochromatic(xrtm, xrtm_separate_solvers, n_derivs, scn, SV, &
-       CS_win, CS_general, CS_aerosol, &
-       radiance, weighting_functions, success)
+  subroutine XRTM_monochromatic( &
+       xrtm, &
+       xrtm_solver, &
+       n_derivs, &
+       scn, &
+       SV, &
+       CS_win, &
+       CS_general, &
+       CS_aerosol, &
+       radiance, &
+       weighting_functions, &
+       success)
 
     type(xrtm_type), intent(inout) :: xrtm
-    integer, intent(in) :: xrtm_separate_solvers(:)
+    integer, intent(in) :: xrtm_solver
     integer, intent(in) :: n_derivs
     type(scene), intent(in) :: scn
     type(statevector), intent(in) :: SV
@@ -724,7 +786,6 @@ contains
 
     call calculate_XRTM_radiance( &
          xrtm, & ! XRTM handler
-         xrtm_separate_solvers, & ! separate XRTM solvers
          SV, & ! State vector structure - needed for decoding SV positions
          CS_general, & ! Control structure general section
          CS_aerosol, & ! Control structure aerosol array
@@ -769,7 +830,10 @@ contains
   !> (coef, lcoef) arrays which have a wavelength dimension. Alternatively, supply the (coef_left, lcoef_left)
   !> and (coef_right, lcoef_right) arrays without a wavelength dimension, and linear interpolation will be used
   !> to obtain the values at each wavelength.
-  subroutine calculate_XRTM_radiance(xrtm, xrtm_separate_solvers, &
+  !> NOTE that radiance and derivative values are added to "radiance" and "derivs" arrays, so you MUST
+  !> make sure that they are properly initialized before they are passed into this function.
+  subroutine calculate_XRTM_radiance( &
+       xrtm, &
        SV, &
        CS_general, &
        CS_aerosol, &
@@ -794,7 +858,6 @@ contains
 
     implicit none
     type(xrtm_type), intent(inout) :: xrtm
-    integer, intent(in) :: xrtm_separate_solvers(:)
     type(statevector), intent(in) :: SV
     type(CS_general_t), intent(in) :: CS_general
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
@@ -828,7 +891,7 @@ contains
 
     ! Local
     integer :: xrtm_options
-    integer :: xrtm_solvers
+    integer :: xrtm_solver
 
     double precision, allocatable :: I_p(:,:,:,:)
     double precision, allocatable :: I_m(:,:,:,:)
@@ -889,12 +952,9 @@ contains
     end if
 
     xrtm_options = xrtm_get_options_f90(xrtm)
-    xrtm_solvers = xrtm_get_solvers_f90(xrtm)
+    xrtm_solver = xrtm_get_solvers_f90(xrtm)
 
     N_spec = size(wavelengths)
-
-    radiance(:,:) = 0.0d0
-    derivs(:,:,:) = 0.0d0
 
     out_thetas(1) = VZA
     out_phis(1,1) = VAA
@@ -934,6 +994,9 @@ contains
 
     end if
 
+
+
+
     ! Allocate output containers - these will not change with wavelength, hence
     ! we only need to do this once per microwindow
     allocate(I_p(n_stokes, 1, 1, 1))
@@ -949,17 +1012,16 @@ contains
        return
     endif
 
-    ! I don't know what these are?
-    ! Isotropic surface signal?
+    ! Set isotropic emission at TOA and BOA to zero.
     call xrtm_set_F_iso_top_f90(xrtm, 0.0d0, xrtm_error)
-     if (xrtm_error /= 0) then
-       call logger%error(fname, "Error calling xrtm_set_F_iso_top_f90(")
+    if (xrtm_error /= 0) then
+       call logger%error(fname, "Error calling xrtm_set_F_iso_top_f90")
        return
     endif
 
     call xrtm_set_F_iso_bot_f90(xrtm, 0.0d0, xrtm_error)
-     if (xrtm_error /= 0) then
-       call logger%error(fname, "Error calling xrtm_set_F_iso_bot_f90(")
+    if (xrtm_error /= 0) then
+       call logger%error(fname, "Error calling xrtm_set_F_iso_bot_f90")
        return
     endif
 
@@ -990,7 +1052,7 @@ contains
 
     end if
 
-    if (iand(xrtm_solvers, XRTM_SOLVER_SOS) /= 0) then
+    if (iand(xrtm_solver, XRTM_SOLVER_SOS) /= 0) then
 
        call xrtm_set_sos_params_f90(xrtm, 4, 10.0d0, 0.01d0, xrtm_error)
        if (xrtm_error /= 0) then
@@ -999,7 +1061,7 @@ contains
        endif
     end if
 
-    if (iand(xrtm_solvers, XRTM_SOLVER_PADE_ADD) /= 0) then
+    if (iand(xrtm_solver, XRTM_SOLVER_PADE_ADD) /= 0) then
        call xrtm_set_pade_params_f90(xrtm, 0, 2, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_pade_params_f90")
@@ -1118,6 +1180,16 @@ contains
           end if
        end if
 
+       ! For TWO STREAM, the second and third phasefunction coefficient inputs have to be
+       ! divided by 3 and 5 respectively. The first is always 1.0!
+       if (iand(xrtm_solver, XRTM_SOLVER_TWO_STREAM) /= 0) then
+          this_coef(2,:,:) = this_coef(2,:,:)
+          this_lcoef(2,:,:,:) = this_lcoef(2,:,:,:)
+
+          this_coef(3,:,:) = this_coef(3,:,:)
+          this_lcoef(3,:,:,:) = this_lcoef(3,:,:,:)
+       end if
+
        if (any(ieee_is_nan(this_coef))) then
           write(tmp_str, '(A, G0.1)') "NaN(s) found for COEF at wavelength index: ", i
           call logger%error(fname, trim(tmp_str))
@@ -1193,6 +1265,11 @@ contains
           return
        end if
 
+       I_p(:,:,:,:) = 0.0d0
+       I_m(:,:,:,:) = 0.0d0
+       K_p(:,:,:,:,:) = 0.0d0
+       K_m(:,:,:,:,:) = 0.0d0
+
        ! XRTM has been initialized with whatever number of solvers are stored in
        ! "xrtm_solvers", however only one is executed at a time (ask Greg?).
        ! Thus, we need to loop over the possible bitmask positions.
@@ -1200,122 +1277,123 @@ contains
        ! asks for e.g. SINGLE + 2OS, then you get the radiances and derivatives
        ! of both, summed.
 
-       do l=1, size(xrtm_separate_solvers)
+       call cpu_time(cpu_start2)
 
-          call cpu_time(cpu_start2)
+       ! Calculate TOA radiance!
+       call xrtm_radiance_f90( &
+            xrtm, & ! XRTM object
+            xrtm_solver, & ! XRTM solver bitmask
+            1 , & ! Number of output azimuths
+            out_phis, & ! Output azimuths
+            I_p, & ! Upward radiances,
+            I_m, & ! Downward radiances
+            K_p, & ! Upward jacobians
+            K_m, & ! Downward jacobians
+            xrtm_error)
 
-          ! Calculate TOA radiance!
-          call xrtm_radiance_f90(xrtm, & ! XRTM object
-               xrtm_separate_solvers(l), & ! XRTM solver bitmask
-               1 , & ! Number of output azimuths
-               out_phis, & ! Output azimuths
-               I_p, & ! Upward radiances,
-               I_m, & ! Downward radiances
-               K_p, & ! Upward jacobians
-               K_m, & ! Downward jacobians
-               xrtm_error)
-          call cpu_time(cpu_end2)
+       call cpu_time(cpu_end2)
 
-          pure_XRTM_duration = pure_XRTM_duration + cpu_end2 - cpu_start2
+       pure_XRTM_duration = pure_XRTM_duration + cpu_end2 - cpu_start2
 
-          if (xrtm_error /= 0) then
-             call logger%error(fname, "Error calling xrtm_radiance_f90")
-             return
-          end if
+       if (xrtm_error /= 0) then
+          call logger%error(fname, "Error calling xrtm_radiance_f90")
+          return
+       end if
 
-          if (any(ieee_is_nan(I_p))) then
-             write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for radiances " &
-                  // "at wavelength index: ", i
-             call logger%error(fname, trim(tmp_str))
-             return
-          end if
+       if (any(ieee_is_nan(I_p))) then
+          write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for radiances " &
+               // "at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
 
-          if (any(ieee_is_nan(K_p))) then
-             write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for weighting functions " &
-                  // "at wavelength index: ", i
-             call logger%error(fname, trim(tmp_str))
-             return
-          end if
+       if (any(ieee_is_nan(K_p))) then
+          write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for weighting functions " &
+               // "at wavelength index: ", i
+          call logger%error(fname, trim(tmp_str))
+          return
+       end if
 
-          ! Store radiances into wavelength-indexed array
-          radiance(i,:) = radiance(i,:) + I_p(:,1,1,1)
+       ! Store radiances into wavelength-indexed array
+       radiance(i,:) = radiance(i,:) + I_p(:,1,1,1)
 
-          ! Store derivatives into wavelength-indexed array
-          derivs(i,:,:) = derivs(i,:,:) + K_p(:,1,1,:,1)
-
-
-          ! Format string for derivative debug output
-          ! .. but only go into this branch when debug is requested
-          if ((i == 1) .and. (CS_general%loglevel <= 10)) then
-             call logger%debug(fname, "--- First wavelength ----------------------------------------------")
-
-             ! Write XRTM inputs
-             call logger%debug(fname, "-------------------------------------------------------------------")
-             call logger%debug(fname, "Layer, input optical depth, input single scatter albedo, # of coefs")
-             do m = 1, n_layers
-                write(tmp_str, '(I5, ES15.5, ES15.5, I6)') m, tau(m), omega(m), n_coef(m)
-                call logger%debug(fname, trim(tmp_str))
-             end do
-
-             call logger%debug(fname, "-------------------------------------------------------")
-             call logger%debug(fname, "Layer, input linearized optical depth inputs")
-             do m = 1, n_layers
-                write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
-                write(tmp_str, trim(fmt_str)) m, single_ltau(:,m)
-                call logger%debug(fname, trim(tmp_str))
-             end do
-
-             call logger%debug(fname, "----------------------------------------------------")
-             call logger%debug(fname, "Layer, input linearized single scatter albedo inputs")
-             do m = 1, n_layers
-                write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
-                write(tmp_str, trim(fmt_str)) m, single_lomega(:,m)
-                call logger%debug(fname, trim(tmp_str))
-             end do
-
-             !call logger%debug(fname, "------------------------------------------------")
-             !call logger%debug(fname, "Layer, first few phasefunction expansion coeffs.")
-             !do m = 1, n_layers
-             !   do q = 1, size(this_coef, 2)
-             !      ! (pfmom, elem, n_layers)
-             !      write(tmp_str, '(A, G0.1, I5, 3ES15.5)') "Element #", q, m, this_coef(1:3, q, m)
-             !      call logger%debug(fname, trim(tmp_str))
-             !   end do
-             !end do
-
-             !call logger%debug(fname, "-----------------------------------------------------------------------")
-             !call logger%debug(fname, "Layer, derivative, first few linearized phasefunction expansion coeffs.")
-             !do m = 1, n_layers
-             !   do k = 1, n_derivs
-             !      ! (pfmom, elem, n_derivs, n_layers)
-             !      write(tmp_str, '(I5, I5, 3ES15.5)') m, k, this_lcoef(1:3, 1, k, m)
-             !      call logger%debug(fname, trim(tmp_str))
-             !   end do
-             !end do
-             !call logger%debug(fname, "-----------------------------------------------------------------------")
-
-             write(fmt_str, '(A,G0.1,A)') "(A, G0.1, A, ", size(derivs, 3), "ES15.5)"
-             do q = 1, size(radiance, 2)
-                write(tmp_str, '(A, G0.1, A, ES15.3)') "XRTM radiance, Stokes #", q, ": ", radiance(i, q)
-                call logger%debug(fname, trim(tmp_str))
-             end do
-
-             do q = 1, size(radiance, 2)
-                write(tmp_str, trim(fmt_str)) "XRTM weighting functions, Stokes #", q, ": ", derivs(i, q, :)
-                call logger%debug(fname, trim(tmp_str))
-             end do
+       ! Store derivatives into wavelength-indexed array
+       derivs(i,:,:) = derivs(i,:,:) + K_p(:,1,1,:,1)
 
 
-          end if
+       ! Format string for derivative debug output
+       ! .. but only go into this branch when debug is requested
+       if ((i == 1) .and. (CS_general%loglevel <= 10)) then
+          call logger%debug(fname, "--- First wavelength ----------------------------------------------")
 
-          if (mod(i, N_spec/10) == 0) then
-             write(tmp_str, '(A, F6.2, A, G0.1, A, G0.1, A)') &
-                  "XRTM calls (", 100.0 * i/N_spec, "%, ", i, "/", N_spec, ")"
+          ! Write XRTM inputs
+          !call logger%debug(fname, "-------------------------------------------------------------------")
+          !call logger%debug(fname, "Layer, input optical depth, input single scatter albedo, # of coefs")
+          !do m = 1, n_layers
+          !   write(tmp_str, '(I5, ES15.5, ES15.5, I6)') m, tau(m), omega(m), n_coef(m)
+          !   call logger%debug(fname, trim(tmp_str))
+          !end do
+
+          !call logger%debug(fname, "-------------------------------------------------------")
+          !call logger%debug(fname, "Layer, input linearized optical depth inputs")
+          !do m = 1, n_layers
+          !   write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
+          !   write(tmp_str, trim(fmt_str)) m, single_ltau(:,m)
+          !   call logger%debug(fname, trim(tmp_str))
+          !end do
+
+          !call logger%debug(fname, "----------------------------------------------------")
+          !call logger%debug(fname, "Layer, input linearized single scatter albedo inputs")
+          !do m = 1, n_layers
+          !   write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
+          !   write(tmp_str, trim(fmt_str)) m, single_lomega(:,m)
+          !   call logger%debug(fname, trim(tmp_str))
+          !end do
+
+          !call logger%debug(fname, "------------------------------------------------")
+          !call logger%debug(fname, "Layer, first few phasefunction expansion coeffs.")
+          !do m = 1, n_layers
+          !   do q = 1, size(this_coef, 2)
+          !      ! (pfmom, elem, n_layers)
+          !      write(tmp_str, '(A, G0.1, I5, 3ES15.5)') "Element #", q, m, this_coef(1:3, q, m)
+          !      call logger%debug(fname, trim(tmp_str))
+          !   end do
+          !end do
+
+          !call logger%debug(fname, "-----------------------------------------------------------------------")
+          !call logger%debug(fname, "Layer, derivative, first few linearized phasefunction expansion coeffs.")
+          !do m = 1, n_layers
+          !   do k = 1, n_derivs
+          !      ! (pfmom, elem, n_derivs, n_layers)
+          !      write(tmp_str, '(I5, I5, 3ES15.5)') m, k, this_lcoef(1:3, 1, k, m)
+          !      call logger%debug(fname, trim(tmp_str))
+          !   end do
+          !end do
+          !call logger%debug(fname, "-----------------------------------------------------------------------")
+
+          write(fmt_str, '(A,G0.1,A)') "(A, G0.1, A, ", size(derivs, 3), "ES15.5)"
+          do q = 1, n_stokes
+             write(tmp_str, '(A, G0.1, A, ES20.10)') "XRTM radiance, Stokes # ", q, "          : ", I_p(q,1,1,1)
              call logger%debug(fname, trim(tmp_str))
-          end if
+             write(tmp_str, '(A, G0.1, A, ES20.10)') "Cumulative XRTM radiance, Stokes #", q, ": ", radiance(i,q)
+             call logger%debug(fname, trim(tmp_str))
+          end do
+
+          do q = 1, n_stokes
+             write(tmp_str, trim(fmt_str)) "XRTM weighting functions, Stokes #", q, "           : ", K_p(q,1,1,:,1)
+             call logger%debug(fname, trim(tmp_str))
+             write(tmp_str, trim(fmt_str)) "Cumulative XRTM weighting functions, Stokes #", q, ": ", derivs(i,q,:)
+             call logger%debug(fname, trim(tmp_str))
+          end do
 
 
-       end do
+       end if
+
+       if (mod(i, N_spec/10) == 0) then
+          write(tmp_str, '(A, F6.2, A, G0.1, A, G0.1, A)') &
+               "XRTM calls (", 100.0 * i/N_spec, "%, ", i, "/", N_spec, ")"
+          call logger%debug(fname, trim(tmp_str))
+       end if
 
     end do
 

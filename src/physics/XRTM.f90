@@ -112,8 +112,8 @@ contains
           ! Single scattering only
           call logger%debug(fname, "Using XRTM in single-scattering mode")
           xrtm_solvers(i) = XRTM_SOLVER_SINGLE
-          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
-          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
 
        else if (tmp_str == "TWO_STREAM") then
 
@@ -129,8 +129,8 @@ contains
           call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
           xrtm_solvers(i) = XRTM_SOLVER_EIG_BVP
           xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SFI)
-          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
-          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
 
        else if (tmp_str == "MEM_BVP") then
 

@@ -697,10 +697,10 @@ contains
        i = SV%num_gas + SV%num_temp + SV%num_albedo + j
        aer_idx = SV%aerosol_aod_idx_lookup(j)
 
-       ltau(:,i,:) = scn%op%aer_ext_tau(:,:,aer_idx) / scn%op%reference_aod(aer_idx)
+       ltau(:,i,:) = scn%op%aer_ext_tau(:,1:n_layers,aer_idx) / scn%op%reference_aod(aer_idx)
        ! This should be tau_aer_ext / AOD * (omega_a/tau - omega/tau)
        lomega(:,i,:) = ltau(:,i,:) * ( &
-            (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
+            (scn%op%aer_sca_tau(:,1:n_layers,aer_idx) / scn%op%aer_ext_tau(:,1:n_layers,aer_idx)  &
             - scn%op%layer_omega(:,1:n_layers)) / scn%op%layer_tau(:,1:n_layers) &
             )
 
@@ -964,8 +964,30 @@ contains
     single_lomega(:,:) = 0.0d0
     single_lsurf(:) = 0.0d0
 
-    ! Depending on which coefficient strategy we use, we allocate the variables
-    ! according to the input files
+    ! Depending on which coefficient strategy we use, we allocate the coefficients
+    ! according to the input files.
+    ! There are two cases, and two cases within those two:
+    !
+    ! a) The user supplied per-wavelength coeffs
+    !   In this case, we allocate the "this_coef" and "this_lcoef" fields, according to
+    !   the shape of the supplied data.
+    !
+    !   a1) If the user wants to keep the scattering coefficients constant along
+    !       the band, then we just grab the values from the band center
+    !   a2) If not, there is nothing to do, but to just take the per-wavelength
+    !       values and stick them into XRTM
+    !
+    ! b) The user supplied coefs at the two band edges "coef_left" and "coef_right"
+    !   In this case, the "this_coef" and "this_lcoef" fields are allocated
+    !   according to the shape of "coef_left".
+    !
+    !   b1) If the user wants to keep the scattering coefficients constant along
+    !       the band, we grab the band-center values using the "left" and "right"
+    !       coefficient arrays.
+    !   b2) If not, we make the same computation in the spectral loop, using a
+    !       wavelength interpolation factor derived from the current spectral
+    !       point (wl_fac)
+
     if (present(coef)) then
        allocate(this_coef(size(coef, 1), size(coef, 2), size(coef, 3)))
        allocate(this_lcoef(size(lcoef, 1), size(lcoef, 2), size(lcoef, 3), size(lcoef, 4)))
@@ -1180,16 +1202,6 @@ contains
           end if
        end if
 
-       ! For TWO STREAM, the second and third phasefunction coefficient inputs have to be
-       ! divided by 3 and 5 respectively. The first is always 1.0!
-       if (iand(xrtm_solver, XRTM_SOLVER_TWO_STREAM) /= 0) then
-          this_coef(2,:,:) = this_coef(2,:,:)
-          this_lcoef(2,:,:,:) = this_lcoef(2,:,:,:)
-
-          this_coef(3,:,:) = this_coef(3,:,:)
-          this_lcoef(3,:,:,:) = this_lcoef(3,:,:,:)
-       end if
-
        if (any(ieee_is_nan(this_coef))) then
           write(tmp_str, '(A, G0.1)') "NaN(s) found for COEF at wavelength index: ", i
           call logger%error(fname, trim(tmp_str))
@@ -1265,10 +1277,10 @@ contains
           return
        end if
 
-       I_p(:,:,:,:) = 0.0d0
-       I_m(:,:,:,:) = 0.0d0
-       K_p(:,:,:,:,:) = 0.0d0
-       K_m(:,:,:,:,:) = 0.0d0
+       !I_p(:,:,:,:) = 0.0d0
+       !I_m(:,:,:,:) = 0.0d0
+       !K_p(:,:,:,:,:) = 0.0d0
+       !K_m(:,:,:,:,:) = 0.0d0
 
        ! XRTM has been initialized with whatever number of solvers are stored in
        ! "xrtm_solvers", however only one is executed at a time (ask Greg?).

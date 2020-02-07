@@ -624,21 +624,34 @@ contains
        ! For the beginning, we start by initialising it with the number of levels
        ! as obtained from the initial_atm
 
-       call parse_and_initialize_SV(size(initial_atm%p), &
-            CS%window(i_win), CS%gas, CS%aerosol, &
+       call parse_and_initialize_SV( &
+            size(initial_atm%p), &
+            CS%window(i_win), &
+            CS%gas, &
+            CS%aerosol, &
             global_SV)
+
        call logger%info(fname, "Initialised SV structure")
 
        ! And now set up the result container with the appropriate sizes for arrays
-       call create_result_container(results, num_frames, num_fp, &
-            size(global_SV%svap), initial_atm%num_gases, initial_atm%num_levels)
+       call create_result_container( &
+            results, &
+            num_frames, &
+            num_fp, &
+            size(global_SV%svap), &
+            initial_atm%num_gases, &
+            initial_atm%num_levels)
 
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, global_SV, CS%window(i_win))
 
 
        ! Read-in of some former retrieval results for use as new prior
-       call preload_former_results(CS%window(i_win), CS%general, global_SV, former_results)
+       call preload_former_results( &
+            CS%window(i_win), &
+            CS%general, &
+            global_SV, &
+            former_results)
 
 
        call logger%info(fname, "Starting main retrieval loop!")
@@ -686,7 +699,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
        !frame_start = 685
-       !frame_stop = 800
+       !frame_stop = 700
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -1467,7 +1480,7 @@ contains
           SV%svap(SV%idx_solar_irrad_scale(i)) = 0.0d0
        end do
     end if
-    
+
     ! Solar shift is set to zero
     if (SV%num_solar_shift == 1) then
        call logger%debug(fname, "Inserting solar shift priors")
@@ -1510,12 +1523,31 @@ contains
     ! ILS stretch - we assume the L1B is unstretched
     if (SV%num_ils_stretch > 0) then
        call logger%debug(fname, "Inserting ILS stretch priors")
-       ! Set the first coefficient to 1.0d0, i.e. no stretch
-       SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
-       do i = 2, SV%num_ils_stretch
-          ! And set all other coefficients to zero at first
-          SV%svap(SV%idx_ils_stretch(i)) = 0.0d0
-       end do
+
+       ! If the user provides a prior ILS stretch factor, we
+       ! can insert them here as prior. However that only makes
+       ! sense if the order is the same.
+       if (allocated(CS_win%ils_stretch_prior)) then
+          if (size(CS_win%ils_stretch_prior) /= SV%num_ils_stretch) then
+             write(tmp_str, '(A, G0.1, A, G0.1)') "You provded ILS stretch priors of order ", &
+                  size(CS_win%ils_stretch_prior), " but the state vector is set to order ", &
+                  SV%num_ils_stretch
+             call logger%fatal(fname, trim(tmp_str))
+             stop 1
+          else
+             ! Slot them all in
+             do i = 1, SV%num_ils_stretch
+                SV%svap(SV%idx_ils_stretch(i)) = CS_win%ils_stretch_prior(i)
+             end do
+          end if
+       else
+          ! Otherwise, just set the first coefficient to 1.0d0, i.e. no stretch
+          SV%svap(SV%idx_ils_stretch(1)) = 1.0d0
+          do i = 2, SV%num_ils_stretch
+             ! And set all other coefficients to zero at first
+             SV%svap(SV%idx_ils_stretch(i)) = 0.0d0
+          end do
+       end if
     end if
 
     ! Surface pressure is taken from the MET data
@@ -1690,15 +1722,15 @@ contains
              end if
           end do
 
-       if (num_levels < 0) then
-          call logger%error(fname, "Error in calculating the total number of atmospheric levels.")
-          return
-       end if
+          if (num_levels < 0) then
+             call logger%error(fname, "Error in calculating the total number of atmospheric levels.")
+             return
+          end if
 
-       if (num_active_levels < 0) then
-          call logger%error(fname, "Error in calculating the active number of atmospheric levels.")
-          return
-       end if
+          if (num_active_levels < 0) then
+             call logger%error(fname, "Error in calculating the active number of atmospheric levels.")
+             return
+          end if
 
 
        else
@@ -1772,7 +1804,7 @@ contains
              ! value here.
              scn%op%albedo(:) = albedo_apriori
           endif
-          
+
           ! If solar parameters are retrieved, update the solar shift and stretch from the
           ! state vector. Otherwise the values stay at 0/1 respectively.
           if (SV%num_solar_shift == 1) this_solar_shift = SV%svsv(SV%idx_solar_shift(1))
@@ -2272,7 +2304,7 @@ contains
 
           solar_unscaled(:) = this_solar(:,2)
           this_solar(:,2) = solar_tmp(:)
-          
+
           deallocate(solar_tmp)
        end if
 
@@ -2453,11 +2485,11 @@ contains
                      K_hi_stokes(:, SV%idx_solar_irrad_scale(i), 1))
              end do
           case default
-               call logger%error(fname, "Solar irradiance scaling Jacobian not implemented " &
+             call logger%error(fname, "Solar irradiance scaling Jacobian not implemented " &
                   // "for RT Model: " // CS_win%RT_model%chars())
-               stop 1
-            end select
-         end if
+             stop 1
+          end select
+       end if
 
 
        ! -------------------------------------------------------------
@@ -2538,6 +2570,8 @@ contains
        ! Allocate ILS stretch factor (pixel dependent)
        allocate(this_ILS_stretch(N_spec))
        this_ILS_stretch(:) = 0.0d0
+
+
        ! Build the ILS stretch polynomial
        if (SV%num_ils_stretch > 0) then
           do i=1, N_spec
@@ -2546,16 +2580,26 @@ contains
                      + (dble(i - center_pixel) ** (j-1) * SV%svsv(SV%idx_ils_stretch(j)))
              end do
           end do
+       else
+          if (allocated(CS_win%ils_stretch_prior)) then
+             ! If we have a user-supplied prior, use them here instead
+             do i=1, N_spec
+                do j=1, size(CS_win%ils_stretch_prior)
+                   this_ILS_stretch(i) = this_ILS_stretch(i) &
+                        + (dble(i - center_pixel) ** (j-1) * CS_win%ils_stretch_prior(j))
+                end do
+             end do
+          end if
        end if
 
        ! Allocate the CURRENTLY USED ILS wavelength array
        allocate(this_ILS_delta_lambda(size(ils_delta_lambda, 1), N_spec))
        this_ILS_delta_lambda(:,:) = ils_delta_lambda(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band)
 
-       ! If we retrieve an ILS stretch, then apply the stretch factor to the ILS
-       ! delta lambda data here.
+       ! If we retrieve an ILS stretch, or have a user-supplied prior,
+       ! then apply the stretch factor to the ILS delta lambda data here.
 
-       if (SV%num_ils_stretch > 0) then
+       if ((SV%num_ils_stretch > 0) .or. allocated(CS_win%ils_stretch_prior)) then
           do i=1, N_spec
              this_ILS_delta_lambda(:,i) = this_ILS_delta_lambda(:,i) * this_ILS_stretch(i)
           end do
@@ -2817,21 +2861,21 @@ contains
                 !
                 ! Even though this is calculated just before the GAS OD portion, we
                 ! need to have the final SV update to work into the final XGAS.
-                this_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
-                prior_vmr_profile(:,j) = scn%atm%gas_vmr(:,j)
+                this_vmr_profile(:, j) = scn%atm%gas_vmr(:, j)
+                prior_vmr_profile(:, j) = scn%atm%gas_vmr(:, j)
 
                 do i=1, SV%num_gas
                    if (SV%gas_idx_lookup(i) == j) then
 
                       ! Finally, apply the scaling factor to the corresponding
                       ! sections of the VMR profile.
-                      this_vmr_profile(s_start(i):s_stop(i),j) = &
-                           this_vmr_profile(s_start(i):s_stop(i),j) &
-                           * SV%svsv(SV%idx_gas(i,1))
+                      this_vmr_profile(s_start(i):s_stop(i), j) = &
+                           this_vmr_profile(s_start(i):s_stop(i), j) &
+                           * SV%svsv(SV%idx_gas(i, 1))
 
-                      prior_vmr_profile(s_start(i):s_stop(i),j) = &
-                           prior_vmr_profile(s_start(i):s_stop(i),j) &
-                           * SV%svap(SV%idx_gas(i,1))
+                      prior_vmr_profile(s_start(i):s_stop(i), j) = &
+                           prior_vmr_profile(s_start(i):s_stop(i), j) &
+                           * SV%svap(SV%idx_gas(i, 1))
 
                    end if
                 end do
@@ -2849,18 +2893,20 @@ contains
                 call pressure_weighting_function( &
                      scn%atm%p(1:num_active_levels), &
                      scn%atm%psurf, &
-                     this_vmr_profile(1:num_active_levels,j), &
-                     pwgts)
+                     this_vmr_profile(1:num_active_levels, j), &
+                     pwgts(1:num_active_levels))
 
                 ! Save the associated pressure weights for the retrieved gas
-                results%pwgts(i_fp, i_fr, j, 1:num_active_levels) = pwgts(:)
+                results%pwgts(i_fp, i_fr, j, 1:num_active_levels) = pwgts(1:num_active_levels)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) = dot_product( &
-                     pwgts(:), this_vmr_profile(1:num_active_levels, j) &
+                     pwgts(1:num_active_levels), &
+                     this_vmr_profile(1:num_active_levels, j) &
                      )
 
                 ! Repeat this section again for the prior gas
+                ! 
                 ! ------
                 ! Based on the prior VMR profile
                 call pressure_weighting_function( &
@@ -2871,7 +2917,8 @@ contains
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas_prior(i_fp, i_fr, j) = dot_product( &
-                     pwgts(:), prior_vmr_profile(1:num_active_levels, j) &
+                     pwgts(1:num_active_levels), &
+                     prior_vmr_profile(1:num_active_levels, j) &
                      )
 
              end do

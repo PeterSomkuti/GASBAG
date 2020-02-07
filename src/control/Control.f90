@@ -110,6 +110,8 @@ module control_mod
      double precision, allocatable :: dispersion_cov(:)
      !> Number of ILS coefficients to be retrieved
      integer :: ils_stretch_order
+     !> ILS stretch prior value
+     double precision, allocatable :: ils_stretch_prior(:)
      !> ILS perturbation value for Jacobians
      double precision, allocatable :: ils_stretch_pert(:)
      !> ILS prior covariance value
@@ -876,6 +878,15 @@ contains
 
           call fini_extract(fini, win_str, 'ils_stretch_order', .false., fini_int)
           CS%window(window_nr)%ils_stretch_order = fini_int
+
+          call fini_extract(fini, win_str, 'ils_stretch_prior', .false., fini_val_array)
+          if (allocated(fini_val_array)) then
+             allocate(CS%window(window_nr)%ils_stretch_prior(size(fini_val_array)))
+             do i=1, size(fini_val_array)
+                CS%window(window_nr)%ils_stretch_prior(i) = fini_val_array(i)
+             end do
+             deallocate(fini_val_array)
+          end if
 
           call fini_extract(fini, win_str, 'ils_stretch_perturbation', .false., fini_val_array)
           if (allocated(fini_val_array)) then

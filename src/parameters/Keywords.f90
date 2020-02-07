@@ -209,6 +209,8 @@ contains
        valid_options(this_idx,43) = "gasbag_priors"
        ! Solar irradiance scaling
        valid_options(this_idx,44) = "solar_irrad_scale_order"
+       ! ILS stretch parameter priors
+       valid_options(this_idx,45) = "ils_stretch_prior"
 
     end do
 

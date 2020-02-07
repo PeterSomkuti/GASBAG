@@ -238,14 +238,14 @@ contains
     integer :: i, j, i_fp, i_fr, i_win, band
     ! Thread number for openMP
     integer :: this_thread
-    ! Retrieval count
-    integer :: retr_count, total_number_todo
     ! Return value of physical_fm, tells us whether this one has converged or not
     logical :: this_converged
     ! Number of iterations used by physical_fm
     integer :: this_iterations
+    integer :: retr_count
+    integer :: total_number_todo
     ! CPU time stamps and mean duration for performance analysis
-    double precision :: cpu_time_start, cpu_time_stop, mean_duration
+    double precision :: cpu_time_start, cpu_time_stop
     integer :: frame_start, frame_skip, frame_stop
 
     double precision, allocatable :: land_fraction(:,:)
@@ -663,10 +663,8 @@ contains
        ! retr_count keeps track of the number of retrievals processed
        ! so far, and the mean_duration keeps track of the average
        ! processing time.
-       retr_count = 0
        total_number_todo = (num_fp * frame_stop / frame_skip) / &
             (CS%window(i_win)%frame_skip * CS%window(i_win)%footprint_skip)
-       mean_duration = 0.0d0
 
 
        ! If the user wants to run in step-through mode, then that decision takes
@@ -698,7 +696,7 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       !frame_start = 685
+       !frame_start = 2547
        !frame_stop = 700
 
        ! For OpenMP, we set some private and shared variables, as well as set the
@@ -709,7 +707,11 @@ contains
        ! earlier (less total iterations to process) and will then just sit idle, whereas
        ! those threads can be assigned new soundings with dynamic scheduling.
 
-       !$OMP PARALLEL DO SHARED(retr_count, mean_duration, CS) SCHEDULE(guided) &
+       retr_count = 0
+       total_number_todo = num_frames * num_fp
+
+       !$OMP PARALLEL DO SHARED(CS, retr_count, total_number_todo) &
+       !$OMP SCHEDULE(dynamic) &
        !$OMP PRIVATE(i_fp, i_fr, &
        !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
@@ -743,7 +745,8 @@ contains
                   )
              ! ---------------------------------------------------------------------
 
-
+             retr_count = retr_count + 1
+             
 #ifdef _OPENMP
              cpu_time_stop = omp_get_wtime()
 #else
@@ -752,23 +755,14 @@ contains
              ! Calculate the retrieval duration time
              results%processing_time(i_fp, i_fr) = cpu_time_stop - cpu_time_start
 
+             write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
+                  "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
+                  dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
+                  results%processing_time(i_fp, i_fr), " sec. - Converged: ", &
+                  this_converged, ", # Iterations: ", this_iterations
 
+             call logger%info(fname, trim(tmp_str))
 
-             ! Increase the rerival count tracker and compute the average processing
-             ! time per retrieval.
-             retr_count = retr_count + 1
-             mean_duration = mean_duration * (retr_count)/(retr_count+1) + &
-                  (cpu_time_stop - cpu_time_start) / (retr_count+1)
-
-             if (mod(retr_count, 1) == 0) then
-                write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
-                     "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
-                     dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
-                     results%processing_time(i_fp, i_fr), " sec. - Converged: ", &
-                     this_converged, ", # Iterations: ", this_iterations
-
-                call logger%info(fname, trim(tmp_str))
-             end if
 
           end do
        end do
@@ -1097,6 +1091,9 @@ contains
     double precision :: cpu_conv_start, cpu_conv_stop
     double precision :: cpu_gas_start, cpu_gas_stop
     double precision :: cpu_iter_start, cpu_iter_stop
+
+    ! BLAS
+    double precision, external :: ddot
 
     ! ----------
     !
@@ -1697,6 +1694,12 @@ contains
 
           ! Obtain the number of active levels.
           call calculate_active_levels(scn)
+
+          if (scn%num_active_levels > scn%num_levels) then
+             call logger%error(fname, "Number of active levels > number of levels.")
+             return
+          end if
+
           num_active_levels = scn%num_active_levels
 
           ! Should SH drop below 0 for whatever reason, shift it back
@@ -2248,8 +2251,12 @@ contains
                scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate
                radiance_calc_work_hi_stokes, & ! Results
-               dI_dgas, dI_dsurf, dI_dTemp, dI_dAOD, dI_dAHeight, & ! Jacobian results
-               xrtm_success &
+               dI_dgas, &  ! Jacobian results
+               dI_dsurf, &  ! Jacobian results
+               dI_dTemp, &  ! Jacobian results
+               dI_dAOD, &  ! Jacobian results
+               dI_dAHeight, & ! Jacobian results
+               xrtm_success & ! Jacobian results
                )
 
           ! If XRTM failed, no need to continue and move on to next retrieval.
@@ -2731,7 +2738,8 @@ contains
           end if
 
           ! This here updates the AP essentially, so the next step launches from the
-          ! last iteration's result.
+          ! last iteration's result. This is contrary as CF's IMAP, which has the
+          ! difference between this SV and the first guess / prior
           tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
                radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - old_sv))
 
@@ -2801,7 +2809,9 @@ contains
        end if
 
        ! Check delta sigma square for this iteration
-       dsigma_sq = dot_product(old_sv - SV%svsv, matmul(Shat_inv, old_sv - SV%svsv))
+       dsigma_sq = ddot(N_sv, &
+            old_sv - SV%svsv, 1, &
+            matmul(Shat_inv, old_sv - SV%svsv), 1)
 
        ! Calculate the chi2 of this iteration
        this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
@@ -2846,11 +2856,12 @@ contains
              ! We also want to have the corresponding number of molecules of dry air
              ! for the various sections of the atmopshere.
              results%ndry(i_fp, i_fr) = sum(scn%atm%ndry)
-
-             ! Allocate array for pressure weights
-             allocate(pwgts(num_active_levels))
-
+            
              do j=1, CS_win%num_gases
+
+                ! Allocate array for pressure weights
+                if (allocated(pwgts)) deallocate(pwgts)
+                allocate(pwgts(num_active_levels))
 
                 ! Skip this gas is not retrieved
                 if (.not. CS_win%gas_retrieved(j)) cycle
@@ -2889,20 +2900,24 @@ contains
                 results%pressure_levels(i_fp, i_fr, 1:num_active_levels) = &
                      scn%atm%p(1:num_active_levels)
 
+
                 ! Based on this 'current' retrieved VMR profile
                 call pressure_weighting_function( &
-                     scn%atm%p(1:num_active_levels), &
+                     num_active_levels, &
+                     scn%atm%p, &
                      scn%atm%psurf, &
-                     this_vmr_profile(1:num_active_levels, j), &
-                     pwgts(1:num_active_levels))
-
-                ! Save the associated pressure weights for the retrieved gas
-                results%pwgts(i_fp, i_fr, j, 1:num_active_levels) = pwgts(1:num_active_levels)
+                     this_vmr_profile(:, j), &
+                     pwgts)
+                
+                do i = 1, num_active_levels
+                   results%pwgts(i_fp, i_fr, j, i) = pwgts(i)
+                end do
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
-                results%xgas(i_fp, i_fr, j) = dot_product( &
-                     pwgts(1:num_active_levels), &
-                     this_vmr_profile(1:num_active_levels, j) &
+                results%xgas(i_fp, i_fr, j) = ddot( &
+                     num_active_levels, &
+                     pwgts, 1, &
+                     this_vmr_profile(:, j), 1 &
                      )
 
                 ! Repeat this section again for the prior gas
@@ -2910,34 +2925,41 @@ contains
                 ! ------
                 ! Based on the prior VMR profile
                 call pressure_weighting_function( &
-                     scn%atm%p(1:num_active_levels), &
+                     num_active_levels, &
+                     scn%atm%p, &
                      scn%atm%psurf, &
-                     prior_vmr_profile(1:num_active_levels,j), &
+                     prior_vmr_profile(:, j), &
                      pwgts)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
-                results%xgas_prior(i_fp, i_fr, j) = dot_product( &
-                     pwgts(1:num_active_levels), &
-                     prior_vmr_profile(1:num_active_levels, j) &
+                results%xgas_prior(i_fp, i_fr, j) = ddot( &
+                     num_active_levels, &
+                     pwgts, 1, &
+                     prior_vmr_profile(:, j), 1 &
                      )
 
              end do
 
-             deallocate(pwgts)
 
              if (CS%output%gas_averaging_kernels) then
                 ! Averaging kernels for gases are computationally slightly costly,
                 ! thus we skip this part if not requested.
 
-                call calculate_BL_scale_AK_corr(&
-                     radiance_calc_work_hi(:), scn, SV, &
+                call calculate_BL_scale_AK_corr( &
+                     radiance_calc_work_hi(:), &
+                     scn, &
+                     SV, &
                      gain_matrix(:,:), &
                      this_ILS_delta_lambda(:,:), &
                      ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
                      this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-                     scn%atm%psurf, num_active_levels, N_spec, &
-                     s_start, s_stop, &
-                     results%col_ak(i_fp, i_fr, :, :))
+                     scn%atm%psurf, &
+                     num_active_levels, &
+                     N_spec, &
+                     s_start, &
+                     s_stop, &
+                     results%col_ak(i_fp, i_fr, :, :) &
+                     )
              end if
 
           end if
@@ -2980,9 +3002,12 @@ contains
 
           if (CS%output%save_radiances) then
              ! Save the radiances and noises - if required by the user
-             final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_calc_work(:)
-             measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = radiance_meas_work(:)
-             noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = noise_work(:)
+             final_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = &
+                  radiance_calc_work(:)
+             measured_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = &
+                  radiance_meas_work(:)
+             noise_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = &
+                  noise_work(:)
              wavelength_radiance(l1b_wl_idx_min:l1b_wl_idx_max, i_fp, i_fr) = &
                   this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max)
           end if

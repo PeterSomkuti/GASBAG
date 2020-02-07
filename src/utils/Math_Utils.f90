@@ -2,9 +2,10 @@
 !> @file math_utils.f90
 !> @author Peter Somkuti
 !>
-!! Here we collect 'math-y' utils/subroutines that are used by
-!! various other modules, i.e. calculation of a mean, std or the
-!! chi2.
+!> @details
+!> Here we collect 'math-y' utils/subroutines that are used by
+!> various other modules, i.e. calculation of a mean, std or the
+!> chi2.
 
 module math_utils_mod
 
@@ -12,7 +13,7 @@ module math_utils_mod
   use logger_mod, only: logger => master_logger
 
   ! System modules
-  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan
+  use, intrinsic :: ieee_arithmetic, only: ieee_is_nan, ieee_value, ieee_quiet_nan
   use :: iso_fortran_env
 
   implicit none
@@ -37,9 +38,6 @@ module math_utils_mod
 
 
 contains
-
-
-
 
 
   !> @brief Calculates reduced CHI2 statistic for two spectra
@@ -84,33 +82,36 @@ contains
 
   !> @brief Calculates the O'Dell-ian pressure weighting function
   !
+  !> @param N Number of active levels
   !> @param p_levels Pressure level array
   !> @param psurf Surface pressure
   !> @param vrms Volume mixing ratio array for this gas
   !> @param pwgts Pressure weights
   !
   !> @details For details of the calculation go and read O'Dell et al. (2012 ACOS paper)
-  subroutine pressure_weighting_function(p_levels, psurf, vmrs, pwgts)
+  subroutine pressure_weighting_function(N, p_levels, psurf, vmrs, pwgts)
     implicit none
+    integer, intent(in) :: N
     double precision, intent(in) :: p_levels(:)
     double precision, intent(in) :: psurf
     double precision, intent(in) :: vmrs(:)
     double precision, intent(inout) :: pwgts(:)
 
     ! Loop and size variables
-    integer :: i, N
+    integer :: i
     ! H-prime, c-bar and delta pressure
     double precision, allocatable :: hp(:), cbar(:), dp(:)
     ! Interpolation factors
     double precision :: f, fs
 
-    N = size(p_levels)
+    pwgts(:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
+
+    if (size(pwgts) /= N) return
 
     ! First, calculate h-prime (Equation A4 in O'Dell 2012)
     allocate(hp(N-1))
     allocate(cbar(N-1))
     allocate(dp(N-1))
-
 
     do i=1, N-1
        ! Loop over levels starting from top down to
@@ -137,7 +138,7 @@ contains
           pwgts(i) = f * hp(i-1) + (1.0d0 - fs * f) * hp(i)
        else if (i == N) then
           pwgts(i) = fs * f * hp(i-1)
-       else
+       else if ((i > 1) .and. (i < N - 1)) then
           pwgts(i) = f * hp(i-1) + (1.0d0 - f) * hp(i)
        end if
 
@@ -166,7 +167,9 @@ contains
     implicit none
 
     integer, intent(in) :: nd, ni
-    double precision, intent(in) :: xd(nd), yd(nd), xi(ni)
+    double precision, intent(in) :: xd(nd)
+    double precision, intent(in) :: yd(nd)
+    double precision, intent(in) :: xi(ni)
     double precision, intent(inout) :: yi(ni)
 
     double precision :: fac
@@ -176,8 +179,12 @@ contains
     do i=1, ni
 
        if (xi(i) <= xd(1)) then
+          ! Edge case - if smaller than smallest data point,
+          ! set to that value.
           yi(i) = yd(1)
        else if (xi(i) >= xd(nd)) then
+          ! Edge case - if larger than largest data point,
+          ! set to that value.
           yi(i) = yd(nd)
        else
           do d=last_d, nd-1
@@ -237,7 +244,7 @@ contains
        ! integer division does by default.
        m = (L + R) / 2
 
-       if (m == size(x)) then
+       if (m >= size(x) - 1) then
           idx = m
           return
        end if
@@ -376,15 +383,15 @@ contains
             wl_kernels_absolute(N_ils_pix, idx_pix), &
             user_L=idx_hires_ILS_min)
 
-       !if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
-       !   call logger%error(fname, "idx_hires_ILS_min out of bounds.")
-       !   return
-       !end if
+       if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
+          call logger%error(fname, "idx_hires_ILS_min out of bounds.")
+          return
+       end if
 
-       !if ((idx_hires_ILS_max < 1) .or. (idx_hires_ILS_max > size(wl_input))) then
-       !   call logger%error(fname, "idx_hires_ILS_max out of bounds.")
-       !   return
-       !end if
+       if ((idx_hires_ILS_max < 1) .or. (idx_hires_ILS_max > size(wl_input))) then
+          call logger%error(fname, "idx_hires_ILS_max out of bounds.")
+          return
+       end if
 
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min + 1
 

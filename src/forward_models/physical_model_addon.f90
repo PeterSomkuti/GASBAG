@@ -324,6 +324,13 @@ contains
     character(len=99) :: tmp_str
     integer :: i
 
+    ! If surface pressure exceeds atmospheric set-up,
+    ! set it to -1 and return.
+    if (scn%atm%psurf > scn%atm%p(size(scn%atm%p))) then
+       scn%num_active_levels = -1
+       return
+    end if
+
     ! Counting from TOA down to BOA, the layer for which
     ! psurf is located in, is the last layer - hence the
     ! lower boundary of that layer is considered the last

@@ -11,7 +11,7 @@ if (required .and. (.not. found_option)) then
 end if
 
 if ((.not. required) .and. (.not. found_option)) then
-    call logger%info(fname, "'" // trim(option_name) // "' not found in " &
+    call logger%debug(fname, "'" // trim(option_name) // "' not found in " &
                              // trim(section_name) // " (not required)")
     return
 end if

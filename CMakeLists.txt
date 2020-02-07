@@ -41,13 +41,15 @@ configure_file(
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
-  if (CMAKE_Fortran_COMPILER_VERSION VERSION_LESS 8.0)
-      message(FATAL_ERROR "gfortran version must be at least 8.0!")
+  if (CMAKE_Fortran_COMPILER_VERSION VERSION_EQUAL 8.2)
+      message(FATAL_ERROR "gfortran version must be 8.2! 9.2 produces problems!")
   else()
       message(STATUS "gfortran version is sufficcient!")
   endif()
 
-  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512")
+  # MCMODEL LARGE MUST BE TURNED ON!
+  # OTHERWISE YOU GET STRANGE ERRORS IN AN OPENMP ENVIRONMENT
+  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512 -mcmodel=large")
 
   # Make OpenMP conditional
   if(USE_OPENMP)
@@ -59,8 +61,8 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
   # have to turn those warnings off.
   #set(warnings "-Wall -Wextra -Wpedantic -Wno-uninitialized")
   set(warnings "-Wall -Wextra -Wpedantic")
-  set(opt "-O2 -mfpmath=sse -mtune=native -march=native")
-  set(debug "-O0 -g3 -fcheck=all -fbacktrace -fno-omit-frame-pointer")
+  set(opt "-O2 -mtune=native -march=native")
+  set(debug "-Og -g3 -fcheck=all -fbacktrace -fno-omit-frame-pointer")
   set(profile "-Og -pg -fbacktrace -fprofile-generate --coverage")
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")

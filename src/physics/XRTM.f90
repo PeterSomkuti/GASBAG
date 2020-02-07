@@ -54,7 +54,7 @@ contains
     character(len=*), parameter :: fname = "setup_XRTM"
 
     type(string) :: tmp_str
-    integer :: i, j
+    integer :: i
     integer :: num_solvers
 
     success = .false.
@@ -458,7 +458,6 @@ contains
 
           call XRTM_monochromatic( &
                xrtm, &
-               xrtm_solvers(i), &
                xrtm_n_derivs, &
                scn, &
                SV, &
@@ -550,7 +549,6 @@ contains
   !> @brief Calculates radiances and weighting functions for all wavelengths in the band
   subroutine XRTM_monochromatic( &
        xrtm, &
-       xrtm_solver, &
        n_derivs, &
        scn, &
        SV, &
@@ -562,7 +560,6 @@ contains
        success)
 
     type(xrtm_type), intent(inout) :: xrtm
-    integer, intent(in) :: xrtm_solver
     integer, intent(in) :: n_derivs
     type(scene), intent(in) :: scn
     type(statevector), intent(in) :: SV
@@ -916,9 +913,7 @@ contains
 
     double precision :: wl_fac
     integer :: N_spec
-    integer :: i,l,m,q
-
-    integer :: funit
+    integer :: i, q
 
     double precision :: cpu_start, cpu_end
     double precision :: cpu_start2, cpu_end2

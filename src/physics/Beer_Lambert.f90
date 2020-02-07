@@ -249,10 +249,11 @@ contains
 
          ! Calculate pressure weights for the prior VMR / column
          call pressure_weighting_function( &
+              num_active_levels, &
               scn%atm%p(1:num_active_levels), &
               psurf, &
-              prior_VMR(:), &
-              pwgts)
+              prior_VMR(1:num_active_levels), &
+              pwgts(1:num_active_levels))
 
          AK_profile_total(:) = 0.0d0
          do i_SV=1, SV%num_gas

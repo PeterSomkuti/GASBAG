@@ -45,7 +45,7 @@ contains
   !> @param array2 The other spectrum
   !> @param std_dev Standard deviation / noise per pixel
   !> @param dof Degrees of freedom (number of SV elements - 1 usually)
-  pure function calculate_chi2(array1, array2, std_dev, dof) result(chi2)
+  function calculate_chi2(array1, array2, std_dev, dof) result(chi2)
     implicit none
     double precision, intent(in) :: array1(:), array2(:), std_dev(:)
     integer, intent(in) :: dof
@@ -59,7 +59,7 @@ contains
   !> @brief Simple function to calculate the mean for double-precision arrays
   !> @param array Array you want the mean of
   !> @param mean_value Arithmetic mean of array
-  pure function mean(array) result(mean_value)
+  function mean(array) result(mean_value)
     implicit none
     double precision, intent(in) :: array(:)
     double precision :: mean_value
@@ -70,7 +70,7 @@ contains
   !> @brief Simple function to calculate the standard deviation for double-precision arrays
   !> @param array Array you want the std of
   !> @param std_value (Unbiased) standard deviation of array (Bessel correction)
-  pure function std(array) result(std_value)
+  function std(array) result(std_value)
     implicit none
     double precision, intent(in) :: array(:)
     double precision :: mean_value, std_value

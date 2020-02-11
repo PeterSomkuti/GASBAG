@@ -130,7 +130,7 @@ contains
     type(scene), intent(inout) :: scn
     integer, intent(in) :: i_win
     type(CS_window_t), intent(in) :: CS_win
-    type(CS_aerosol_t), intent(inout) :: CS_aerosol(:)
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     ! Local
     character(len=*), parameter :: fname = "aerosol_init"
     character(len=999) :: tmp_str
@@ -260,7 +260,7 @@ contains
 
     type(statevector), intent(in) :: SV
     type(CS_window_t), intent(in) :: CS_win
-    type(CS_aerosol_t), intent(inout) :: CS_aerosol(:)
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(scene), intent(inout) :: scn
     class(generic_aerosol), intent(inout) :: scn_aer(:)
 

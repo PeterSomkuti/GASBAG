@@ -180,7 +180,7 @@ contains
     integer :: n_aer
     integer :: n_layer
     integer :: n_pfmom
-    integer :: a, l, p, i, k
+    integer :: a, l, p, i
     integer :: aer_idx
     integer :: aer_sv_idx
     integer :: l_aero_idx
@@ -189,7 +189,6 @@ contains
 
     double precision :: fac
     double precision :: denom
-    double precision, allocatable :: aer_height_sum(:,:)
     double precision :: this_aero_height
     double precision, allocatable :: ray_coef(:,:)
     double precision, allocatable :: aerpmom(:,:,:,:)
@@ -465,14 +464,14 @@ contains
     implicit none
 
     ! In/Out variables
-    double precision, intent(in) :: gdlat   ! geodetic latitude [degrees]
-    double precision, intent(in) :: altit   ! geometric altitude [meters]
+    double precision, intent(in) :: gdlat ! geodetic latitude [degrees]
+    double precision, intent(in) :: altit ! geometric altitude [meters]
     double precision :: gravity ! gravitational acceleration [m/s^2]
 
     ! Local Variables
     double precision :: radius        ! radial distance (metres)
     double precision :: gclat         ! geocentric latitude [radians]
-    double precision :: ff, hh, ge       ! scratch variables
+    double precision :: ff, hh, ge    ! scratch variables
 
     ! Parameters
     ! Gravitational constant times Earth's Mass (m3/s2)
@@ -1040,10 +1039,8 @@ contains
     ! Another temporary string
     type(string) :: lower_str
     ! Containers for 1d, 2d, 3d, and 4d output array dimensions
-    integer(hsize_t) :: out_dims1d(1)
     integer(hsize_t) :: out_dims2d(2)
     integer(hsize_t) :: out_dims3d(3)
-    integer(hsize_t) :: out_dims4d(4)
     ! How many SV elements do we have?
     integer :: N_SV
     ! Loop variable

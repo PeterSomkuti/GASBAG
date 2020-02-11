@@ -696,8 +696,8 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       !frame_start = 2547
-       !frame_stop = 700
+       ! frame_start = 100
+       ! frame_stop = 150
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -710,8 +710,8 @@ contains
        retr_count = 0
        total_number_todo = num_frames * num_fp
 
-       !$OMP PARALLEL DO SHARED(CS, retr_count, total_number_todo) &
-       !$OMP SCHEDULE(dynamic) &
+       !$OMP PARALLEL DO SHARED(retr_count, total_number_todo) &
+       !$OMP SCHEDULE(dynamic, num_fp) &
        !$OMP PRIVATE(i_fp, i_fr, &
        !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
@@ -727,10 +727,10 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-             !if (land_fraction(i_fp, i_fr) == 0.0d0) then
-             !  call logger%debug(fname, "Skipping water scene.")
-             !   cycle
-             !end if
+             if (land_fraction(i_fp, i_fr) < 99.0d0) then
+               call logger%debug(fname, "Skipping water scene.")
+                cycle
+             end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -877,7 +877,7 @@ contains
     integer, intent(in) :: i_fp
     integer, intent(in) :: band
     integer, intent(in) :: i_win
-    type(CS_t), intent(inout) :: CS
+    type(CS_t), intent(in) :: CS
     integer, intent(inout) :: this_iterations
     logical :: converged
 
@@ -969,8 +969,8 @@ contains
     ! ----------------
     ! Number of gases, total levels, and number of active levels
     ! (changes with surface pressure)
-    integer :: num_levels = -1
-    integer :: num_active_levels = -1
+    integer :: num_levels
+    integer :: num_active_levels
 
     ! Per-iteration-and-per-gas VMR profile for OD calculation (level)
     double precision, allocatable :: this_vmr_profile(:,:)
@@ -1058,12 +1058,12 @@ contains
     ! Chi2-related variables. Chi2 of last and this current iteration,
     ! chi2 calculated from a linear prediction, and the chi2 ratio needed
     ! to adjust lm_gamma and determine a divergent step.
-    double precision :: old_chi2 = -1.0
-    double precision :: this_chi2 = -1.0
-    double precision :: linear_prediction_chi2 = -1.0
-    double precision :: chi2_ratio = -1.0
-    double precision :: chi2_rel_change = -1.0
-    double precision :: last_successful_chi2 = -1.0
+    double precision :: old_chi2
+    double precision :: this_chi2
+    double precision :: linear_prediction_chi2
+    double precision :: chi2_ratio
+    double precision :: chi2_rel_change
+    double precision :: last_successful_chi2
 
     ! Iteration-related
     ! Current iteration number (starts at 1), number of divergent steps allowed.
@@ -1106,6 +1106,9 @@ contains
 
     ! Grab a copy of the state vector for local use
     SV = global_SV
+
+    num_levels = -1
+    num_active_levels = -1
 
     ! Take a local copy of the HDF file ID handlers
     l1b_file_id = CS%input%l1b_file_id
@@ -1306,6 +1309,12 @@ contains
          "Lon.: ", scn%lon, &
          " Lat.: ", scn%lat, &
          " Alt.: ", scn%alt
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, F15.2, A)") "MET surface pressure: ", met_psurf(i_fp, i_fr), " Pa"
+    call logger%debug(fname, trim(tmp_str))
+
+    write(tmp_str, "(A, 4F8.2)") "Stokes coefficients for this scene: ", stokes_coef(:, i_fp, i_fr)
     call logger%debug(fname, trim(tmp_str))
 
     ! -------------------------------------------------------
@@ -1524,18 +1533,16 @@ contains
        ! If the user provides a prior ILS stretch factor, we
        ! can insert them here as prior. However that only makes
        ! sense if the order is the same.
-       if (allocated(CS_win%ils_stretch_prior)) then
-          if (size(CS_win%ils_stretch_prior) /= SV%num_ils_stretch) then
-             write(tmp_str, '(A, G0.1, A, G0.1)') "You provded ILS stretch priors of order ", &
-                  size(CS_win%ils_stretch_prior), " but the state vector is set to order ", &
+       if (allocated(CS_win%ils_stretch_prior_0)) then
+          if (SV%num_ils_stretch < 1) then
+             write(tmp_str, '(A, G0.1, A, G0.1)') "You provded ILS stretch priors of order 0", &
+                  " but the state vector is set to order ", &
                   SV%num_ils_stretch
              call logger%fatal(fname, trim(tmp_str))
              stop 1
           else
-             ! Slot them all in
-             do i = 1, SV%num_ils_stretch
-                SV%svap(SV%idx_ils_stretch(i)) = CS_win%ils_stretch_prior(i)
-             end do
+             ! Slot the corresponding value in
+             SV%svap(SV%idx_ils_stretch(1)) = CS_win%ils_stretch_prior_0(i_fp)
           end if
        else
           ! Otherwise, just set the first coefficient to 1.0d0, i.e. no stretch
@@ -1628,6 +1635,9 @@ contains
           iteration = iteration + 1
        end if
 
+
+       write(tmp_str, '(A, G0.1)') "Current iteration number: ", iteration
+       call logger%debug(fname, trim(tmp_str))
        ! Copy over the initial atmosphere, but only if an atmosphere
        ! actually exists
 
@@ -1735,7 +1745,6 @@ contains
              return
           end if
 
-
        else
 
           ! If we don't do gases, just set this variable to zero, mainly to avoid
@@ -1769,12 +1778,13 @@ contains
           results%sv_prior(i_fp, i_fr, :) = SV%svap
           last_successful_sv(:) = SV%svap
           old_sv(:) = SV%svap
-
+          
        else
           ! This is not the very first iteration!
 
           ! Save the old state vector (iteration - 1'st state vector)
           if (divergent_step) then
+             call logger%debug(fname, "Last iteration a divergent step!")
              old_chi2 = last_successful_chi2
              old_sv(:) = last_successful_sv(:)
              SV%svsv(:) = old_sv(:)
@@ -2568,6 +2578,7 @@ contains
        end select
 
        allocate(Se_inv(N_spec, N_spec))
+
        ! Inverse noise covariance, we keep it diagonal, as usual
        Se_inv(:,:) = 0.0d0
        do i=1, N_spec
@@ -2578,7 +2589,6 @@ contains
        allocate(this_ILS_stretch(N_spec))
        this_ILS_stretch(:) = 0.0d0
 
-
        ! Build the ILS stretch polynomial
        if (SV%num_ils_stretch > 0) then
           do i=1, N_spec
@@ -2588,13 +2598,22 @@ contains
              end do
           end do
        else
-          if (allocated(CS_win%ils_stretch_prior)) then
+          if (allocated(CS_win%ils_stretch_prior_0) .or. &
+               allocated(CS_win%ils_stretch_prior_1)) then
+
              ! If we have a user-supplied prior, use them here instead
              do i=1, N_spec
-                do j=1, size(CS_win%ils_stretch_prior)
+
+                if (allocated(CS_win%ils_stretch_prior_0)) then
                    this_ILS_stretch(i) = this_ILS_stretch(i) &
-                        + (dble(i - center_pixel) ** (j-1) * CS_win%ils_stretch_prior(j))
-                end do
+                        * CS_win%ils_stretch_prior_0(i_fp)
+                end if
+
+                if (allocated(CS_win%ils_stretch_prior_1)) then
+                   this_ILS_stretch(i) = this_ILS_stretch(i) &
+                        + (dble(i - center_pixel) * CS_win%ils_stretch_prior_1(i_fp))
+                end if
+
              end do
           end if
        end if
@@ -2606,7 +2625,9 @@ contains
        ! If we retrieve an ILS stretch, or have a user-supplied prior,
        ! then apply the stretch factor to the ILS delta lambda data here.
 
-       if ((SV%num_ils_stretch > 0) .or. allocated(CS_win%ils_stretch_prior)) then
+       if ((SV%num_ils_stretch > 0) .or. &
+            allocated(CS_win%ils_stretch_prior_0) .or. &
+            allocated(CS_win%ils_stretch_prior_1)) then
           do i=1, N_spec
              this_ILS_delta_lambda(:,i) = this_ILS_delta_lambda(:,i) * this_ILS_stretch(i)
           end do
@@ -2803,6 +2824,9 @@ contains
        ! Calculate Shat from Shat_inverse
        call invert_matrix(Shat_inv, Shat, success_inv_mat)
 
+       ! Calculate the averaging kernel
+       AK(:,:) = matmul(Shat, KtSeK)
+
        if (.not. success_inv_mat) then
           call logger%error(fname, "Failed to invert Shat^-1")
           return
@@ -2819,6 +2843,16 @@ contains
 
        chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
 
+       write(tmp_str,*) "SV index, SV name, SV prior, SV last iteration, " &
+            // "SV current, SV delta, prior cov., posterior cov., diagonal of AK"
+       call logger%debug(fname, trim(tmp_str))
+
+       do i=1, N_sv
+          write(tmp_str, '(I3.1,A30,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
+               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
+               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i)), AK(i,i)
+          call logger%debug(fname, trim(tmp_str))
+       end do
 
        ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
@@ -2856,7 +2890,7 @@ contains
              ! We also want to have the corresponding number of molecules of dry air
              ! for the various sections of the atmopshere.
              results%ndry(i_fp, i_fr) = sum(scn%atm%ndry)
-            
+
              do j=1, CS_win%num_gases
 
                 ! Allocate array for pressure weights
@@ -2908,7 +2942,7 @@ contains
                      scn%atm%psurf, &
                      this_vmr_profile(:, j), &
                      pwgts)
-                
+
                 do i = 1, num_active_levels
                    results%pwgts(i_fp, i_fr, j, i) = pwgts(i)
                 end do
@@ -2966,9 +3000,7 @@ contains
 
           ! Save the final dSigma-squared value (in case anyone needs it)
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
-
-          ! Calculate the averaging kernel
-          AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! These should be the same
+          !matmul(gain_matrix, K) ! These should be the same
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
@@ -3243,9 +3275,18 @@ contains
 
        ! These quantities are all allocated within the iteration loop, and
        ! hence need explicit de-allocation.
-       deallocate(radiance_meas_work, radiance_calc_work, radiance_tmp_work, &
-            noise_work, Se_inv, K, gain_matrix, solar_irrad, &
-            this_ILS_stretch, this_ILS_delta_lambda)
+       deallocate( &
+            radiance_meas_work, &
+            radiance_calc_work, &
+            radiance_tmp_work, &
+            noise_work, &
+            Se_inv, &
+            K, &
+            gain_matrix, &
+            solar_irrad, &
+            this_ILS_stretch, &
+            this_ILS_delta_lambda &
+            )
 
        ! Deallocate scene optical property arrays
        call destroy_optical_properties(scn)

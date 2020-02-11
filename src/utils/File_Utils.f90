@@ -116,11 +116,20 @@ contains
 
     integer :: hdferr
     integer(hid_t) :: dset_id
+    character(len=999) :: tmp_str
     character(len=*), parameter :: fname = "read_5D_DP_dataset"
 
     if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+
+    if (size(dset_dims) /= 5) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 5 dimensions, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4), dset_dims(5)))
 
     call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
@@ -140,11 +149,20 @@ contains
 
     integer :: hdferr
     integer(hid_t) :: dset_id
+    character(len=999) :: tmp_str
     character(len=*), parameter :: fname = "read_4D_DP_dataset"
 
     if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+
+    if (size(dset_dims) /= 4) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 4 dimensions, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4)))
 
     call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
@@ -164,11 +182,20 @@ contains
 
     integer :: hdferr
     integer(hid_t) :: dset_id
+    character(len=999) :: tmp_str
     character(len=*), parameter :: fname = "read_3D_DP_dataset"
 
     if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+
+    if (size(dset_dims) /= 3) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 3 dimensions, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3)))
 
     call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
@@ -189,10 +216,18 @@ contains
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_2D_DP_dataset"
+    character(len=999) :: tmp_str
 
     if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+    if (size(dset_dims) /= 2) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 2 dimensions, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
     allocate(array(dset_dims(1), dset_dims(2)))
 
     call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
@@ -212,11 +247,20 @@ contains
 
     integer :: hdferr
     integer(hid_t) :: dset_id
+    character(len=999) :: tmp_str
     character(len=*), parameter :: fname = "read_1D_DP_dataset"
 
     if (allocated(array)) deallocate(array)
 
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+
+    if (size(dset_dims) /= 1) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 1 dimension, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
     allocate(array(dset_dims(1)))
 
     call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)

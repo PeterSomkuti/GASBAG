@@ -37,15 +37,16 @@ contains
 
 
   !> @brief Calculates extinction and depolarization due to Rayleigh scattering
-  !> @param wl Wavelenghts
+  !> @param wl Wavelengths
   !> @param p Pressure levels
   !> @param rayleigh_tau Rayleigh optical depth
   !> @param rayleigh_depolf Rayleigh depolarization factor
   !> @param co2 Optional CO2 VMR profile
-  subroutine calculate_rayleigh_tau(wl, p, rayleigh_tau, co2)
+  subroutine calculate_rayleigh_tau(wl, p, g, rayleigh_tau, co2)
 
     double precision, intent(in) :: wl(:)
     double precision, intent(in) :: p(:)
+    double precision, intent(in) :: g(:)
     double precision, optional, intent(in) :: co2(:)
     
     double precision, intent(inout) :: rayleigh_tau(:,:)
@@ -73,13 +74,13 @@ contains
 
           ! If we have the CO2 VMRs, we can adjust the value for the
           ! refractive index that is calculated at a reference of 300ppm
-          if (present(co2)) then
-             nCO2_1 = n300_1 * (1.0d0 + 0.54d0 * ((co2(j) + co2(j+1)) * 0.5d0 - 3.0d-4))
-             ns = 1.0d0 + nCO2_1
-          end if
+          !if (present(co2)) then
+          !   nCO2_1 = n300_1 * (1.0d0 + 0.54d0 * ((co2(j) + co2(j+1)) * 0.5d0 - 3.0d-4))
+          !   ns = 1.0d0 + nCO2_1
+          !end if
 
-          ray_sigma = (ns**2 - 1)**2 / (ns**2 + 2)**2 * 1.1471954d-24 * depolf / wl4
-          rayleigh_tau(i,j) = NA * ray_sigma * (p(j+1) - p(j)) / (9.81d0)
+          ray_sigma = (ns*ns - 1)**2 / (ns*ns + 2)**2 * (6.0d0 + 3.0d0 * depolf) / (6.0 - 7.0d0 * depolf)!* 1.1471954d-24 * depolf / wl4
+          rayleigh_tau(i,j) = NA * ray_sigma * (p(j+1) - p(j)) / (0.5d0 * (g(j+1) + g(j)))
 
        end do
     end do

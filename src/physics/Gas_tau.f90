@@ -331,9 +331,16 @@ contains
 
           if (log_scaling) this_p = exp(this_p)
 
-          this_CS_value = get_CS_value_at(pre_gridded, gas, &
-               N_wl, wl(1:N_wl), &
-               this_p, this_T, this_H2O, wl_left_indices(1:N_wl))
+          this_CS_value = get_CS_value_at( &
+               pre_gridded, &
+               gas, &
+               N_wl, &
+               wl(1:N_wl), &
+               this_p, &
+               this_T, &
+               this_H2O, &
+               wl_left_indices(1:N_wl) &
+               )
 
           if (is_H2O) then
              H2O_corr = 1.0d0
@@ -389,10 +396,16 @@ contains
 
              if (log_scaling) this_p_pert = exp(this_p_pert)
 
-             this_CS_value = get_CS_value_at(pre_gridded, gas, &
-                  N_wl, wl(1:N_wl), &
-                  this_p_pert, this_T_pert, &
-                  this_H2O_pert, wl_left_indices(1:N_wl))
+             this_CS_value = get_CS_value_at( &
+                  pre_gridded, &
+                  gas, &
+                  N_wl, &
+                  wl(1:N_wl), &
+                  this_p_pert, &
+                  this_T_pert, &
+                  this_H2O_pert, &
+                  wl_left_indices(1:N_wl) &
+                  )
 
              if (is_H2O) then
                 H2O_corr = 1.0d0
@@ -403,14 +416,16 @@ contains
              ! This calculates the gas OD, as a result of a perturbed surface pressure
              ! I don't need this, right? It's the same as the value above .. ?
              ! C_tmp = 1.0d0 / (this_grav * this_M) * NA * 0.1d0 * H2O_corr
+             this_grav = (1.0d0 - this_p_fac_pert) * grav_lower + this_p_fac_pert * grav_higher
+             C_tmp = 1.0d0 / this_grav * NA * 0.1d0 * H2O_corr / this_M_pert
 
              if (log_scaling) then
                 ! this_p_pert is already exponentiated here!!
-                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * this_CS_value(1:N_wl) &
-                * this_VMR_pert * C_tmp * this_p_pert
+                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * C_tmp * this_p_pert &
+                     * this_CS_value(1:N_wl) * this_VMR_pert
              else
-                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * this_CS_value(1:N_wl) &
-                     * this_VMR_pert * C_tmp
+                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * C_tmp &
+                     * this_CS_value(1:N_wl) * this_VMR_pert
              end if
 
              gas_tau_dpsurf(1:N_wl,l-1) = gas_tau_dpsurf(1:N_wl,l-1) + gas_tmp(1:N_wl)

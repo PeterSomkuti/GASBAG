@@ -383,7 +383,7 @@ contains
     ! Set altitudes to zero, and the lowest level to the altitude
     scn%atm%altitude_levels(:) = 0.0d0
     scn%atm%altitude_levels(scn%num_active_levels) = scn%alt
-    scn%atm%grav(scn%num_levels) = jpl_gravity(scn%lat, scn%alt)
+    scn%atm%grav(scn%num_active_levels) = jpl_gravity(scn%lat, scn%alt)
     scn%atm%ndry(:) = 0.0d0
 
     ! Loop through layers, starting with the bottom-most (surface) one
@@ -425,7 +425,6 @@ contains
     do i = 1, scn%num_levels - 1
        scn%atm%altitude_layers(i) = 0.5d0 * (scn%atm%altitude_levels(i) + scn%atm%altitude_levels(i+1))
     end do
-
 
   end subroutine scene_altitude
 
@@ -1084,7 +1083,7 @@ contains
     if (allocated(met_psurf)) then
        call logger%info(fname, "Writing out: " // trim(group_name) // &
             "/surface_pressure_apriori_" // CS_general%code_name)
-       write(tmp_str, '(A,A,A)') trim(group_name), "/surface_pressure_apriori_", &
+       write(tmp_str, '(A,A,A)') trim(group_name), "/met_surface_pressure_", &
             CS_general%code_name
        call write_DP_hdf_dataset(output_file_id, &
             trim(tmp_str), met_psurf(:,:), out_dims2d, -9999.99d0)

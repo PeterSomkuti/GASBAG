@@ -728,7 +728,7 @@ contains
 #endif
 
              if (land_fraction(i_fp, i_fr) < 99.0d0) then
-               call logger%debug(fname, "Skipping water scene.")
+                call logger%debug(fname, "Skipping water scene.")
                 cycle
              end if
 
@@ -905,9 +905,11 @@ contains
 
     ! For e.g. XRTM, we need containers for the derivatives w.r.t.
     ! (spectral, parameter, stokes)
-    double precision, allocatable :: dI_dgas(:,:,:), dI_dsurf(:,:,:)
+    double precision, allocatable :: dI_dgas(:,:,:)
+    double precision, allocatable :: dI_dsurf(:,:,:)
     ! (spectral, stokes)
     double precision, allocatable :: dI_dTemp(:,:)
+    double precision, allocatable :: dI_dpsurf(:,:)
     ! (spectral, aerosol, stokes)
     double precision, allocatable :: dI_dAOD(:,:,:)
     double precision, allocatable :: dI_dAHeight(:,:,:)
@@ -920,7 +922,6 @@ contains
     integer :: l1b_wl_idx_min, l1b_wl_idx_max
 
     ! Sounding time stuff
-    !type(datetime) :: date ! Datetime object for sounding date/time
     double precision :: doy_dp ! Day of year as double precision
 
     ! Instrument stuff
@@ -930,10 +931,10 @@ contains
     ! Dispersion arrays to hold the wavelength-per-pixel values, as well as the
     ! arrays to hold the polynomial coefficents to create them. Also needs "tmp"
     ! and "pert" versions for perturbed values if dispersion is retrieved.
-    double precision, allocatable :: this_dispersion(:), &
-         this_dispersion_tmp(:), &
-         this_dispersion_coefs(:), &
-         this_dispersion_coefs_pert(:)
+    double precision, allocatable :: this_dispersion(:)
+    double precision, allocatable :: this_dispersion_tmp(:)
+    double precision, allocatable :: this_dispersion_coefs(:)
+    double precision, allocatable :: this_dispersion_coefs_pert(:)
 
     ! For some SV elements, Jacobians are calculated separately from the
     ! main Jacobian convolution loop. This varaible indicates whether this
@@ -1311,8 +1312,10 @@ contains
          " Alt.: ", scn%alt
     call logger%debug(fname, trim(tmp_str))
 
-    write(tmp_str, "(A, F15.2, A)") "MET surface pressure: ", met_psurf(i_fp, i_fr), " Pa"
-    call logger%debug(fname, trim(tmp_str))
+    if (allocated(met_psurf)) then
+       write(tmp_str, "(A, F15.2, A)") "MET surface pressure: ", met_psurf(i_fp, i_fr), " Pa"
+       call logger%debug(fname, trim(tmp_str))
+    end if
 
     write(tmp_str, "(A, 4F8.2)") "Stokes coefficients for this scene: ", stokes_coef(:, i_fp, i_fr)
     call logger%debug(fname, trim(tmp_str))
@@ -1833,8 +1836,12 @@ contains
              call calculate_active_levels(scn)
              num_active_levels = scn%num_active_levels
 
+             write(tmp_str, '(A, G0.1, A, G0.1)') "Number of levels: ", num_levels, &
+                  " / Number of active levels: ", num_active_levels
+             call logger%debug(fname, trim(tmp_str))
+
              ! If psurf > BOA p level, we have a problem and thus can't go on.
-             if (num_active_levels > num_levels) then
+             if (num_active_levels == -1) then
                 write(tmp_str, '(A, F12.3, A, F12.3)') "Psurf at ", scn%atm%psurf, &
                      " is larger than p(BOA) at ", scn%atm%p(scn%atm%num_levels)
                 call logger%error(fname, trim(tmp_str))
@@ -1918,6 +1925,7 @@ contains
              ! c) Every retrieved albedo parameter
              ! d) Every retrieved aerosol OD
              ! e) Every retrieved aerosol height
+             ! f) One surface pressure jacobian
 
              if (SV%num_gas > 0) then
                 allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
@@ -1927,7 +1935,7 @@ contains
                 allocate(dI_dsurf(N_hires, SV%num_albedo, n_stokes))
              end if
 
-             if (SV%num_temp > 0) then
+             if (SV%num_temp == 1) then
                 allocate(dI_dTemp(N_hires, n_stokes))
              end if
 
@@ -1937,6 +1945,10 @@ contains
 
              if (SV%num_aerosol_height > 0) then
                 allocate(dI_dAHeight(N_hires, SV%num_aerosol_height, n_stokes))
+             end if
+
+             if (SV%num_psurf == 1) then
+                allocate(dI_dpsurf(N_hires, n_stokes))
              end if
           end if
 
@@ -2089,7 +2101,7 @@ contains
           ! The depolarization factors depend on wavelength only
           ! ----------------------------------------------------------
           call calculate_rayleigh_tau(scn%op%wl, scn%atm%p, &
-               scn%op%ray_tau, scn%op%ray_depolf)
+               scn%atm%grav, scn%op%ray_tau)
 
           ! ---------------------------------------------------------------
           ! If there are aerosols in the scene, calculate the aerosol
@@ -2260,12 +2272,13 @@ contains
                SV, & ! The statevector
                scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate
-               radiance_calc_work_hi_stokes, & ! Results
+               radiance_calc_work_hi_stokes, & ! Radiance esults
                dI_dgas, &  ! Jacobian results
                dI_dsurf, &  ! Jacobian results
                dI_dTemp, &  ! Jacobian results
                dI_dAOD, &  ! Jacobian results
                dI_dAHeight, & ! Jacobian results
+               dI_dpsurf, & ! Jacobian results
                xrtm_success & ! Jacobian results
                )
 
@@ -2388,6 +2401,10 @@ contains
           case (RT_BEER_LAMBERT)
              call calculate_BL_psurf_jacobian(radiance_tmp_hi_nosif_nozlo(:,1), &
                   scn, K_hi_stokes(:, SV%idx_psurf(1),1))
+          case (RT_XRTM)
+             do q=1, n_stokes
+                K_hi_stokes(:, SV%idx_psurf(1), q) = this_solar(:,2) * dI_dpsurf(:, q)
+             end do
           case default
              call logger%error(fname, "Surface pressure Jacobian not implemented " &
                   // "for RT Model: " // CS_win%RT_model%chars())
@@ -3304,6 +3321,7 @@ contains
        if (allocated(dI_dTemp)) deallocate(dI_dTemp)
        if (allocated(dI_dAOD)) deallocate(dI_dAOD)
        if (allocated(dI_dAHeight)) deallocate(dI_dAHeight)
+       if (allocated(dI_dpsurf)) deallocate(dI_dpsurf)
 
        if (.not. divergent_step) then
           ! Make sure we keep the 'old' Chi2 only from a valid iteration
@@ -3382,10 +3400,12 @@ contains
 
     if (SV%num_temp > 0) then
        ! Set temperature covariance to some value (?)
-       Sa(SV%idx_temp(1), SV%idx_temp(1)) = sqrt(10.0d0)
+       Sa(SV%idx_temp(1), SV%idx_temp(1)) = 100.0d0
     end if
 
-    if (SV%num_psurf == 1) Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = 1.0d6
+    if (SV%num_psurf == 1) then
+       Sa(SV%idx_psurf(1), SV%idx_psurf(1)) = CS_win%psurf_cov * CS_win%psurf_cov
+    end if
 
     ! Make the dispersion prior covariance about ten times the perturbation value
     if (SV%num_dispersion > 0) then

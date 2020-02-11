@@ -37,6 +37,7 @@ contains
        xrtm_options_string, &
        xrtm_solvers_string, &
        do_polarization, &
+       keep_coef_constant, &
        xrtm_options, &
        xrtm_solvers, &
        xrtm_kernels, &
@@ -46,6 +47,7 @@ contains
     type(string), allocatable, intent(in) :: xrtm_options_string(:)
     type(string), allocatable, intent(in) :: xrtm_solvers_string(:)
     logical, intent(in) :: do_polarization
+    logical, intent(in) :: keep_coef_constant
     integer, allocatable, intent(inout) :: xrtm_options(:)
     integer, allocatable, intent(inout) :: xrtm_solvers(:)
     integer, intent(inout) :: xrtm_kernels(:)
@@ -88,6 +90,13 @@ contains
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_UPWELLING_OUTPUT)
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_OUTPUT_AT_LEVELS)
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SOURCE_SOLAR)
+
+       if (keep_coef_constant) then
+          ! If we use spectrally constant phase function expansion
+          ! coeffs, we can make use of this XRTM option which saves
+          ! the phase matrix between XRTM calls.
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SAVE_PHASE_MATS)
+       end if
 
        ! If polarization is requested, we run
        ! the RT models in vector mode
@@ -247,6 +256,7 @@ contains
        dI_dTemp, &
        dI_dAOD, &
        dI_dAHeight, &
+       dI_dpsurf, &
        xrtm_success)
 
     type(CS_window_t), intent(in) :: CS_win
@@ -262,6 +272,7 @@ contains
     double precision, allocatable, intent(inout) :: dI_dTemp(:,:)
     double precision, allocatable, intent(inout) :: dI_dAOD(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dAHeight(:,:,:)
+    double precision, allocatable, intent(inout) :: dI_dpsurf(:,:)
 
     logical, intent(inout) :: xrtm_success
 
@@ -356,6 +367,7 @@ contains
             CS_win%xrtm_options, &
             CS_win%xrtm_solvers, &
             CS_win%do_polarization, &
+            CS_win%constant_coef, &
             xrtm_options, &
             xrtm_solvers, &
             xrtm_kernels, &
@@ -372,6 +384,7 @@ contains
             + SV%num_albedo &
             + SV%num_aerosol_aod &
             + SV%num_aerosol_height &
+            + SV%num_psurf &
             )
 
        ! Allocate the arrays which hold the radiances and weighting functions
@@ -502,7 +515,7 @@ contains
        end do
 
        ! Store the temperature offset Jacobian if needed
-       if (SV%num_temp > 0) then
+       if (SV%num_temp == 1) then
           dI_dTemp(:,:) = monochr_weighting_functions(:,:,SV%num_gas + 1)
        end if
 
@@ -530,6 +543,15 @@ contains
           end if
        end do
 
+       ! Store surface pressure jacobians
+       if (SV%num_psurf == 1) then
+          dI_dpsurf(:,:) = monochr_weighting_functions(:,:, &
+               SV%num_gas + &
+               SV%num_temp + &
+               SV%num_albedo + &
+               SV%num_aerosol_aod + &
+               SV%num_aerosol_height + 1)
+       end if
     else
 
        call logger%fatal(fname, "RT strategy: '" // CS_win%RT_strategy%chars() &
@@ -652,7 +674,12 @@ contains
     call logger%debug(fname, "Calculating linearized inputs for RT.")
     deriv_counter = 0
 
+    ! --------------------------
+    !
     ! Gas sub-column derivatives
+    !
+    ! --------------------------
+
     do j = 1, SV%num_gas
        ltau(:, j, SV%s_start(j):SV%s_stop(j)-1) = &
             scn%op%gas_tau(:, SV%s_start(j):SV%s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
@@ -667,8 +694,13 @@ contains
        call logger%debug(fname, trim(tmp_str))
     end do
 
+    ! ----------------------
+    !
     ! Temperature derivative
-    if (SV%num_temp > 0) then
+    !
+    ! ----------------------
+
+    if (SV%num_temp == 1) then
        j = SV%num_gas + 1
 
        ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:n_layers,:), dim=3)
@@ -679,7 +711,12 @@ contains
        call logger%debug(fname, trim(tmp_str))
     end if
 
+    ! --------------------------------------
+    !
     ! Surface albedo coefficient derivatives
+    !
+    ! --------------------------------------
+    
     do j = 1, SV%num_albedo
        i = SV%num_gas + SV%num_temp + j
 
@@ -690,7 +727,12 @@ contains
        call logger%debug(fname, trim(tmp_str))
     end do
 
+    ! -----------------------
+    !
     ! Aerosol AOD derivatives
+    !
+    ! -----------------------
+
     do j = 1, SV%num_aerosol_aod
        i = SV%num_gas + SV%num_temp + SV%num_albedo + j
        aer_idx = SV%aerosol_aod_idx_lookup(j)
@@ -707,7 +749,12 @@ contains
        call logger%debug(fname, trim(tmp_str))
     end do
 
+    ! --------------------------
+    !
     ! Aerosol height derivatives
+    !
+    ! --------------------------
+    ! 
     ! NOTE / TODO
     ! This is also a bit hacky since we take the aerosol width from the MCS, making this
     ! code a bit messy. It also works because right now, we can't change the aerosol
@@ -742,6 +789,27 @@ contains
        write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol height #", j
        call logger%debug(fname, trim(tmp_str))
     end do
+
+    ! ---------------------------
+    !
+    ! Surface pressure derivative
+    !
+    ! ---------------------------
+
+    if (SV%num_psurf == 1) then
+       i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + SV%num_aerosol_height + 1
+
+       ! Make sure to keep the minus sign here!
+       do l = 1, n_layers
+          ! Sum over contributions from all gases, since we have dTau/dPsurf per gas
+          ltau(:, i, l) = -sum(scn%op%gas_tau_dpsurf(:, l, :), dim=2)
+          lomega(:, i, l) = -scn%op%layer_omega(:, l) / scn%op%layer_tau(:, l) * ltau(:, i, l)
+       end do
+
+       deriv_counter = deriv_counter + 1
+       write(tmp_str, '(A, G0.1, A)') "Derivative #", deriv_counter, ": surface pressure"
+       call logger%debug(fname, trim(tmp_str))
+    end if
 
     ! Calculate coef and lcoef at band edges
     call logger%debug(fname, "Computing phase function coefficients and derivatives at band edges.")
@@ -1238,18 +1306,20 @@ contains
           return
        end if
 
-       ! Plug in the phase function expansion moments
-       call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
-       if (xrtm_error /= 0) then
-          call logger%error(fname, "Error calling xrtm_set_coef_n_f90")
-          return
-       end if
+       if ((.not. keep_coef_constant) .or. (i == 1)) then
+          ! Plug in the phase function expansion moments
+          call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
+          if (xrtm_error /= 0) then
+             call logger%error(fname, "Error calling xrtm_set_coef_n_f90")
+             return
+          end if
 
-       ! Plug in the phase function expansion moment derivatives
-       call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
-       if (xrtm_error /= 0) then
-          call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
-          return
+          ! Plug in the phase function expansion moment derivatives
+          call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
+          if (xrtm_error /= 0) then
+             call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
+             return
+          end if
        end if
 
        ! Plug in surface property

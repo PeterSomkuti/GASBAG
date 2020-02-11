@@ -213,6 +213,8 @@ contains
        valid_options(this_idx,45) = "ils_stretch_prior_0"
        ! ILS stretch parameter prior order 1 (per footprint)
        valid_options(this_idx,46) = "ils_stretch_prior_1"
+       ! Surface pressure jacobian covariance
+       valid_options(this_idx,47) = "psurf_covariance"
 
     end do
 

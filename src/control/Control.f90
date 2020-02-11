@@ -102,6 +102,8 @@ module control_mod
      integer :: albedo_order
      !> Number of solar irradiance scaling coefficients to be retrieved
      integer :: solar_irrad_scale_order
+     !> Surface pressure prior covariance (in Pa)
+     double precision :: psurf_cov
      !> Number of dispersion coefficients to be retrieved
      integer :: dispersion_order
      !> Dispersion perturbation value for Jacobians
@@ -865,6 +867,9 @@ contains
           else
              CS%window(window_nr)%N_sublayers = fini_int
           end if
+
+          call fini_extract(fini, win_str, 'psurf_covariance', .false., fini_val)
+          CS%window(window_nr)%psurf_cov = fini_val
 
           call fini_extract(fini, win_str, 'dsigma_scale', .false., fini_val)
           CS%window(window_nr)%dsigma_scale = fini_val

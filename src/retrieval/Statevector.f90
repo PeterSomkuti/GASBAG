@@ -413,9 +413,17 @@ contains
              call logger%fatal(fname, "Sorry, you must have at least one gas in the window " &
                   // "to retrieve surface pressure!")
              stop 1
-          else
-             num_psurf_parameters = 1
           end if
+
+          if (CS_win%psurf_cov < 0.0d0) then
+             write(tmp_str, '(A, ES15.5)') "Surface pressure prior covariance invalid with value: ", &
+                  CS_win%psurf_cov
+             call logger%fatal(fname, trim(tmp_str))
+             stop 1
+          end if
+
+          num_psurf_parameters = 1
+
        end if
 
 

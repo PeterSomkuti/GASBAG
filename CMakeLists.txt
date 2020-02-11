@@ -49,7 +49,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
   # MCMODEL LARGE MUST BE TURNED ON!
   # OTHERWISE YOU GET STRANGE ERRORS IN AN OPENMP ENVIRONMENT
-  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512 -mcmodel=medium")
+  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512 -mcmodel=large")
 
   # Make OpenMP conditional
   if(USE_OPENMP)

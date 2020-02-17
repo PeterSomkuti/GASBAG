@@ -107,7 +107,7 @@ contains
     double precision :: this_p, p_fac, this_p_fac
     double precision :: this_T, this_sh, this_VMR, this_M
     double precision :: this_p_pert, p_fac_pert, this_p_fac_pert, p_lower_pert
-    double precision :: this_grav
+    double precision :: this_grav, this_grav_pert
     double precision :: T_lower_pert, this_T_pert
     double precision :: VMR_lower_pert, this_VMR_pert
     double precision :: sh_lower_pert, this_sh_pert
@@ -390,6 +390,7 @@ contains
              this_T_pert = (1.0d0 - this_p_fac_pert) * T_lower_pert + this_p_fac_pert * T_higher
              this_sh_pert = (1.0d0 - this_p_fac_pert) * sh_lower_pert + this_p_fac_pert * sh_higher
              this_VMR_pert = (1.0d0 - this_p_fac_pert) * VMR_lower_pert + this_p_fac_pert * VMR_higher
+             this_grav_pert = (1.0d0 - this_p_fac_pert) * grav_lower + this_p_fac_pert * grav_higher
              this_M_pert = 1.0d3 * DRY_AIR_MASS
 
              this_H2O_pert = this_sh_pert / (1.0d0 - this_sh_pert) * SH_H2O_CONV
@@ -414,10 +415,8 @@ contains
              end if
 
              ! This calculates the gas OD, as a result of a perturbed surface pressure
-             ! I don't need this, right? It's the same as the value above .. ?
-             ! C_tmp = 1.0d0 / (this_grav * this_M) * NA * 0.1d0 * H2O_corr
-             this_grav = (1.0d0 - this_p_fac_pert) * grav_lower + this_p_fac_pert * grav_higher
-             C_tmp = 1.0d0 / this_grav * NA * 0.1d0 * H2O_corr / this_M_pert
+
+             C_tmp = 1.0d0 / this_grav_pert * NA * 0.1d0 * H2O_corr / this_M_pert
 
              if (log_scaling) then
                 ! this_p_pert is already exponentiated here!!

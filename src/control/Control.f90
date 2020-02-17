@@ -889,13 +889,6 @@ contains
           call fini_extract(fini, win_str, 'ils_stretch_prior_0', .false., fini_val_array)
           if (allocated(fini_val_array)) then
 
-             ! This array MUST HAVE the length of the number of footprints, otherwise fail
-             if (size(fini_val_array) /= CS%general%N_fp) then
-                call logger%fatal(fname, "ILS stretch prior order 0 does not " &
-                     // "match the footprint number.")
-                stop 1
-             end if
-
              allocate(CS%window(window_nr)%ils_stretch_prior_0(size(fini_val_array)))
              do i=1, size(fini_val_array)
                 CS%window(window_nr)%ils_stretch_prior_0(i) = fini_val_array(i)
@@ -905,13 +898,6 @@ contains
 
           call fini_extract(fini, win_str, 'ils_stretch_prior_1', .false., fini_val_array)
           if (allocated(fini_val_array)) then
-
-             ! This array MUST HAVE the length of the number of footprints, otherwise fail
-             if (size(fini_val_array) /= CS%general%N_fp) then
-                call logger%fatal(fname, "ILS stretch prior order 1 does not " &
-                     // "match the footprint number.")
-                stop 1
-             end if
 
              allocate(CS%window(window_nr)%ils_stretch_prior_1(size(fini_val_array)))
              do i=1, size(fini_val_array)

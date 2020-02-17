@@ -163,8 +163,17 @@ contains
   end subroutine destroy_optical_properties
 
 
-  subroutine compute_coef_at_wl(scn, CS_aerosol, SV, wl, n_mom, n_derivs, ray_tau, &
-       aer_sca_tau, coef, lcoef)
+  subroutine compute_coef_at_wl( &
+       scn, &
+       CS_aerosol, &
+       SV, &
+       wl, &
+       n_mom, &
+       n_derivs, &
+       ray_tau, &
+       aer_sca_tau, &
+       coef, &
+       lcoef)
 
     type(scene), intent(in) :: scn
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)

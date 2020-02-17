@@ -41,7 +41,7 @@ configure_file(
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
-  if (CMAKE_Fortran_COMPILER_VERSION VERSION_EQUAL 8.2)
+  if (CMAKE_Fortran_COMPILER_VERSION VERSION_GREATER 8.0)
       message(STATUS "gfortran version is sufficcient!")
   else()
       message(FATAL_ERROR "gfortran version must be 8.2! 9.2 produces problems!")
@@ -49,7 +49,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
   # MCMODEL LARGE MUST BE TURNED ON!
   # OTHERWISE YOU GET STRANGE ERRORS IN AN OPENMP ENVIRONMENT
-  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512 -mcmodel=large")
+  set(dialect "-cpp -ffree-form -std=f2018 -fimplicit-none -ffree-line-length-512")
 
   # Make OpenMP conditional
   if(USE_OPENMP)

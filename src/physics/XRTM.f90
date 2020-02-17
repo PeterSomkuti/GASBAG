@@ -95,7 +95,7 @@ contains
           ! If we use spectrally constant phase function expansion
           ! coeffs, we can make use of this XRTM option which saves
           ! the phase matrix between XRTM calls.
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SAVE_PHASE_MATS)
+          ! xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SAVE_PHASE_MATS)
        end if
 
        ! If polarization is requested, we run
@@ -484,6 +484,7 @@ contains
 
           if (.not. xrtm_success) then
              call logger%error(fname, "Call to XRTM_monochromatic unsuccessful.")
+             call xrtm_destroy_f90(xrtm, xrtm_error)
              return
           end if
 
@@ -978,6 +979,7 @@ contains
     double precision :: single_lsurf(n_derivs)
 
     double precision :: tau(n_layers), omega(n_layers)
+    ! (pfmom, elem, n_layers)
     double precision, allocatable :: this_coef(:,:,:), this_lcoef(:,:,:,:)
 
     double precision :: wl_fac
@@ -1306,7 +1308,7 @@ contains
           return
        end if
 
-       if ((.not. keep_coef_constant) .or. (i == 1)) then
+       !if ((.not. keep_coef_constant) .or. (i == 1)) then
           ! Plug in the phase function expansion moments
           call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
           if (xrtm_error /= 0) then
@@ -1320,7 +1322,7 @@ contains
              call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
              return
           end if
-       end if
+       !end if
 
        ! Plug in surface property
        call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
@@ -1354,6 +1356,9 @@ contains
        ! The contributions from each solver are added up at the end. So if the user
        ! asks for e.g. SINGLE + 2OS, then you get the radiances and derivatives
        ! of both, summed.
+
+       ! write(*,*) i, xrtm_get_omega_f90(xrtm, n_layers-1), xrtm_get_coef_f90(xrtm, n_layers-1, 0, 0),  xrtm_get_coef_f90(xrtm, n_layers-1, 0, 1),  xrtm_get_coef_f90(xrtm, n_layers-1, 0, 2)
+       
 
        call cpu_time(cpu_start2)
 

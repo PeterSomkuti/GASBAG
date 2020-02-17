@@ -306,12 +306,12 @@ contains
           if (met_sounding_exists) then
              call my_instrument%read_sounding_ids(met_file_id, sounding_ids_met)
 
-             if (all(sounding_ids == sounding_ids_met)) then
-                call logger%debug(fname, "L1B and MET have same Sounding IDs - good.")
-             else
-                call logger%error(fname, "L1B and MET have differing Sounding IDs!")
-                stop 1
-             end if
+             !if (all(sounding_ids == sounding_ids_met)) then
+             !   call logger%debug(fname, "L1B and MET have same Sounding IDs - good.")
+             !else
+             !   call logger%error(fname, "L1B and MET have differing Sounding IDs!")
+             !   stop 1
+             !end if
           else
              call logger%debug(fname, "MET does not have Sounding IDs - cannot verify if files match.")
           end if
@@ -696,8 +696,9 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       ! frame_start = 100
-       ! frame_stop = 150
+
+       !frame_start = 1967
+       !frame_stop = 250
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -1137,7 +1138,7 @@ contains
 
     if (CS_win%RT_model%lower() == "beer-lambert") then
        RT_model = RT_BEER_LAMBERT
-       ! Beer Lambert is intensity-only right now
+       ! Beer-Lambert is intensity-only right now
        n_stokes = 1
        ! If the user requested polarization, let them know that they're
        ! asking for something 'wrong'
@@ -1146,7 +1147,6 @@ contains
        end if
     else if (CS_win%RT_model%lower() == "xrtm") then
        RT_model = RT_XRTM
-
        ! Depending on a user choice, we can run XRTM with polarization
        ! enabled or not.
        if (CS_win%do_polarization) then
@@ -1393,8 +1393,6 @@ contains
     ! Separate function to populate the prior covariance - this contains
     ! a good number of hard-coded values, which in future should be
     ! given through the config file.
-    !
-    ! TODO
     !
     ! ------------------------------------------------------------------
 
@@ -1659,6 +1657,7 @@ contains
 
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, CS_win%num_gases)
+       
        scn%num_stokes = n_stokes
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
@@ -1708,10 +1707,10 @@ contains
           ! Obtain the number of active levels.
           call calculate_active_levels(scn)
 
-          if (scn%num_active_levels > scn%num_levels) then
-             call logger%error(fname, "Number of active levels > number of levels.")
-             return
-          end if
+      !    if (scn%num_active_levels > scn%num_levels) then
+      !       call logger%error(fname, "Number of active levels > number of levels.")
+      !       return
+      !    end if
 
           num_active_levels = scn%num_active_levels
 
@@ -2079,9 +2078,14 @@ contains
                   scn%op%gas_tau_dvmr(:,:,:,j), & ! Output: dTau/dVMR
                   success_gas) ! Output: Was the calculation successful?
 
-
+             ! -----------------------------------------
+             !
+             ! Calculate dTau/dTemp as finite difference
+             !
+             ! -----------------------------------------
+             
              if (SV%num_temp == 1) then
-                ! Calculate dTau/dTemp as finite difference
+
                 scn%op%gas_tau_dtemp(:,:,j) = &
                      scn%op%gas_tau_dtemp(:,:,j) - scn%op%gas_tau(:,:,j)
 
@@ -2100,8 +2104,14 @@ contains
           ! and reside in a matrix for all wavelengths and layers
           ! The depolarization factors depend on wavelength only
           ! ----------------------------------------------------------
-          call calculate_rayleigh_tau(scn%op%wl, scn%atm%p, &
-               scn%atm%grav, scn%op%ray_tau)
+
+          call calculate_rayleigh_tau( &
+               scn%op%wl, &
+               scn%atm%p, &
+               scn%atm%grav, &
+               scn%atm%T, &
+               scn%op%ray_tau &
+               )
 
           ! ---------------------------------------------------------------
           ! If there are aerosols in the scene, calculate the aerosol
@@ -2110,7 +2120,6 @@ contains
           ! easy enough to extend it to incorporate more aerosol distribution
           ! shapes (triangle, block, some other profiles?)
           ! ---------------------------------------------------------------
-
 
           ! Calculate vertical distribution and optical depths that
           ! enter the RT calculations
@@ -2148,8 +2157,13 @@ contains
 
           ! Set tiny gas OD values to some lower threshold. Some RT solvers
           ! do not like gas OD = 0
-          where(scn%op%gas_tau < 1d-10) scn%op%gas_tau = 1d-10
-          where(scn%op%ray_tau < 1d-10) scn%op%ray_tau = 1d-10
+          if (allocated(scn%op%gas_tau)) then
+             where(scn%op%gas_tau < 1d-10) scn%op%gas_tau = 1d-10
+          end if
+
+          if (allocated(scn%op%ray_tau)) then
+             where(scn%op%ray_tau < 1d-10) scn%op%ray_tau = 1d-10
+          end if
 
           ! Total optical depth is calculated as sum of all gas ODs
           scn%op%layer_tau(:,:) = sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau
@@ -2161,7 +2175,8 @@ contains
                   + sum(scn%op%aer_ext_tau(:,:,:), dim=3)
           end if
 
-          scn%op%total_tau(:) = sum(scn%op%layer_tau, dim=2)
+
+          scn%op%total_tau(:) = sum(scn%op%layer_tau(:, 1:num_active_levels - 1), dim=2)
 
           ! The layer-resolved single scatter albedo is (Rayleigh + Aerosol) / (Total)
           ! extinctions.
@@ -2178,7 +2193,9 @@ contains
 
 
           ! ----------------------------------
+          !
           ! END SECTION FOR GASES / ATMOSPHERE
+          !
           ! ----------------------------------
 
           call cpu_time(cpu_gas_stop)
@@ -2220,7 +2237,6 @@ contains
        center_pixel_hi = int(N_spec_hi / 2)
 
        ! Allocate various arrays that depend on N_spec
-       !
        allocate(K(N_spec, N_sv))
        allocate(gain_matrix(N_sv, N_spec))
        allocate(radiance_meas_work(N_spec))
@@ -2606,7 +2622,12 @@ contains
        allocate(this_ILS_stretch(N_spec))
        this_ILS_stretch(:) = 0.0d0
 
+       ! --------------------------------
+       !
        ! Build the ILS stretch polynomial
+       !
+       ! --------------------------------
+
        if (SV%num_ils_stretch > 0) then
           do i=1, N_spec
              do j=1, SV%num_ils_stretch
@@ -2618,12 +2639,36 @@ contains
           if (allocated(CS_win%ils_stretch_prior_0) .or. &
                allocated(CS_win%ils_stretch_prior_1)) then
 
+
+             ! We check here if the ILS stretch priors have the
+             ! correct number of elements.
+             if (allocated(CS_win%ils_stretch_prior_0)) then
+                write(tmp_str, '(A, ES15.5)') "ILS stretch prior 0: ", CS_win%ils_stretch_prior_0(i_fp)
+                call logger%debug(fname, trim(tmp_str))
+
+                if (size(CS_win%ils_stretch_prior_0) /= CS%general%N_fp) then
+                   call logger%fatal(fname, "Number of ILS stretch prior 0 entries is not " &
+                        // "equal to the number of footprints.")
+                   stop 1
+                end if
+             end if
+
+             if (allocated(CS_win%ils_stretch_prior_1)) then
+                write(tmp_str, '(A, ES15.5)') "ILS stretch prior 1: ", CS_win%ils_stretch_prior_1(i_fp)
+                call logger%debug(fname, trim(tmp_str))
+                
+                if (size(CS_win%ils_stretch_prior_1) /= CS%general%N_fp) then
+                   call logger%fatal(fname, "Number of ILS stretch prior 1 entries is not " &
+                        // "equal to the number of footprints.")
+                   stop 1
+                end if
+             end if
+
              ! If we have a user-supplied prior, use them here instead
              do i=1, N_spec
 
                 if (allocated(CS_win%ils_stretch_prior_0)) then
-                   this_ILS_stretch(i) = this_ILS_stretch(i) &
-                        * CS_win%ils_stretch_prior_0(i_fp)
+                   this_ILS_stretch(i) = CS_win%ils_stretch_prior_0(i_fp)
                 end if
 
                 if (allocated(CS_win%ils_stretch_prior_1)) then
@@ -2859,17 +2904,6 @@ contains
             noise_work, N_spec - N_sv)
 
        chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
-
-       write(tmp_str,*) "SV index, SV name, SV prior, SV last iteration, " &
-            // "SV current, SV delta, prior cov., posterior cov., diagonal of AK"
-       call logger%debug(fname, trim(tmp_str))
-
-       do i=1, N_sv
-          write(tmp_str, '(I3.1,A30,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6,ES15.6)') &
-               i, results%sv_names(i)%chars(), SV%svap(i), old_sv(i), SV%svsv(i), &
-               SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i)), AK(i,i)
-          call logger%debug(fname, trim(tmp_str))
-       end do
 
        ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
@@ -3146,6 +3180,16 @@ contains
           write(tmp_str, '(A, F10.3)') "SNR: ", mean(radiance_meas_work / noise_work)
           call logger%debug(fname, trim(tmp_str))
 
+
+          ! Write out some atmopsheric properties for the first spectral index
+          call logger%debug(fname, "Pressure mid-layer, Rayleigh OD, total gas OD, SSA")
+          do i=1, num_active_levels - 1
+             write(tmp_str, '(G0.1, ES15.5, ES15.5, ES15.5, F8.3)') i, 0.5d0 * (scn%atm%p(i+1) + scn%atm%p(i)), &
+                  scn%op%ray_tau(1, i), sum(scn%op%gas_tau(1, i, :)), scn%op%layer_omega(1,i)
+             call logger%debug(fname, trim(tmp_str))
+          end do
+
+
           ! Gain matrix and AK are normally just calculated after convergence, so
           ! we need to compute them here per-iteration
 
@@ -3226,7 +3270,17 @@ contains
              end do
              close(funit)
              call logger%debug(fname, "Written file: total_tau.dat (modelled)")
+
+             open(file="rayleigh_tau.dat", newunit=funit)
+             do i=1, N_hires
+                write(funit, *) sum(scn%op%ray_tau(i, :))
+             end do
+             close(funit)
+             call logger%debug(fname, "Written file: total_tau.dat (modelled)")
+
           end if
+
+
 
           call logger%debug(fname, "---------------------------------")
 
@@ -3251,6 +3305,12 @@ contains
                   SV%svsv(i) - old_sv(i), sqrt(Sa(i,i)), sqrt(Shat(i,i)), AK(i,i)
              call logger%debug(fname, trim(tmp_str))
           end do
+
+          call logger%debug(fname, "---------------------------------")
+
+          write(tmp_str, '(A, ES15.5)') "Residual RMS: ", sqrt(mean((radiance_meas_work - radiance_calc_work)**2))
+          call logger%debug(fname, trim(tmp_str))
+
 
           call logger%debug(fname, "---------------------------------")
 

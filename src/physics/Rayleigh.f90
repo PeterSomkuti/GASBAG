@@ -1,6 +1,6 @@
 module Rayleigh_mod
 
-  use math_utils_mod, only : NA
+  use math_utils_mod, only : NA, pi, DRY_AIR_MASS
   public calculate_rayleigh_tau, calculate_rayleigh_depolf, calculate_rayleigh_scatt_matrix
 
 
@@ -32,6 +32,11 @@ contains
     depolf = N2_C * F_N2 + O2_C * F_O2 + Ar_C * F_ar + CO2_C * F_CO2
     depolf = depolf / (N2_C + O2_C + Ar_C + CO2_C)
 
+    ! The above value is the so-called "King Factor" (~1), to turn it into
+    ! the actual depolarization ratio, following computation needs to happen
+
+    depolf = (6.0d0 * depolf - 6.0d0) / (7.0d0 * depolf + 3.0d0)
+
   end function calculate_rayleigh_depolf
 
 
@@ -42,17 +47,26 @@ contains
   !> @param rayleigh_tau Rayleigh optical depth
   !> @param rayleigh_depolf Rayleigh depolarization factor
   !> @param co2 Optional CO2 VMR profile
-  subroutine calculate_rayleigh_tau(wl, p, g, rayleigh_tau, co2)
+  subroutine calculate_rayleigh_tau(wl, p, g, T, rayleigh_tau, co2)
 
     double precision, intent(in) :: wl(:)
     double precision, intent(in) :: p(:)
     double precision, intent(in) :: g(:)
+    double precision, intent(in) :: T(:)
     double precision, optional, intent(in) :: co2(:)
     
     double precision, intent(inout) :: rayleigh_tau(:,:)
 
+
+    double precision, parameter :: Nair_ref = 2.546899d19
+    double precision, parameter :: p_ref = 101325d0
+    double precision, parameter :: T_ref= 288.15d0
+    
     double precision :: depolf
+    double precision :: depol_rho
+    double precision :: Nair
     double precision :: wl2, wl4
+    double precision, parameter :: pi3 = pi * pi * pi
     integer :: i, j
 
     double precision :: n300_1, nCO2_1, ns
@@ -72,6 +86,8 @@ contains
 
        do j=1, size(p) - 1
 
+          !Nair = Nair_ref * (0.5d0 * (p(j+1) + p(j)) / p_ref) * (T_ref / (0.5d0 * (T(j+1) + T(j))))
+
           ! If we have the CO2 VMRs, we can adjust the value for the
           ! refractive index that is calculated at a reference of 300ppm
           !if (present(co2)) then
@@ -79,10 +95,27 @@ contains
           !   ns = 1.0d0 + nCO2_1
           !end if
 
-          ray_sigma = (ns*ns - 1)**2 / (ns*ns + 2)**2 * (6.0d0 + 3.0d0 * depolf) / (6.0 - 7.0d0 * depolf)!* 1.1471954d-24 * depolf / wl4
-          rayleigh_tau(i,j) = NA * ray_sigma * (p(j+1) - p(j)) / (0.5d0 * (g(j+1) + g(j)))
+          !ray_sigma = (ns*ns - 1)**2 / (ns*ns + 2)**2 * 1.1471954d-24 * depol_rho / wl4
+          !ray_sigma = ( &
+          !     (24.0d0 * pi3 * (ns*ns - 1)**2) / &
+          !     (wl4 * Nair * Nair * (ns*ns + 2)**2) * &
+          !     depol_rho &
+          !     )
+
+          !* 1.1471954d-24 * depolf / wl4
+          !rayleigh_tau(i,j) = ray_sigma * (p(j+1) - p(j)) / (0.5d0 * (g(j+1) + g(j)))
+          rayleigh_tau(i,j) = 1.1471954d-24 * NA / wl4 * (ns*ns - 1)**2 / (ns*ns + 2)**2 * depolf &
+               * (p(j+1) - p(j)) / (0.5d0 * (g(j+1) + g(j)) * 1.0d3 * DRY_AIR_MASS)
+          !     * (p(j+1) - p(j)) / (1.0d3 * DRY_AIR_MASS * 0.5d0 * (g(j+1) + g(j)))
+
+          !rayleigh_tau(i,j) = 0.0d0
+
+          !if (j == size(p) - 1) then
+          !    write(*,*) i, j, rayleigh_tau(i,j), depol_rho
+          ! end if
 
        end do
+
     end do
 
   end subroutine calculate_rayleigh_tau
@@ -94,22 +127,19 @@ contains
   subroutine calculate_rayleigh_scatt_matrix(depolf, coeffs)
     double precision, intent(in) :: depolf
     double precision, intent(inout) :: coeffs(:,:)
-    double precision :: depol_rho
-
-    depol_rho = (6.0d0 * depolf - 6.0d0) / (7.0d0 * depolf + 3.0d0)
 
     ! Reset the matrix
     coeffs(:,:) = 0.0d0
 
     ! Set beta (for scalar transport)
     coeffs(1, 1) = 1.0d0 ! beta_0
-    coeffs(3, 1) = (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! beta_2
+    coeffs(3, 1) = (1.0d0 - depolf) / (2.0d0 + depolf) ! beta_2
 
     ! Set other coefficients for vector transport
     if (size(coeffs, 2) == 6) then
-       coeffs(3, 2) = 6.0d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! alpha_2
-       coeffs(2, 4) = 3.0d0 * (1.0d0 - 2.0d0 * depol_rho) / (2.0d0 + depol_rho) ! delta_1
-       coeffs(3, 5) = 2.449489742d0 * (1.0d0 - depol_rho) / (2.0d0 + depol_rho) ! -gamma_2
+       coeffs(3, 2) = 6.0d0 * (1.0d0 - depolf) / (2.0d0 + depolf) ! alpha_2
+       coeffs(2, 4) = 3.0d0 * (1.0d0 - 2.0d0 * depolf) / (2.0d0 + depolf) ! delta_1
+       coeffs(3, 5) = 2.449489742d0 * (1.0d0 - depolf) / (2.0d0 + depolf) ! -gamma_2
        ! gamma_2 (that funky number is ~sqrt(6.0)
     end if
 

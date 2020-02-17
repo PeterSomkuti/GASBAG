@@ -179,12 +179,14 @@ typedef unsigned long long	uint64_t;
 
 typedef signed int		int32_t;
 typedef unsigned int		uint32_t;
+#ifndef __APPLE__
 #if   (PLATFORM    == WIN32_MSVC)
 typedef signed __int64		int64_t;
 typedef unsigned __int64	uint64_t;
 #else
 typedef signed long		int64_t;
 typedef unsigned long		uint64_t;
+#endif
 #endif
 
 #endif

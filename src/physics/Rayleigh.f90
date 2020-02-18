@@ -6,8 +6,10 @@ module Rayleigh_mod
 
 contains
 
-
-  function calculate_rayleigh_depolf(wl) result(depolf)
+  !> @brief King factor according to Tomasi et al. 2005
+  !> @param wl Wavelength in microns
+  !> @param King factor
+  pure function King_factor(wl) result(fac)
 
     double precision, intent(in) :: wl
 
@@ -20,7 +22,7 @@ contains
     double precision, parameter :: F_Ar = 0.934d0
     double precision, parameter :: F_CO2 = 1.15d0
 
-    double precision :: depolf
+    double precision :: fac
     double precision :: wl2, wl4
 
     wl2 = wl * wl
@@ -29,13 +31,24 @@ contains
     F_N2 = 1.034d0 + 3.17d0 * 1.0d-4 / wl2
     F_O2 = 1.096d0 + 1.385d0 * 1.0d-3 / wl2 + 1.448 * 1.0d-4 / wl4
 
-    depolf = N2_C * F_N2 + O2_C * F_O2 + Ar_C * F_ar + CO2_C * F_CO2
-    depolf = depolf / (N2_C + O2_C + Ar_C + CO2_C)
+    fac = N2_C * F_N2 + O2_C * F_O2 + Ar_C * F_ar + CO2_C * F_CO2
+    fac = fac / (N2_C + O2_C + Ar_C + CO2_C)
 
-    ! The above value is the so-called "King Factor" (~1), to turn it into
-    ! the actual depolarization ratio, following computation needs to happen
+  end function King_factor
 
-    depolf = (6.0d0 * depolf - 6.0d0) / (7.0d0 * depolf + 3.0d0)
+
+  !> @brief Depolarization ratio
+  !> @param wl Wavelength in microns
+  !> @param depolf Depolarization ratio
+  pure function calculate_rayleigh_depolf(wl) result(depol_r)
+
+    double precision, intent(in) :: wl
+
+    double precision :: depol_r
+    double precision :: F ! King factor
+
+    F = King_factor(wl)
+    depol_r = (6.0d0 * F - 6.0d0) / (7.0d0 * F + 3.0d0)
 
   end function calculate_rayleigh_depolf
 
@@ -57,62 +70,62 @@ contains
     
     double precision, intent(inout) :: rayleigh_tau(:,:)
 
-
     double precision, parameter :: Nair_ref = 2.546899d19
     double precision, parameter :: p_ref = 101325d0
     double precision, parameter :: T_ref= 288.15d0
-    
+
+    double precision :: F
     double precision :: depolf
     double precision :: depol_rho
     double precision :: Nair
     double precision :: wl2, wl4
+    double precision :: wli2, wli4
     double precision, parameter :: pi3 = pi * pi * pi
-    integer :: i, j
+    integer :: i, j, N
 
     double precision :: n300_1, nCO2_1, ns
     double precision :: ray_sigma
 
+
+    N = size(p)
+    Nair = Nair_ref * (p(N) / p_ref) * (T_ref / T(N))
+
     do i=1, size(wl)
 
+       ! These are all in microns
        wl2 = wl(i) * wl(i)
+       wli2 = 1.0d0 / wl2
        wl4 = wl2 * wl2
 
+       F = King_factor(wl(i))
        depolf = calculate_rayleigh_depolf(wl(i))
 
-       n300_1 = 8060.51d0 + 2480990.0d0 / (132.274d0 - (wl(i)**(-2))) + &
-            17455.7d0 / (39.32957d0 - (wl(i)**(-2)))
+       n300_1 = 8060.51d0 + 2480990.0d0 / (132.274d0 - wli2) + &
+            17455.7d0 / (39.32957d0 - wli2)
        n300_1 = n300_1 * 1.0d-8
        ns = 1.0d0 + n300_1
 
        do j=1, size(p) - 1
 
-          !Nair = Nair_ref * (0.5d0 * (p(j+1) + p(j)) / p_ref) * (T_ref / (0.5d0 * (T(j+1) + T(j))))
-
           ! If we have the CO2 VMRs, we can adjust the value for the
           ! refractive index that is calculated at a reference of 300ppm
-          !if (present(co2)) then
-          !   nCO2_1 = n300_1 * (1.0d0 + 0.54d0 * ((co2(j) + co2(j+1)) * 0.5d0 - 3.0d-4))
-          !   ns = 1.0d0 + nCO2_1
-          !end if
+          if (present(co2)) then
+             nCO2_1 = n300_1 * (1.0d0 + 0.54d0 * ((co2(j) + co2(j+1)) * 0.5d0 - 3.0d-4))
+             ns = 1.0d0 + nCO2_1
+          end if
 
-          !ray_sigma = (ns*ns - 1)**2 / (ns*ns + 2)**2 * 1.1471954d-24 * depol_rho / wl4
-          !ray_sigma = ( &
-          !     (24.0d0 * pi3 * (ns*ns - 1)**2) / &
-          !     (wl4 * Nair * Nair * (ns*ns + 2)**2) * &
-          !     depol_rho &
-          !     )
+          ! Equation 4 of Tomasi et al. 2005
+          ! Nair is in [cm^-3]
+          ! To convert wl to [cm^-3], 1um = 10^4 cm, so wl in [um^4] = 10^-16 [cm^4]
+          ! I'm not sure why Nair is only the surface-level Nair..
+          ray_sigma = ( &
+               (24.0d0 * pi3 * (ns*ns - 1)**2) / &
+               (wl4 * 1.0d-16 * Nair * Nair * (ns*ns + 2)**2) * &
+               F &
+               )
 
-          !* 1.1471954d-24 * depolf / wl4
-          !rayleigh_tau(i,j) = ray_sigma * (p(j+1) - p(j)) / (0.5d0 * (g(j+1) + g(j)))
-          rayleigh_tau(i,j) = 1.1471954d-24 * NA / wl4 * (ns*ns - 1)**2 / (ns*ns + 2)**2 * depolf &
-               * (p(j+1) - p(j)) / (0.5d0 * (g(j+1) + g(j)) * 1.0d3 * DRY_AIR_MASS)
-          !     * (p(j+1) - p(j)) / (1.0d3 * DRY_AIR_MASS * 0.5d0 * (g(j+1) + g(j)))
-
-          !rayleigh_tau(i,j) = 0.0d0
-
-          !if (j == size(p) - 1) then
-          !    write(*,*) i, j, rayleigh_tau(i,j), depol_rho
-          ! end if
+          rayleigh_tau(i,j) = 0.1d0 * ray_sigma * NA * (p(j+1) - p(j)) / &
+               (0.5d0 * (g(j+1) + g(j)) * 1.0d3 * DRY_AIR_MASS)
 
        end do
 

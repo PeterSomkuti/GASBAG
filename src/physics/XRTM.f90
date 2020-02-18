@@ -1406,8 +1406,8 @@ contains
 
        ! Format string for derivative debug output
        ! .. but only go into this branch when debug is requested
-       if ((i == 1) .and. (CS_general%loglevel <= 10)) then
-          call logger%debug(fname, "--- First wavelength ----------------------------------------------")
+       !if ((i == 1) .and. (CS_general%loglevel <= 10)) then
+          !call logger%debug(fname, "--- First wavelength ----------------------------------------------")
 
           ! Write XRTM inputs
           !call logger%debug(fname, "-------------------------------------------------------------------")
@@ -1454,23 +1454,23 @@ contains
           !end do
           !call logger%debug(fname, "-----------------------------------------------------------------------")
 
-          write(fmt_str, '(A,G0.1,A)') "(A, G0.1, A, ", size(derivs, 3), "ES15.5)"
-          do q = 1, n_stokes
-             write(tmp_str, '(A, G0.1, A, ES20.10)') "XRTM radiance, Stokes # ", q, "          : ", I_p(q,1,1,1)
-             call logger%debug(fname, trim(tmp_str))
-             write(tmp_str, '(A, G0.1, A, ES20.10)') "Cumulative XRTM radiance, Stokes #", q, ": ", radiance(i,q)
-             call logger%debug(fname, trim(tmp_str))
-          end do
+          !write(fmt_str, '(A,G0.1,A)') "(A, G0.1, A, ", size(derivs, 3), "ES15.5)"
+          !do q = 1, n_stokes
+          !   write(tmp_str, '(A, G0.1, A, ES20.10)') "XRTM radiance, Stokes # ", q, "          : ", I_p(q,1,1,1)
+          !   call logger%debug(fname, trim(tmp_str))
+          !   write(tmp_str, '(A, G0.1, A, ES20.10)') "Cumulative XRTM radiance, Stokes #", q, ": ", radiance(i,q)
+          !   call logger%debug(fname, trim(tmp_str))
+          !end do
 
-          do q = 1, n_stokes
-             write(tmp_str, trim(fmt_str)) "XRTM weighting functions, Stokes #", q, "           : ", K_p(q,1,1,:,1)
-             call logger%debug(fname, trim(tmp_str))
-             write(tmp_str, trim(fmt_str)) "Cumulative XRTM weighting functions, Stokes #", q, ": ", derivs(i,q,:)
-             call logger%debug(fname, trim(tmp_str))
-          end do
+          !do q = 1, n_stokes
+          !   write(tmp_str, trim(fmt_str)) "XRTM weighting functions, Stokes #", q, "           : ", K_p(q,1,1,:,1)
+          !   call logger%debug(fname, trim(tmp_str))
+          !   write(tmp_str, trim(fmt_str)) "Cumulative XRTM weighting functions, Stokes #", q, ": ", derivs(i,q,:)
+          !   call logger%debug(fname, trim(tmp_str))
+          !end do
 
 
-       end if
+       !end if
 
        if (mod(i, N_spec/10) == 0) then
           write(tmp_str, '(A, F6.2, A, G0.1, A, G0.1, A)') &
@@ -1482,9 +1482,9 @@ contains
 
     call cpu_time(cpu_end)
 
-    write(tmp_str, '(A, F7.3, A)') "Pure XRTM radiance calculations: ", pure_XRTM_duration, " sec"
+    write(tmp_str, '(A, F7.3, A)') "Pure XRTM radiance calculations: ", pure_XRTM_duration, " sec."
     call logger%debug(fname, trim(tmp_str))
-    write(tmp_str, '(A, F7.3, A)') "XRTM monochromatic calculations: ", cpu_end - cpu_start, " sec"
+    write(tmp_str, '(A, F7.3, A)') "XRTM monochr. calc. with overhead: ", cpu_end - cpu_start, " sec."
     call logger%debug(fname, trim(tmp_str))
 
     success = .true.

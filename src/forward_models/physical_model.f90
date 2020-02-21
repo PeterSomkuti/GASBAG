@@ -402,6 +402,11 @@ contains
        ! Just skip unused windows
        if (.not. CS%window(i_win)%used) cycle
 
+       call logger%info(fname,  "---------------------------")
+       write(tmp_str, '(A, A)') "Processing retrieval window: ", CS%window(i_win)%name%chars()
+       call logger%info(fname, trim(tmp_str))
+       call logger%info(fname,  "---------------------------")
+       
        ! At the beginning, we check which gases were defined for this window,
        ! and see if a gas with the corresponding name has been defined.
        call MCS_find_gases(CS%window, CS%gas, i_win)
@@ -697,8 +702,8 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       !frame_start = 1967
-       !frame_stop = 250
+       !frame_start = 2470
+       !frame_stop = 2500
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -730,6 +735,7 @@ contains
 
              if (land_fraction(i_fp, i_fr) < 99.0d0) then
                 call logger%debug(fname, "Skipping water scene.")
+                retr_count = retr_count + 1
                 cycle
              end if
 
@@ -759,8 +765,8 @@ contains
              write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A, F10.5, A, L1, A, G0.1)') &
                   "Frame/FP: ", i_fr, "/", i_fp, " ( ", &
                   dble(100 * dble(retr_count) / dble(total_number_todo)), "%) - ", &
-                  results%processing_time(i_fp, i_fr), " sec. - Converged: ", &
-                  this_converged, ", # Iterations: ", this_iterations
+                  results%processing_time(i_fp, i_fr), " sec. - ", &
+                  this_converged, ", #It: ", this_iterations
 
              call logger%info(fname, trim(tmp_str))
 

@@ -169,18 +169,31 @@ contains
 
     integer, allocatable :: gas_retr_count(:)
 
-    integer :: num_albedo_parameters = 0
-    integer :: num_dispersion_parameters = 0
-    integer :: num_sif_parameters = 0
-    integer :: num_psurf_parameters = 0
-    integer :: num_solar_shift_parameters = 0
-    integer :: num_solar_stretch_parameters = 0
-    integer :: num_zlo_parameters = 0
-    integer :: num_temp_parameters = 0
-    integer :: num_ils_stretch_parameters = 0
-    integer :: num_aerosol_aod_parameters = 0
-    integer :: num_aerosol_height_parameters = 0
-    integer :: num_solar_irrad_scale_parameters = 0
+    integer :: num_albedo_parameters
+    integer :: num_dispersion_parameters
+    integer :: num_sif_parameters
+    integer :: num_psurf_parameters
+    integer :: num_solar_shift_parameters
+    integer :: num_solar_stretch_parameters
+    integer :: num_zlo_parameters
+    integer :: num_temp_parameters
+    integer :: num_ils_stretch_parameters
+    integer :: num_aerosol_aod_parameters
+    integer :: num_aerosol_height_parameters
+    integer :: num_solar_irrad_scale_parameters
+
+    num_albedo_parameters = 0
+    num_dispersion_parameters = 0
+    num_sif_parameters = 0
+    num_psurf_parameters = 0
+    num_solar_shift_parameters = 0
+    num_solar_stretch_parameters = 0
+    num_zlo_parameters = 0
+    num_temp_parameters = 0
+    num_ils_stretch_parameters = 0
+    num_aerosol_aod_parameters = 0
+    num_aerosol_height_parameters = 0
+    num_solar_irrad_scale_parameters = 0
 
     known_SV(:) = ""
     is_gas_SV(:) = .false.
@@ -624,11 +637,22 @@ contains
 
 
 
-  subroutine initialize_statevector(CS_win, num_levels, sv, &
-       count_albedo, count_sif, count_dispersion, count_psurf, &
-       count_solar_shift, count_solar_stretch, count_zlo, &
-       count_temp, count_ils_stretch, count_aerosol_aod, &
-       count_aerosol_height, count_solar_irrad_scale, &
+  subroutine initialize_statevector( &
+       CS_win, &
+       num_levels, &
+       sv, &
+       count_albedo, &
+       count_sif, &
+       count_dispersion, &
+       count_psurf, &
+       count_solar_shift, &
+       count_solar_stretch, &
+       count_zlo, &
+       count_temp, &
+       count_ils_stretch, &
+       count_aerosol_aod, &
+       count_aerosol_height, &
+       count_solar_irrad_scale, &
        gas_retr_count)
 
     implicit none
@@ -777,7 +801,7 @@ contains
 
     if (sv%num_ils_stretch > 0) then
 
-       write(tmp_str, '(A, G0.1)') "Number of ILS stretch SV elements: ", sv%num_dispersion
+       write(tmp_str, '(A, G0.1)') "Number of ILS stretch SV elements: ", sv%num_ils_stretch
        call logger%info(fname, trim(tmp_str))
 
        allocate(sv%idx_ils_stretch(sv%num_ils_stretch))

@@ -862,7 +862,7 @@ contains
           if (CS_win%aerosol_retrieve_aod(i)) then
 
              sv_count = sv_count + 1
-             sv%idx_aerosol_aod(i) = sv_count
+             sv%idx_aerosol_aod(cnt) = sv_count
              sv%aerosol_aod_idx_lookup(cnt) = i
 
              cnt = cnt + 1
@@ -890,7 +890,7 @@ contains
           if (CS_win%aerosol_retrieve_height(i)) then
 
              sv_count = sv_count + 1
-             sv%idx_aerosol_height(i) = sv_count
+             sv%idx_aerosol_height(cnt) = sv_count
              sv%aerosol_height_idx_lookup(cnt) = i
 
              cnt = cnt + 1

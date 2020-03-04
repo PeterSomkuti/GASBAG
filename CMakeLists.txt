@@ -9,6 +9,11 @@ project(GASBAG)
 set(PROJECT_DESCRIPTION "Generic Algorithm for Single Band Acquisition of Gases - GASBAG")
 enable_language(Fortran C)
 
+
+# This section adds the git branch, commit hash and "revision number"
+# as compile-time variables. So running ./GASBAG will print out those
+# values.
+
 execute_process(
   COMMAND git rev-parse --abbrev-ref HEAD
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -33,6 +38,24 @@ execute_process(
 add_definitions("-DGIT_COMMIT_HASH=${GIT_COMMIT_HASH}")
 add_definitions("-DGIT_BRANCH=${GIT_BRANCH}")
 add_definitions("-DGIT_REV_NO=${GIT_REV_NO}")
+
+
+# We have currently these build types. DEBUG will
+# add the "DEBUG" preprocessor varible.
+
+string( TOLOWER "${CMAKE_BUILD_TYPE}" BUILD_TYPE )
+
+if (BUILD_TYPE STREQUAL "debug")
+  message(STATUS "Compiling in debug mode.")
+  add_definitions("-DDEBUG")
+elseif (BUILD_TYPE STREQUAL "release")
+  message(STATUS "Compiling in release mode.")
+elseif (BUILD_TYPE STREQUAL "profile")
+  message(STATUS "Compiling in profile mode.")
+else()
+  message(FATAL_ERROR "Build type ${BUILD_TYPE} not supported.
+                       (DEBUG/RELEASE/PROFILE, case-insenstive)")
+endif()
 
 configure_file(
   ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/Version.f90.in
@@ -192,7 +215,7 @@ set_source_files_properties(
 set_source_files_properties(
   ${xrtm_sources}
   PROPERTIES
-  COMPILE_FLAGS "-O2 -fno-strict-aliasing"
+  COMPILE_FLAGS "-O2"
   COMPILE_FLAGS_DEBUG ""
   )
 

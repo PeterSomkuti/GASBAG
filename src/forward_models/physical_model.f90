@@ -468,6 +468,15 @@ contains
        ! Grab the number of spectral pixels in this band
        num_pixel = CS%general%N_spec(band)
 
+
+       ! If solar footprint averaging is required - we MUST preload the
+       ! spectra here.
+       if (CS%algorithm%solar_footprint_averaging .and. &
+            .not. CS%input%preload_spectra) then
+          call logger%warning(fname, "We will be preloading spectra, regardless of user request.")
+          CS%input%preload_spectra = .true.
+       end if
+
        ! We are reading in the sounding geometry and location on a
        ! per-band basis. This might not be necessary for all instruments,
        ! but why not make use of per-band data (like for OCO-2).
@@ -661,9 +670,16 @@ contains
 
        call logger%info(fname, "Starting main retrieval loop!")
 
-       frame_start = 1
-       frame_skip = CS%window(i_win)%frame_skip
-       frame_stop = num_frames
+       if ((CS%algorithm%solar_footprint_averaging) .and. &
+            (CS%algorithm%observation_mode%lower() == "space_solar")) then
+          frame_start = 1
+          frame_skip = 1
+          frame_stop = 1
+       else
+          frame_start = 1
+          frame_skip = CS%window(i_win)%frame_skip
+          frame_stop = num_frames
+       end if
 
        ! retr_count keeps track of the number of retrievals processed
        ! so far, and the mean_duration keeps track of the average
@@ -733,11 +749,11 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-             if (land_fraction(i_fp, i_fr) < 99.0d0) then
-                call logger%debug(fname, "Skipping water scene.")
-                retr_count = retr_count + 1
-                cycle
-             end if
+!             if (land_fraction(i_fp, i_fr) < 99.0d0) then
+!                call logger%debug(fname, "Skipping water scene.")
+!                retr_count = retr_count + 1
+!                cycle
+!             end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -957,17 +973,29 @@ contains
     ! Solar distance, solar relative velocity, earth relative velocity, and
     ! solar doppler shift - which happens because of the relative motion between
     ! the moving and rotating Earth and the fixed sun.
-    double precision :: solar_dist, solar_rv, solar_doppler
+    double precision :: solar_dist
+    double precision :: solar_rv
+    double precision :: solar_doppler
     ! This solar is the full solar spectrum, i.e. the pseudo-transmittance multiplied
     ! by the solar continuum / irradiance
     double precision, dimension(:,:), allocatable :: this_solar
     ! Solar irradiance / continuum, derivative of solar spectrum with respect to wavelength
     ! (needed for the solar shift and stretch Jacobians)
-    double precision, allocatable :: solar_irrad(:), dsolar_dlambda(:), solar_tmp(:)
+    double precision, allocatable :: solar_irrad(:)
+    double precision, allocatable :: dsolar_dlambda(:)
+    double precision, allocatable :: solar_tmp(:)
     ! Per-iteration values for the solar shift value and the solar stretch factor
-    double precision :: this_solar_shift, this_solar_stretch
+    double precision :: this_solar_shift
+    double precision :: this_solar_stretch
     ! Unscaled solar irradiance if we retrieve solar irradiance scale factor
     double precision, allocatable :: solar_unscaled(:)
+    ! This is for footprint averaging. Keeps track of the mean radiance along
+    ! the frame dimension
+    double precision, allocatable :: solar_mean_rads(:)
+    ! Lower and upper limit for solar footprint averaging
+    double precision :: solar_lower_limit
+    double precision :: solar_upper_limit
+    integer :: solar_frame_counter
 
 
     ! Scene object
@@ -1194,7 +1222,53 @@ contains
        if (CS%input%preload_spectra) then
           ! We have all radiances in memory, just grab it
           allocate(radiance_l1b(CS%general%N_spec(band)))
-          radiance_l1b(:) = all_L1B_radiances(:, i_fp, i_fr)
+          radiance_l1b(:) = 0.0d0
+
+          if (CS%algorithm%solar_footprint_averaging) then
+             ! In solar measurement mode, and footprint averaging, we follow
+             ! Kang Sun's procedure:
+             ! Drop the lowest and highest 5%, and average the rest up but only
+             ! the specific footprint. Then perform the retrieval on this one
+             ! aggregated measurement.
+
+             call logger%debug(fname, "Averaging solar measurements!")
+
+             ! Procedure:
+             ! Loop through all spectral points, and loop through all frames
+
+             allocate(solar_mean_rads(CS%general%N_spec(band)))
+             do j = 1, CS%general%N_spec(band)
+
+                ! For every spectral point, we figure out which is the 5% and 95% value
+                ! that help us remove the outliers
+                solar_lower_limit = percentile(all_L1B_radiances(j, i_fp, :), 5.0d0)
+                solar_upper_limit = percentile(all_L1B_radiances(j, i_fp, :), 95.0d0)
+                solar_frame_counter = 0
+
+                do i = 1, CS%general%N_frame
+
+                   if ( &
+                        (all_L1B_radiances(j, i_fp, i) > solar_lower_limit) .and. &
+                        (all_L1B_radiances(j, i_fp, i) < solar_upper_limit) &
+                        ) then
+
+                      ! Perform a cumulative moving average over all
+                      ! radiances for a given spectral index "j".
+                      radiance_l1b(j) = radiance_l1b(j) + &
+                           (all_L1B_radiances(j, i_fp, i) - radiance_l1b(j)) &
+                           / (solar_frame_counter + 1)
+
+                      solar_frame_counter = solar_frame_counter + 1
+
+                   end if
+                end do
+             end do
+             
+
+          else
+             ! Normal radiance mode - just grab the index
+             radiance_l1b(:) = all_L1B_radiances(:, i_fp, i_fr)
+          end if
        else
           ! Read the L1B spectrum for this one measurement in normal mode!
           call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
@@ -1474,6 +1548,7 @@ contains
     ! understand and change.
     !
     ! ------------------------------------------------------
+
     call logger%debug(fname, "Populating the state vector with priors.")
 
     ! Set slope etc. to zero always (why would we ever want to have a prior slope?)
@@ -1487,8 +1562,8 @@ contains
 
     if (SV%num_solar_irrad_scale > 0) then
        call logger%debug(fname, "Inserting solar irradiance scaling priors")
-       SV%svap(SV%idx_solar_irrad_scale(1)) =  maxval(radiance_l1b) &
-            / (maxval(solar_irrad) * stokes_coef(1, i_fp, i_fr))
+       SV%svap(SV%idx_solar_irrad_scale(1)) =  mean(radiance_l1b) &
+            / (mean(solar_irrad) * stokes_coef(1, i_fp, i_fr))
        do i=2, SV%num_solar_irrad_scale
           SV%svap(SV%idx_solar_irrad_scale(i)) = 0.0d0
        end do
@@ -2593,25 +2668,33 @@ contains
              return
           end if
 
-          ! Pixels flagged with a spike need noise inflation, so
-          ! that they are not really considered in the fit. This should
-          ! save otherwise good spectra with just a few distorted
-          ! radiance values.
+          if (CS%algorithm%solar_footprint_averaging) then
 
-          if (allocated(spike_list)) then
-             do i=1, N_spec
-                ! Remember: spike_list is in full l1b size, but noise work
-                ! is bounded by our window choice, thus needs to be offset
-                ! TODO: This threshold value should be user-supplied, as well
-                ! as the noise inflation factor.
-                ! -127 is a fill value of some sort, so ignore that one
+             noise_work(:) = noise_work(:) !/ sqrt(real(int(CS%general%N_frame * 0.9d0)))
 
-                if ((spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) .and. &
-                     (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) /= -127)) then
-                   ! For now .. use the maximally allowed radiance? Is that too low?
-                   noise_work(i) = 10.0d0 * MaxMS(band)
-                end if
-             end do
+          else
+
+             ! Pixels flagged with a spike need noise inflation, so
+             ! that they are not really considered in the fit. This should
+             ! save otherwise good spectra with just a few distorted
+             ! radiance values.
+
+             if (allocated(spike_list)) then
+                do i=1, N_spec
+                   ! Remember: spike_list is in full l1b size, but noise work
+                   ! is bounded by our window choice, thus needs to be offset
+                   ! TODO: This threshold value should be user-supplied, as well
+                   ! as the noise inflation factor.
+                   ! -127 is a fill value of some sort, so ignore that one
+
+                   if ((spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) >= 5) .and. &
+                        (spike_list(i + l1b_wl_idx_min - 1, i_fp, i_fr) /= -127)) then
+                      ! For now .. use the maximally allowed radiance? Is that too low?
+                      noise_work(i) = 10.0d0 * MaxMS(band)
+                   end if
+                end do
+             end if
+
           end if
 
        end select
@@ -3067,6 +3150,27 @@ contains
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
 
+          ! ---------------
+          ! ATTENTION AGAIN
+          ! ---------------
+          !
+          ! For SV elements that are in absolute radiances (ZLO, SIF), the uncertainties here
+          ! are obviously in units of "after instrument Stokes". In order to make sense of them,
+          ! we scale them back to "before instrument Stokes". So the result container now
+          ! has them in the right "units", and thus the final output file should be sensible,
+          ! such that sigma(SIF) can automatically scale according to the instrument
+          ! Stokes coefficients.
+
+          if (SV%num_zlo == 1) then
+             results%sv_uncertainty(i_fp, i_fr, SV%idx_zlo(1)) = &
+                  results%sv_uncertainty(i_fp, i_fr, SV%idx_zlo(1)) / stokes_coef(1, i_fp, i_fr)
+          end if
+
+          if (SV%num_sif == 1) then
+             results%sv_uncertainty(i_fp, i_fr, SV%idx_sif(1)) = &
+                  results%sv_uncertainty(i_fp, i_fr, SV%idx_sif(1)) / stokes_coef(1, i_fp, i_fr)
+          end if
+
           ! Save retrieved CHI2 (before the last update)
           results%chi2(i_fp, i_fr) = this_chi2
 
@@ -3077,8 +3181,10 @@ contains
           results%SNR(i_fp, i_fr) = mean(radiance_meas_work / noise_work)
           results%SNR_std(i_fp, i_fr) = std(radiance_meas_work / noise_work)
 
-          ! Save also the continuum level radiance
-          results%continuum(i_fp, i_fr) = percentile(radiance_meas_work, 99.0d0)
+          ! Save also the continuum level radiance, but REMEMBER!
+          ! We need to use the stokes coefficient here to scale the value
+          ! back to "before the light hits the instrument" reference.
+          results%continuum(i_fp, i_fr) = percentile(radiance_meas_work, 99.0d0) / stokes_coef(1, i_fp, i_fr)
 
           ! Save statevector at last iteration
           do i=1, size(SV%svsv)
@@ -3456,7 +3562,7 @@ contains
 
     if (SV%num_sif > 0) then
        ! Put SIF prior covariance at the continuum level of the band
-       Sa(SV%idx_sif(1), SV%idx_sif(1)) = continuum * continuum
+       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (0.01d0 * continuum) ** 2
     end if
 
     if (SV%num_zlo > 0) then
@@ -3465,7 +3571,7 @@ contains
     end if
 
     if (SV%num_temp > 0) then
-       ! Set temperature covariance to some value (?)
+       ! Set temperature covariance to some value (10K?)
        Sa(SV%idx_temp(1), SV%idx_temp(1)) = 100.0d0
     end if
 

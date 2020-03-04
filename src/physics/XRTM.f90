@@ -95,7 +95,7 @@ contains
           ! If we use spectrally constant phase function expansion
           ! coeffs, we can make use of this XRTM option which saves
           ! the phase matrix between XRTM calls.
-          ! xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SAVE_PHASE_MATS)
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SAVE_PHASE_MATS)
        end if
 
        ! If polarization is requested, we run
@@ -984,7 +984,7 @@ contains
 
     double precision :: wl_fac
     integer :: N_spec
-    integer :: i, q
+    integer :: i, q, m, k
 
     double precision :: cpu_start, cpu_end
     double precision :: cpu_start2, cpu_end2
@@ -1062,10 +1062,10 @@ contains
        ! needs to be done once for the entire RT procedure
 
        if (keep_coef_constant) then
-          ! Choose band center
+          ! Grab the value from the center
           wl_fac = 0.5d0
-          this_coef(:,:,:) = (1.0d0 - wl_fac) * coef(:,:,:,1) + wl_fac * coef(:,:,:,size(coef, 4))
-          this_lcoef(:,:,:,:) = (1.0d0 - wl_fac) * lcoef(:,:,:,:,1) + wl_fac * lcoef(:,:,:,:,size(lcoef, 5))
+          this_coef(:,:,:) = coef(:,:,:,int(size(coef, 4) / 2))
+          this_lcoef(:,:,:,:) = lcoef(:,:,:,:,int(size(lcoef, 5) / 2))
        end if
 
     else
@@ -1074,7 +1074,7 @@ contains
             size(lcoef_left, 3), size(lcoef_left, 4)))
 
        if (keep_coef_constant) then
-          ! Choose band center
+          ! Choose band center, grab a mixture of left and right l/coefs
           wl_fac = 0.5d0
           this_coef(:,:,:) = (1.0d0 - wl_fac) * coef_left(:,:,:) + wl_fac * coef_right(:,:,:)
           this_lcoef(:,:,:,:) = (1.0d0 - wl_fac) * lcoef_left(:,:,:,:) + wl_fac * lcoef_right(:,:,:,:)
@@ -1202,7 +1202,23 @@ contains
     ! NOTE
     ! This subroutine is intrinsically monochromatic, so the only thing you really need
     ! to make sure is that the array positions between optical paramaters make sense.
+    !
+    ! NOTE
+    ! Most XRTM functions to set optical inputs return an error variable. Ideally we want
+    ! to check every one of those variables whether the call was successful or not. It
+    ! turns out, however, that these checks within the monochromatic loop have a fairly
+    ! significant performance penalty, and can blow up the calculation times by a factor
+    ! of 2x or so. I have thus decided to make these checks only in DEBUG mode, and use
+    ! preprocessor directives to include/exclude them. This is generally bad practice,
+    ! since an error here could only be discovered only when compiling in DEBUG mode.
+    !
     ! -----------------------------------------------------------------------------------
+
+#ifdef DEBUG
+    call logger%debug(fname, "GASBAG was compiled in DEBUG mode. " &
+         // "Additional checks for XRTM will be performed.")
+#endif
+
 
     pure_XRTM_duration = 0.0d0
     call cpu_time(cpu_start)
@@ -1217,6 +1233,7 @@ contains
        single_lomega(:,:) = lomega(i,:,:)
        single_lsurf(:) = lsurf(i,:)
 
+#ifdef DEBUG
        if (any(ieee_is_nan(tau))) then
           write(tmp_str, '(A, G0.1)') "NaN(s) found for TAU at wavelength index: ", i
           call logger%error(fname, trim(tmp_str))
@@ -1246,6 +1263,7 @@ contains
           call logger%error(fname, trim(tmp_str))
           return
        end if
+#endif
 
 
        ! Interpolate phasefunction coefficients at wavelength, but only if
@@ -1268,6 +1286,7 @@ contains
           end if
        end if
 
+#ifdef DEBUG
        if (any(ieee_is_nan(this_coef))) then
           write(tmp_str, '(A, G0.1)') "NaN(s) found for COEF at wavelength index: ", i
           call logger%error(fname, trim(tmp_str))
@@ -1279,86 +1298,93 @@ contains
           call logger%error(fname, trim(tmp_str))
           return
        end if
+#endif
 
        ! Plug in optical depth
        call xrtm_set_ltau_n_f90(xrtm, tau, xrtm_error)
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_ltau_n_f90")
           return
        end if
+#endif
 
        ! Plug in the layer optical depth derivatives
        call xrtm_set_ltau_l_nn_f90(xrtm, single_ltau, xrtm_error)
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_ltau_nn_f90")
           return
        end if
+#endif
 
        ! Plug in the single-scatter albedo
        call xrtm_set_omega_n_f90(xrtm, omega, xrtm_error)
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_omega_n_f90")
           return
        end if
+#endif
 
        ! Plug in the single-scatter albedo derivatives
        call xrtm_set_omega_l_nn_f90(xrtm, single_lomega, xrtm_error)
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_omega_l_nn_f90")
           return
        end if
+#endif
 
-       !if ((.not. keep_coef_constant) .or. (i == 1)) then
+       if ((.not. keep_coef_constant) .or. (i == 1)) then
           ! Plug in the phase function expansion moments
           call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
+#ifdef DEBUG
           if (xrtm_error /= 0) then
              call logger%error(fname, "Error calling xrtm_set_coef_n_f90")
              return
           end if
-
+#endif
           ! Plug in the phase function expansion moment derivatives
           call xrtm_set_coef_l_nn_f90(xrtm, this_lcoef, xrtm_error)
+#ifdef DEBUG
           if (xrtm_error /= 0) then
              call logger%error(fname, "Error calling xrtm_set_coef_l_nn_f90")
              return
           end if
-       !end if
+#endif
+       end if
 
        ! Plug in surface property
        call xrtm_set_kernel_ampfac_f90(xrtm, 0, albedo(i), xrtm_error)
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_kernel_ampfac_f90")
           return
        end if
-
+#endif
        ! Plug in the surface derivatives
        call xrtm_set_kernel_ampfac_l_n_f90(xrtm, 0, single_lsurf, xrtm_error)
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_kernel_ampflac_l_n_f90")
           return
        end if
+#endif
+       ! Call this function to update the layer structure in XRTM,
+       ! according to the manual it must only change if a linearized value
+       ! changed from non-zero to zero (or the other way round). Hence,
+       ! we only call it at the first wavelength.
+       if (i == 1) then
+          call xrtm_update_varied_layers_f90(xrtm, xrtm_error)
+#ifdef DEBUG
+          if (xrtm_error /= 0) then
+             call logger%error(fname, "Error calling xrtm_update_varied_layers_f90")
+             return
+          end if
+#endif
+       endif
 
-       ! Call this function for whatever reason
-       call xrtm_update_varied_layers_f90(xrtm, xrtm_error)
-       if (xrtm_error /= 0) then
-          call logger%error(fname, "Error calling xrtm_update_varied_layers_f90")
-          return
-       end if
-
-       !I_p(:,:,:,:) = 0.0d0
-       !I_m(:,:,:,:) = 0.0d0
-       !K_p(:,:,:,:,:) = 0.0d0
-       !K_m(:,:,:,:,:) = 0.0d0
-
-       ! XRTM has been initialized with whatever number of solvers are stored in
-       ! "xrtm_solvers", however only one is executed at a time (ask Greg?).
-       ! Thus, we need to loop over the possible bitmask positions.
-       ! The contributions from each solver are added up at the end. So if the user
-       ! asks for e.g. SINGLE + 2OS, then you get the radiances and derivatives
-       ! of both, summed.
-
-       ! write(*,*) i, xrtm_get_omega_f90(xrtm, n_layers-1), xrtm_get_coef_f90(xrtm, n_layers-1, 0, 0),  xrtm_get_coef_f90(xrtm, n_layers-1, 0, 1),  xrtm_get_coef_f90(xrtm, n_layers-1, 0, 2)
-       
 
        call cpu_time(cpu_start2)
 
@@ -1378,11 +1404,14 @@ contains
 
        pure_XRTM_duration = pure_XRTM_duration + cpu_end2 - cpu_start2
 
+#ifdef DEBUG
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_radiance_f90")
           return
        end if
+#endif
 
+#ifdef DEBUG
        if (any(ieee_is_nan(I_p))) then
           write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for radiances " &
                // "at wavelength index: ", i
@@ -1396,6 +1425,7 @@ contains
           call logger%error(fname, trim(tmp_str))
           return
        end if
+#endif
 
        ! Store radiances into wavelength-indexed array
        radiance(i,:) = radiance(i,:) + I_p(:,1,1,1)

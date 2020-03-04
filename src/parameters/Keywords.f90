@@ -80,6 +80,8 @@ contains
     valid_options(2,3) = "observation_mode"
     ! Step-through mode for debugging and exploring retrieval set-up
     valid_options(2,4) = "step_through"
+    ! Averaging solar footprints
+    valid_options(2,5) = "solar_footprint_averaging"
 
     ! Related to the instrument in question
     valid_sections(3) = "instrument"

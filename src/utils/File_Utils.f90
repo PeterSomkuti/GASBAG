@@ -470,6 +470,7 @@ contains
 
     ! Convert to a string object
     fini_string = trim(value)
+
     ! And use the split function to get the single items out
     call fini_string%split(tokens=split_strings, sep=' ')
     ! Now allocate a double precision object according to the number of

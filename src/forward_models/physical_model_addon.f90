@@ -186,6 +186,8 @@ contains
     double precision, allocatable, intent(inout) :: coef(:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
 
+    character(len=*), parameter :: fname = "compute_coef_at_wl"
+
     integer :: n_aer
     integer :: n_layer
     integer :: n_pfmom
@@ -215,6 +217,8 @@ contains
 
     coef(:,:,:) = 0.0d0
     lcoef(:,:,:,:) = 0.0d0
+    ray_coef(:,:) = 0.0d0
+    aerpmom(:,:,:,:) = 0.0d0
 
     call calculate_rayleigh_scatt_matrix(&
          calculate_rayleigh_depolf(wl), ray_coef(:,:))
@@ -252,6 +256,7 @@ contains
 
              ! Add aerosol contributions here
              coef(:, p, l) = coef(:, p, l) + aerpmom(a, :, p, l) * aer_sca_tau(l, a)
+
           end do
 
        end do
@@ -260,6 +265,7 @@ contains
        coef(1:3, :, l) = coef(1:3, :, l) + ray_coef(:, :) * ray_tau(l)
        ! and divide the entire layer-moments by the denominator
        coef(:, :, l) = coef(:, :, l) / denom
+
 
        ! Now that we have beta, we can 'simply' calculate the derivative inputs
        ! needed by the RT model(s).
@@ -316,8 +322,18 @@ contains
 
        end do
 
+    end do ! Layer loop
 
-    end do
+    if (any(ieee_is_nan(coef))) then
+       call logger%error(fname, "I found NaN(s) in the COEF calculation.")
+       stop 1
+    end if
+
+    if (any(ieee_is_nan(lcoef))) then
+       call logger%error(fname, "I found NaN(s) in the LCOEF calculation.")
+       stop 1
+    end if
+
 
   end subroutine compute_coef_at_wl
 

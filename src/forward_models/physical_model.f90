@@ -749,11 +749,11 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-!             if (land_fraction(i_fp, i_fr) < 99.0d0) then
-!                call logger%debug(fname, "Skipping water scene.")
-!                retr_count = retr_count + 1
-!                cycle
-!             end if
+             if (land_fraction(i_fp, i_fr) < 99.0d0) then
+                call logger%debug(fname, "Skipping water scene.")
+                retr_count = retr_count + 1
+                cycle
+             end if
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------
@@ -1787,14 +1787,15 @@ contains
 
           ! Obtain the number of active levels.
           call calculate_active_levels(scn)
-
-      !    if (scn%num_active_levels > scn%num_levels) then
-      !       call logger%error(fname, "Number of active levels > number of levels.")
-      !       return
-      !    end if
-
           num_active_levels = scn%num_active_levels
 
+          ! Allocate scene objects with variable number of levels
+          if (allocated(scn%atm%pwgts)) deallocate(scn%atm%pwgts)
+          allocate(scn%atm%pwgts(num_active_levels))
+
+          if (allocated(scn%atm%pwgts_layers)) deallocate(scn%atm%pwgts_layers)
+          allocate(scn%atm%pwgts_layers(num_active_levels + 1))
+          
           ! Should SH drop below 0 for whatever reason, shift it back
           ! some tiny value.
           where (scn%atm%sh < 0.0d0) scn%atm%sh = 1.0d-10
@@ -3031,6 +3032,19 @@ contains
              ! for the various sections of the atmopshere.
              results%ndry(i_fp, i_fr) = sum(scn%atm%ndry)
 
+             ! Based on this 'current' retrieved VMR profile
+             call pressure_weighting_function( &
+                  num_active_levels, &
+                  scn%atm%p, &
+                  scn%atm%psurf, &
+                  scn%atm%sh_layers, &
+                  scn%atm%grav_layers, &
+                  scn%atm%pwgts)
+
+             do i = 1, num_active_levels
+                results%pwgts(i_fp, i_fr, i) = scn%atm%pwgts(i)
+             end do
+
              do j=1, CS_win%num_gases
 
                 ! Allocate array for pressure weights
@@ -3074,41 +3088,17 @@ contains
                 results%pressure_levels(i_fp, i_fr, 1:num_active_levels) = &
                      scn%atm%p(1:num_active_levels)
 
-
-                ! Based on this 'current' retrieved VMR profile
-                call pressure_weighting_function( &
-                     num_active_levels, &
-                     scn%atm%p, &
-                     scn%atm%psurf, &
-                     this_vmr_profile(:, j), &
-                     pwgts)
-
-                do i = 1, num_active_levels
-                   results%pwgts(i_fp, i_fr, j, i) = pwgts(i)
-                end do
-
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas(i_fp, i_fr, j) = ddot( &
                      num_active_levels, &
-                     pwgts, 1, &
+                     scn%atm%pwgts, 1, &
                      this_vmr_profile(:, j), 1 &
                      )
-
-                ! Repeat this section again for the prior gas
-                ! 
-                ! ------
-                ! Based on the prior VMR profile
-                call pressure_weighting_function( &
-                     num_active_levels, &
-                     scn%atm%p, &
-                     scn%atm%psurf, &
-                     prior_vmr_profile(:, j), &
-                     pwgts)
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
                 results%xgas_prior(i_fp, i_fr, j) = ddot( &
                      num_active_levels, &
-                     pwgts, 1, &
+                     scn%atm%pwgts, 1, &
                      prior_vmr_profile(:, j), 1 &
                      )
 

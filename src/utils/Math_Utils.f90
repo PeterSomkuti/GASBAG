@@ -83,18 +83,20 @@ contains
   !> @brief Calculates the O'Dell-ian pressure weighting function
   !
   !> @param N Number of active levels
-  !> @param p_levels Pressure level array
+  !> @param p_levels Pressure level array (levels)
   !> @param psurf Surface pressure
-  !> @param vrms Volume mixing ratio array for this gas
-  !> @param pwgts Pressure weights
+  !> @param q Specific humidity (layers)
+  !> @param g Gravity (layers)
+  !> @param pwgts Pressure weights (levels)
   !
   !> @details For details of the calculation go and read O'Dell et al. (2012 ACOS paper)
-  subroutine pressure_weighting_function(N, p_levels, psurf, vmrs, pwgts)
+  subroutine pressure_weighting_function(N, p_levels, psurf, q, g, pwgts)
     implicit none
     integer, intent(in) :: N
     double precision, intent(in) :: p_levels(:)
     double precision, intent(in) :: psurf
-    double precision, intent(in) :: vmrs(:)
+    double precision, intent(in) :: q(:)
+    double precision, intent(in) :: g(:)
     double precision, intent(inout) :: pwgts(:)
 
     ! Loop and size variables
@@ -116,7 +118,7 @@ contains
     do i=1, N-1
        ! Loop over levels starting from top down to
        ! the surface layer.
-       cbar(i) = 0.5d0 * (vmrs(i) + vmrs(i+1))
+       cbar(i) = (1.0d0 - q(i)) / (g(i) * DRY_AIR_MASS)
        dp(i) = p_levels(i+1) - p_levels(i)
        hp(i) = cbar(i) * dp(i)
     end do

@@ -29,14 +29,23 @@ module scene_mod
      double precision, allocatable :: p_layers(:)
      !> Model atmosphere specific humidity
      double precision, allocatable :: sh(:)
+     !> Model atmosphere specific humidity at pressure layers
+     double precision, allocatable :: sh_layers(:)
      !> Model atmosphere gravity at pressure levels
      double precision, allocatable :: grav(:)
+     !> Model atmosphere gravity at pressure levels
+     double precision, allocatable :: grav_layers(:)
      !> Model atmosphere altitude at pressure levels
      double precision, allocatable :: altitude_levels(:)
      !> Layer altitude
      double precision, allocatable :: altitude_layers(:)
      !> Model atmosphere dry air column at layers
      double precision, allocatable :: ndry(:)
+     !> Level pressure weighting function for this scene
+     double precision, allocatable :: pwgts(:)
+     !> Layer pressure weighting function for this scene
+     double precision, allocatable :: pwgts_layers(:)
+
   end type atmosphere
 
   !> Holds optical gas/aerosol properties of the scene

@@ -41,8 +41,8 @@ module physical_model_addon_mod
      double precision, allocatable :: vmr_prior(:,:,:,:)
      !> Retrieved gas VMRs per level (footprint, frame, gas_number, pressure level)
      double precision, allocatable :: vmr_retrieved(:,:,:,:)
-     !> Pressure weighting functions (footprint, frame, gas_number, pressure level)
-     double precision, allocatable :: pwgts(:,:,:,:)
+     !> Pressure weighting functions (footprint, frame, pressure level)
+     double precision, allocatable :: pwgts(:,:,:)
      !> Column averaging kernels (footprint, frame, gas_number, pressure level)
      double precision, allocatable :: col_ak(:,:,:,:)
      !> Final Chi2 (footprint, frame)
@@ -73,7 +73,8 @@ module physical_model_addon_mod
 contains
 
 
-  !> @brief Calculates mid-layer pressures, taking into account surface pressure
+  !> @brief Calculates mid-layer pressures and humidities,
+  !>        taking into account surface pressure
   !> @param scn Scene object
   subroutine calculate_layer_pressure(scn)
     type(scene), intent(inout) :: scn
@@ -87,9 +88,11 @@ contains
     allocate(scn%atm%p_layers(scn%num_active_levels - 1))
 
     scn%atm%p_layers(:) = -1.0d0
+    scn%atm%sh_layers(:) = -1.0d0
 
     ! Loop over all layers and compute mid-layer pressure
     do l = 1, scn%num_active_levels - 1
+       scn%atm%sh_layers(l) = 0.5d0 * (scn%atm%sh(l) + scn%atm%sh(l+1))
        if (l < scn%num_active_levels - 2) then
           scn%atm%p_layers(l) = 0.5d0 * (scn%atm%p(l) + scn%atm%p(l+1))
        else
@@ -446,9 +449,10 @@ contains
     end do
 
     ! Some calculations want the layer altitude, so might as well compute them
-    ! here and store them.
+    ! here and store them along with gravity on layers.
     do i = 1, scn%num_levels - 1
        scn%atm%altitude_layers(i) = 0.5d0 * (scn%atm%altitude_levels(i) + scn%atm%altitude_levels(i+1))
+       scn%atm%grav_layers(i) = jpl_gravity(scn%lat, scn%atm%altitude_layers(i))
     end do
 
   end subroutine scene_altitude
@@ -673,12 +677,14 @@ contains
           if (allocated(atm%p)) deallocate(atm%p)
           if (allocated(atm%T)) deallocate(atm%T)
           if (allocated(atm%sh)) deallocate(atm%sh)
+          if (allocated(atm%sh_layers)) deallocate(atm%sh_layers)
           if (allocated(atm%gas_names)) deallocate(atm%gas_names)
           if (allocated(atm%gas_index)) deallocate(atm%gas_index)
           if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
           if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
           if (allocated(atm%altitude_layers)) deallocate(atm%altitude_layers)
           if (allocated(atm%grav)) deallocate(atm%grav)
+          if (allocated(atm%grav_layers)) deallocate(atm%grav_layers)
           if (allocated(atm%ndry)) deallocate(atm%ndry)
 
           ! Allocate according to the file structure
@@ -688,12 +694,14 @@ contains
           allocate(atm%T(level_count))
           allocate(atm%p(level_count))
           allocate(atm%sh(level_count))
+          allocate(atm%sh_layers(level_count - 1))
           allocate(atm%gas_names(num_gases))
           allocate(atm%gas_vmr(level_count, num_gases))
           allocate(atm%gas_index(num_gases))
           allocate(atm%altitude_levels(level_count))
           allocate(atm%altitude_layers(level_count - 1))
           allocate(atm%grav(level_count))
+          allocate(atm%grav_layers(level_count - 1))
           allocate(atm%ndry(level_count))
 
           allocate(this_gas_index(size(gas_strings)))
@@ -803,7 +811,7 @@ contains
     allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
     allocate(results%xgas(num_fp, num_frames, num_gas))
     allocate(results%xgas_prior(num_fp, num_frames, num_gas))
-    allocate(results%pwgts(num_fp, num_frames, num_gas, num_level))
+    allocate(results%pwgts(num_fp, num_frames, num_level))
     allocate(results%col_ak(num_fp, num_frames, num_gas, num_level))
     allocate(results%pressure_levels(num_fp, num_frames, num_level))
     allocate(results%vmr_prior(num_fp, num_frames, num_gas, num_level))
@@ -1069,6 +1077,8 @@ contains
     integer :: N_SV
     ! Loop variable
     integer :: i
+    ! Does this key exist?
+    logical :: hdfexists
 
     N_SV = size(results%sv_prior, 3)
 
@@ -1172,18 +1182,36 @@ contains
                trim(tmp_str), &
                results%xgas_prior(:,:,i), out_dims2d, -9999.99d0)
 
+          if (CS_output%pressure_weights) then
+             write(tmp_str, '(A,A,A,A)') trim(group_name), &
+                  "/pressure_weights_", CS_general%code_name
+             call h5lexists_f(output_file_id, trim(tmp_str), hdfexists, hdferr)
+
+             if (.not. hdfexists) then
+                call logger%info(fname, "Writing out: " // trim(tmp_str))
+                call write_DP_hdf_dataset(output_file_id, &
+                     trim(tmp_str), &
+                     results%pwgts(:,:,:), out_dims3d, -9999.99d0)
+             end if
+          end if
+
           if (CS_output%gas_averaging_kernels) then
              ! These variables only need to be saved if the user requested
              ! column averaging kernels. They add quite a bit to the output
              ! file size, hence you want to make sure that you really need
              ! them.
 
+             ! Write pressure levels only once!
              write(tmp_str, '(A,A,A,A)') trim(group_name), "/pressure_levels", &
                   "_", CS_general%code_name
-             call logger%info(fname, "Writing out: " // trim(tmp_str))
-             call write_DP_hdf_dataset(output_file_id, &
-                  trim(tmp_str), &
-                  results%pressure_levels(:,:,:), out_dims3d, -9999.99d0)
+             call h5lexists_f(output_file_id, trim(tmp_str), hdfexists, hdferr)
+
+             if (.not. hdfexists) then
+                call logger%info(fname, "Writing out: " // trim(tmp_str))
+                call write_DP_hdf_dataset(output_file_id, &
+                     trim(tmp_str), &
+                     results%pressure_levels(:,:,:), out_dims3d, -9999.99d0)
+             end if
 
              if (CS_output%gas_averaging_kernels) then
                 write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
@@ -1192,15 +1220,6 @@ contains
                 call write_DP_hdf_dataset(output_file_id, &
                      trim(tmp_str), &
                      results%col_AK(:,:,i,:), out_dims3d, -9999.99d0)
-             end if
-
-             if (CS_output%pressure_weights) then
-                write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
-                     lower_str%chars(), "_pressure_weights_", CS_general%code_name
-                call logger%info(fname, "Writing out: " // trim(tmp_str))
-                call write_DP_hdf_dataset(output_file_id, &
-                     trim(tmp_str), &
-                     results%pwgts(:,:,i,:), out_dims3d, -9999.99d0)
              end if
 
              write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/", &

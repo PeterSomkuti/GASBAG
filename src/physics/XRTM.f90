@@ -394,6 +394,15 @@ contains
        monochr_radiance(:,:) = 0.0d0
        monochr_weighting_functions(:,:,:) = 0.0d0
 
+       ! -------------------------------------------
+       !
+       ! This outer loop runs over all supplied
+       ! XRTM solvers, and the results for jacobians
+       ! AND radiances will be ADDED up. The user
+       ! must know what they are doing.
+       ! 
+       ! -------------------------------------------
+
        do i = 1, size(xrtm_solvers)
 
           ! --------------------------------------
@@ -898,7 +907,7 @@ contains
   !> and (coef_right, lcoef_right) arrays without a wavelength dimension, and linear interpolation will be used
   !> to obtain the values at each wavelength.
   !> NOTE that radiance and derivative values are added to "radiance" and "derivs" arrays, so you MUST
-  !> make sure that they are properly initialized before they are passed into this function.
+  !> make sure that they are properly initialized/zeroed before they are passed into this function.
   subroutine calculate_XRTM_radiance( &
        xrtm, &
        SV, &
@@ -928,8 +937,13 @@ contains
     type(statevector), intent(in) :: SV
     type(CS_general_t), intent(in) :: CS_general
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
+
     double precision, intent(in) :: wavelengths(:)
-    double precision, intent(in) :: SZA, VZA, SAA, VAA, albedo(:)
+    double precision, intent(in) :: SZA
+    double precision, intent(in) :: VZA
+    double precision, intent(in) :: SAA
+    double precision, intent(in) :: VAA
+    double precision, intent(in) :: albedo(:)
     double precision, intent(in) :: altitude_levels(:)
     double precision, intent(in) :: layer_tau(:,:)
     double precision, intent(in) :: layer_omega(:,:)
@@ -1022,6 +1036,7 @@ contains
 
     N_spec = size(wavelengths)
 
+    ! Viewing geometry
     out_thetas(1) = VZA
     out_phis(1,1) = VAA
     out_levels(1) = 0
@@ -1409,9 +1424,7 @@ contains
           call logger%error(fname, "Error calling xrtm_radiance_f90")
           return
        end if
-#endif
 
-#ifdef DEBUG
        if (any(ieee_is_nan(I_p))) then
           write(tmp_str, '(A, G0.1)') "XRTM produced a NaN for radiances " &
                // "at wavelength index: ", i

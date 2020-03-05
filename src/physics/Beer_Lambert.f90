@@ -144,12 +144,19 @@ contains
     end subroutine calculate_BL_gas_subcolumn_jacobian
 
 
-    subroutine calculate_BL_scale_AK_corr(TOA_radiance, scn, SV, &
+    subroutine calculate_BL_scale_AK_corr( &
+         TOA_radiance, &
+         scn, &
+         SV, &
          gain_matrix, &
-         ILS_delta_lambda, ILS_relative_response, dispersion, &
+         ILS_delta_lambda, &
+         ILS_relative_response, &
+         dispersion, &
          psurf, &
-         num_active_levels, N_spec, &
-         idx_start, idx_stop, &
+         num_active_levels, &
+         N_spec, &
+         idx_start, &
+         idx_stop, &
          col_AK)
 
       implicit none
@@ -247,14 +254,6 @@ contains
                  * SV%svsv(SV%idx_gas(i_SV, 1))
          end do
 
-         ! Calculate pressure weights for the prior VMR / column
-         call pressure_weighting_function( &
-              num_active_levels, &
-              scn%atm%p(1:num_active_levels), &
-              psurf, &
-              prior_VMR(1:num_active_levels), &
-              pwgts(1:num_active_levels))
-
          AK_profile_total(:) = 0.0d0
          do i_SV=1, SV%num_gas
             if (i_gas /= SV%gas_idx_lookup(i_SV)) cycle
@@ -267,7 +266,7 @@ contains
                ! G dot dI/dVMR is a vector of length(SV)
                tmp_v1(:) = matmul(gain_matrix, dI_dVMR_conv(:, i))
                ! Now multiply by (h^T dot [prior_VMR * s_bar])
-               AK_profile(i_SV, i) = tmp_v1(SV%idx_gas(i_SV, 1)) * dot_product(pwgts, prior_VMR * s_bar)
+               AK_profile(i_SV, i) = tmp_v1(SV%idx_gas(i_SV, 1)) * dot_product(scn%atm%pwgts, prior_VMR * s_bar)
                AK_profile_total(i) = AK_profile_total(i) + AK_profile(i_SV, i)
 
             end do

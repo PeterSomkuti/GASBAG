@@ -9,7 +9,7 @@ project(GASBAG)
 set(PROJECT_DESCRIPTION "Generic Algorithm for Single Band Acquisition of Gases - GASBAG")
 enable_language(Fortran C)
 
-
+# -------------------------------------------------------------------
 # This section adds the git branch, commit hash and "revision number"
 # as compile-time variables. So running ./GASBAG will print out those
 # values.
@@ -39,7 +39,16 @@ add_definitions("-DGIT_COMMIT_HASH=${GIT_COMMIT_HASH}")
 add_definitions("-DGIT_BRANCH=${GIT_BRANCH}")
 add_definitions("-DGIT_REV_NO=${GIT_REV_NO}")
 
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/Version.f90.in
+  ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.f90
+)
 
+#
+# -------------------------------------------------------------------
+
+
+# -------------------------------------------------------------------
 # We have currently these build types. DEBUG will
 # add the "DEBUG" preprocessor varible.
 
@@ -56,11 +65,8 @@ else()
   message(FATAL_ERROR "Build type ${BUILD_TYPE} not supported.
                        (DEBUG/RELEASE/PROFILE, case-insenstive)")
 endif()
+# -------------------------------------------------------------------
 
-configure_file(
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/parameters/Version.f90.in
-  ${CMAKE_CURRENT_BINARY_DIR}/generated/Version.f90
-)
 
 if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
@@ -119,8 +125,9 @@ find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
 find_package(NETCDF REQUIRED COMPONTENTS Fortran)
 find_package(HDF5 REQUIRED COMPONENTS Fortran)
+
 # This is where we put compiled modules
-SET(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
+set(CMAKE_Fortran_MODULE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/lib)
 
 # Add source files to the list
 file(GLOB_RECURSE sources src/*.?90)
@@ -227,7 +234,6 @@ set_source_files_properties(
   COMPILE_FLAGS "${warnings}"
 )
 
-
 # Define the executable
 add_executable(GASBAG ${sources} ${third-party} ${xrtm_sources} ${generated})
 
@@ -243,8 +249,8 @@ message(STATUS "BLAS Libraries at -- " ${BLAS_LIBRARIES})
 message(STATUS "HDF5 Libraries at -- " ${HDF5_Fortran_LIBRARIES})
 
 # HDF5 needs to be included at compile time already
-target_include_directories(GASBAG PUBLIC ${HDF5_Fortran_INCLUDE_DIRS}
-#${GPERFTOOLS_INCLUDE_DIR}
+target_include_directories(GASBAG PUBLIC
+${HDF5_Fortran_INCLUDE_DIRS}
 )
 
 target_link_libraries(GASBAG

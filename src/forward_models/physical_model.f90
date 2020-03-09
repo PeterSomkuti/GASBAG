@@ -451,6 +451,12 @@ contains
           ! with the contents of said file. It is cross-referenced against the gases in the
           ! list of gases in this window. This is non-optional obviously, so the program is
           ! going to stop if it cannot find the specified file.
+          !
+          ! TODO
+          ! I think this way of setting up the atmosphere is bad design at this point.
+          ! We should REALLY either: grab the pressure levels from the MET file, or
+          ! generate a new pressure grid, based on e.g. tropopause, topography, or
+          ! something else physically sensible.
 
           call logger%debug(fname, "Looking into atmosphere file.")
           call read_atmosphere_file(&
@@ -610,7 +616,11 @@ contains
           wavelength_radiance(:,:,:) = IEEE_VALUE(1D0, IEEE_QUIET_NAN)
        end if
 
+       ! ----------------------------------
+       !
        ! Set up state vector structure here
+       ! 
+       ! ----------------------------------
 
        ! We can do this once for every window, and simply clear the contents
        ! of the state vectors inside the loop later on. Might not save an awful
@@ -659,14 +669,12 @@ contains
        ! Create the SV names corresponding to the SV indices
        call assign_SV_names_to_result(results, global_SV, CS%window(i_win))
 
-
        ! Read-in of some former retrieval results for use as new prior
        call preload_former_results( &
             CS%window(i_win), &
             CS%general, &
             global_SV, &
             former_results)
-
 
        call logger%info(fname, "Starting main retrieval loop!")
 
@@ -686,7 +694,6 @@ contains
        ! processing time.
        total_number_todo = (num_fp * frame_stop / frame_skip) / &
             (CS%window(i_win)%frame_skip * CS%window(i_win)%footprint_skip)
-
 
        ! If the user wants to run in step-through mode, then that decision takes
        ! higher priority than the number of requested OpenMP threads.
@@ -1013,9 +1020,12 @@ contains
     double precision, allocatable :: prior_vmr_profile(:,:)
 
     ! Start and end positions in the atmosphere of the gas scalar
-    integer :: s_start(global_SV%num_gas), s_stop(global_SV%num_gas)
+    integer :: s_start(global_SV%num_gas)
+    integer :: s_stop(global_SV%num_gas)
     ! Is this gas H2O?
     logical :: is_H2O
+    ! Tropopause pressure
+    double precision :: ptropo
 
     ! Albedo
     ! ----------------
@@ -1147,7 +1157,7 @@ contains
     num_active_levels = -1
 
     ! Take a local copy of the HDF file ID handlers
-    l1b_file_id = CS%input%l1b_file_id
+    l1b_file_id    = CS%input%l1b_file_id
     output_file_id = CS%output%output_file_id
 
     ! Ingest scene geometry and store them into the scene object
@@ -1155,7 +1165,7 @@ contains
     scn%VZA = VZA(i_fp, i_fr)
 
     scn%mu0 = cos(DEG2RAD * scn%SZA)
-    scn%mu = cos(DEG2RAD * scn%VZA)
+    scn%mu  = cos(DEG2RAD * scn%VZA)
 
     scn%SAA = SAA(i_fp, i_fr)
     scn%VAA = VAA(i_fp, i_fr)
@@ -1163,6 +1173,18 @@ contains
     scn%lon = lon(i_fp, i_fr)
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
+
+    call twmo( &
+         size(met_P_levels, 1), &
+         met_T_profiles(:, i_fp, i_fr), &
+         met_P_levels(:, i_fp, i_fr), &
+         45000.0d0, &
+         7500.0d0, &
+         -0.002d0, &
+         ptropo)
+
+    write(tmp_str, '(A, F8.3)') "Tropopause pressure: ", ptropo
+    call logger%debug(fname, trim(tmp_str))
 
     ! -------------------------------------
     !
@@ -1271,8 +1293,13 @@ contains
           end if
        else
           ! Read the L1B spectrum for this one measurement in normal mode!
-          call my_instrument%read_one_spectrum(l1b_file_id, i_fr, i_fp, band, &
-               CS%general%N_spec(band), radiance_l1b)
+          call my_instrument%read_one_spectrum( &
+               l1b_file_id, &
+               i_fr, &
+               i_fp, &
+               band, &
+               CS%general%N_spec(band), &
+               radiance_l1b)
        end if
     end select
 
@@ -1770,7 +1797,6 @@ contains
 
           ! And get the T and SH MET profiles onto our new atmosphere grid. We are
           ! sampling it on a log(p) grid.
-
           call logger%debug(fname, "Resampling MET profiles.")
 
           call pwl_value_1d_v2( &
@@ -1788,13 +1814,6 @@ contains
           ! Obtain the number of active levels.
           call calculate_active_levels(scn)
           num_active_levels = scn%num_active_levels
-
-          ! Allocate scene objects with variable number of levels
-          if (allocated(scn%atm%pwgts)) deallocate(scn%atm%pwgts)
-          allocate(scn%atm%pwgts(num_active_levels))
-
-          if (allocated(scn%atm%pwgts_layers)) deallocate(scn%atm%pwgts_layers)
-          allocate(scn%atm%pwgts_layers(num_active_levels + 1))
           
           ! Should SH drop below 0 for whatever reason, shift it back
           ! some tiny value.
@@ -2067,8 +2086,16 @@ contains
 
                    ! From the user SV input, determine which levels belong to the
                    ! gas subcolumn retrieval.
-                   call set_gas_scale_levels(SV, j, CS_win, scn%atm, scn%atm%psurf, &
-                        s_start, s_stop, do_gas_jac, success_scale_levels)
+                   call set_gas_scale_levels( &
+                        SV, &
+                        j, &
+                        CS_win, &
+                        scn%atm, &
+                        scn%atm%psurf, &
+                        s_start, &
+                        s_stop, &
+                        do_gas_jac, &
+                        success_scale_levels)
 
                    if (.not. success_scale_levels) then
                       call logger%error(fname, "Error calculating subcolumn boundaries.")
@@ -2216,7 +2243,6 @@ contains
 
              ! Let us allocate the scene aerosol type according to the type
              ! supplied on the configuration file.
-
              if (allocated(scene_aerosols)) deallocate(scene_aerosols)
 
              if (CS_win%aerosol_distribution_shape%lower() == "gauss") then
@@ -3107,7 +3133,7 @@ contains
 
              if (CS%output%gas_averaging_kernels) then
                 ! Averaging kernels for gases are computationally slightly costly,
-                ! thus we skip this part if not requested.
+                ! (repeated convolutions), thus we skip this part if not requested.
 
                 call calculate_BL_scale_AK_corr( &
                      radiance_calc_work_hi(:), &
@@ -3130,7 +3156,6 @@ contains
 
           ! Save the final dSigma-squared value (in case anyone needs it)
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
-          !matmul(gain_matrix, K) ! These should be the same
 
           ! Calculate state vector element uncertainties from Shat
           do i=1, N_sv
@@ -3177,9 +3202,7 @@ contains
           results%continuum(i_fp, i_fr) = percentile(radiance_meas_work, 99.0d0) / stokes_coef(1, i_fp, i_fr)
 
           ! Save statevector at last iteration
-          do i=1, size(SV%svsv)
-             results%sv_retrieved(i_fp, i_fr,i) = SV%svsv(i)
-          end do
+          results%sv_retrieved(i_fp, i_fr, :) = SV%svsv(:)
 
           ! Save the number of iterations, remember we start counting at 1,
           ! so the first update is the 2nd iteration etc.
@@ -3372,17 +3395,7 @@ contains
              end do
              close(funit)
              call logger%debug(fname, "Written file: total_tau.dat (modelled)")
-
-             open(file="rayleigh_tau.dat", newunit=funit)
-             do i=1, N_hires
-                write(funit, *) sum(scn%op%ray_tau(i, :))
-             end do
-             close(funit)
-             call logger%debug(fname, "Written file: total_tau.dat (modelled)")
-
           end if
-
-
 
           call logger%debug(fname, "---------------------------------")
 

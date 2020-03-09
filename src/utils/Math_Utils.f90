@@ -80,6 +80,108 @@ contains
   end function std
 
 
+  !> @brief Tropopause pressure calculation (C) T. Reichler
+  !> @detail This code was copied from http://www.inscc.utah.edu/~reichler/research/projects/TROPO/code.txt
+  !>         and only adjusted for data types (real to DP), and reversed layer ordering.
+  !>         Values used in Leicester preprocessing:
+  !>         plimu = 45000 Pa
+  !>         pliml = 7500 Pa
+  !>         gamma = -0.002 K/m
+  subroutine twmo(level, t, p, plimu, pliml, gamma, trp)
+
+    implicit none
+    integer,intent(in)                  :: level
+    double precision, intent(in)        :: t(:), p(:)
+    double precision, intent(in)        :: plimu, pliml, gamma
+    double precision, intent(out)       :: trp
+
+    double precision, parameter         :: kap=0.286
+    double precision, parameter         :: faktor = -9.81/287.0
+    double precision, parameter         :: deltaz = 2000.0
+    double precision, parameter         :: ka1=kap-1.
+
+    double precision                    :: pmk, pm, a, b, tm, dtdp, dtdz
+    double precision                    :: ag, bg, ptph
+    double precision                    :: pm0, pmk0, dtdz0
+    double precision                    :: p2km, asum, aquer
+    double precision                    :: pmk2, pm2, a2, b2, tm2, dtdp2, dtdz2
+    integer                             :: icount, jj
+    integer                             :: j
+
+    trp=-99.0                           ! negative means not valid
+    do j=level, 2, -1
+
+       ! dt/dz
+       pmk= .5 * (p(j-1)**kap+p(j)**kap)
+       pm = pmk**(1/kap)
+       a = (t(j-1)-t(j))/(p(j-1)**kap-p(j)**kap)
+       b = t(j)-(a*p(j)**kap)
+       tm = a * pmk + b
+       dtdp = a * kap * (pm**ka1)
+       dtdz = faktor*dtdp*pm/tm
+
+       ! dt/dz valid?
+       if (j.eq.level)    go to 999     ! no, start level, initialize first
+       if (dtdz.le.gamma) go to 999     ! no, dt/dz < -2 K/km
+       if (pm.gt.plimu)   go to 999     ! no, too low
+
+       ! dtdz is valid, calculate tropopause pressure
+       if (dtdz0.lt.gamma) then
+          ag = (dtdz-dtdz0) / (pmk-pmk0)
+          bg = dtdz0 - (ag * pmk0)
+          ptph = exp(log((gamma-bg)/ag)/kap)
+       else
+          ptph = pm
+       endif
+
+       if (ptph.lt.pliml) go to 999
+       if (ptph.gt.plimu) go to 999
+
+       ! 2nd test: dtdz above 2 km must not exceed gamma
+       p2km = ptph + deltaz*(pm/tm)*faktor          ! p at ptph + 2km
+       asum = 0.0                                   ! dtdz above
+       icount = 0                                   ! number of levels above
+
+       ! test until apm < p2km
+       do jj=j, 2, -1
+
+          pmk2 = .5 * (p(jj-1)**kap+p(jj)**kap)    ! p mean ^kappa
+          pm2 = pmk2**(1/kap)                      ! p mean
+          if(pm2.gt.ptph) go to 110                ! doesn't happen
+          if(pm2.lt.p2km) go to 888                ! ptropo is valid
+
+          a2 = (t(jj-1)-t(jj))                     ! a
+          a2 = a2/(p(jj-1)**kap-p(jj)**kap)
+          b2 = t(jj)-(a2*p(jj)**kap)               ! b
+          tm2 = a2 * pmk2 + b2                     ! T mean
+          dtdp2 = a2 * kap * (pm2**(kap-1))        ! dt/dp
+          dtdz2 = faktor*dtdp2*pm2/tm2
+          asum = asum+dtdz2
+          icount = icount+1
+          aquer = asum/float(icount)               ! dt/dz mean
+
+          ! discard ptropo ?
+          if (aquer.le.gamma) go to 999           ! dt/dz above < gamma
+
+110       continue
+       enddo                           ! test next level
+
+888    continue                        ! ptph is valid
+       trp = ptph
+       return
+
+999    continue                        ! continue search at next higher level
+       pm0 = pm
+       pmk0 = pmk
+       dtdz0  = dtdz
+
+    enddo
+
+    ! no tropopouse found
+    return
+  end subroutine twmo
+
+
   !> @brief Calculates the O'Dell-ian pressure weighting function
   !
   !> @param N Number of active levels
@@ -143,7 +245,7 @@ contains
        else if ((i > 1) .and. (i < N - 1)) then
           pwgts(i) = f * hp(i-1) + (1.0d0 - f) * hp(i)
        end if
-
+       
     end do
 
     if (abs(sum(pwgts(:)) - 1.0d0) > 1.0d-5) then
@@ -291,7 +393,7 @@ contains
   !> seemed to have eliminated the issue of bad results. These bad results were non-trivially
   !> seen as stripy patterns which were related to time-of-day and doppler shift.
   !> Since the doppler shift changes the wavelength grid, one can end up with misaligned
-  !> spectra if the ILS convolution (however it is done) does work accordingly and shifts
+  !> spectra if the ILS convolution (however it is done) does not work accordingly and shifts
   !> the line cores around..
   subroutine oco_type_convolution(wl_input, input, wl_kernels, kernels, &
        wl_output, output, success)
@@ -437,7 +539,7 @@ contains
 
     ! Store A in Ainv to prevent it from being overwritten by LAPACK
     mat_out = mat_in
-    n = size(mat_in,1)
+    n = size(mat_in, 1)
 
     ! DGETRF computes an LU factorization of a general M-by-N matrix A
     ! using partial pivoting with row interchanges.
@@ -481,8 +583,6 @@ contains
     !character(len=*), parameter :: fname = "percentile"
 
     if ((perc < 0) .or. (perc > 100)) then
-       !call logger%fatal(fname, "Percentile must be between 0 and 100!")
-       !stop 1
        percentile = -9999
        return
     end if
@@ -500,7 +600,6 @@ contains
        percentile = -9999
        return
     end if
-
 
     percentile = (x_sort(position_int) * (1.0d0 - position_remainder)) + &
          (x_sort(position_int + 1) * position_remainder)

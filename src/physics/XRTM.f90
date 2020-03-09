@@ -1515,11 +1515,13 @@ contains
 
        !end if
 
+#ifdef DEBUG
        if (mod(i, N_spec/10) == 0) then
           write(tmp_str, '(A, F6.2, A, G0.1, A, G0.1, A)') &
                "XRTM calls (", 100.0 * i/N_spec, "%, ", i, "/", N_spec, ")"
           call logger%debug(fname, trim(tmp_str))
        end if
+#endif
 
     end do
 

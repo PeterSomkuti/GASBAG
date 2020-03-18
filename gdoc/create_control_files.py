@@ -12,10 +12,11 @@ def write_gasbag_control_file(l1b_file):
     with open(CONTROL_FILE_TEMPLATE, "r") as tf:
         template = Template(tf.read())
 
-    control_file = os.path.join(CONTROL_DIR, re.sub("h5", "ini", os.path.basename(l1b_file)))
-    met_file = "geocarb_meteorology_rx_intensity_" + l1b_filename_dict["yyyymmdd"] + "_" + l1b_filename_dict["box"] + "_" + l1b_filename_dict["resolution"] + "_" + l1b_filename_dict["chunk"] + ".h5"
-    log_file = re.sub("h5", "log", os.path.basename(l1b_file))
-    output_file = re.sub("l1b_rx_intensity", "GASBAG", os.path.basename(l1b_file))
+    met_file = "geocarb_L2Met_" + l1b_filename_dict["box"] + "-" + l1b_filename_dict["chunk"] + "_" + l1b_filename_dict["yyyymmdd"] + "hhmm_H00000.h5"
+    output_file = "geocarb_" + "L2GSB" + "_" + l1b_filename_dict["box"] + "-" + l1b_filename_dict["chunk"] + "_" + l1b_filename_dict["yyyymmdd"] + "hhmm_H00000.h5"
+    subdict = {"h5": "ini", "L2GSB": "L2GSBCtl"}
+    control_file = os.path.join(CONTROL_DIR, multiple_replace(subdict, os.path.basename(output_file)))
+    log_file = re.sub("h5", "log", os.path.basename(output_file))
     
     render = template.render(log_file=os.path.join(LOG_DIR, log_file), 
                             l1b_file=l1b_file, 
@@ -26,6 +27,14 @@ def write_gasbag_control_file(l1b_file):
         cf.write(render)
 
     return True
+
+
+def multiple_replace(dict, text):
+  # Create a regular expression  from the dictionary keys
+  regex = re.compile("(%s)" % "|".join(map(re.escape, dict.keys())))
+
+  # For each match, look-up corresponding value in dictionary
+  return regex.sub(lambda mo: dict[mo.string[mo.start():mo.end()]], text) 
 
 
 if __name__ == "__main__":
@@ -40,7 +49,7 @@ if __name__ == "__main__":
     parser.add_argument("-b", "--l1b_file", help="Full path to L1B input file", nargs="*", default=[])
     parser.add_argument("-d", "--input_dir", help="Path to L1B input files to process", default="/data10/psomkuti/GEOCARB_DAY_IN_LIFE/chunked_files/l1b")
     parser.add_argument("-m", "--met_dir", help="Path to L2Met input files to process", default="/data10/psomkuti/GEOCARB_DAY_IN_LIFE/chunked_files/met")
-    parser.add_argument("-c", "--control_dir", help="Path to put Met Resampler control files", default="/home/hcronk/geocarb/ditl_1/control/gasbag")
+    parser.add_argument("-c", "--control_dir", help="Path to put GASBAG control files", default="/home/hcronk/geocarb/ditl_1/control/gasbag")
     parser.add_argument("-l", "--log_dir", help="Path to put GASBAG log (goes in control files)", default="/home/hcronk/geocarb/ditl_1/logs/gasbag")
     parser.add_argument("-o", "--output_dir", help="Path to put output GASBAG files (goes in control files)", default="/home/hcronk/geocarb/ditl_1/data/L2GSB")    
     args = parser.parse_args()

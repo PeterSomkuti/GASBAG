@@ -101,6 +101,17 @@ program GASBAG
           // trim(CS%output%output_filename%chars()))
   end if
 
+  ! For traceability of results, we store the full config file contents
+  ! in the output file itself. (THIS MIGHT NEED REWORKING WHEN MOVING TO NC4)
+  call h5gcreate_f(CS%output%output_file_id, "/Metadata", &
+       CS%output%metadata_gid, hdferr)
+  call check_hdf_error(hdferr, "Main", "Error creating /Metadata group.")
+  
+
+  call fini%print(6, retain_comments=.true.)
+
+
+
   select type(my_instrument)
   type is (oco2_instrument)
      ! Scan the L1b file - we need some info from there, mostly the

@@ -237,6 +237,8 @@ module control_mod
      type(string) :: output_filename
      !> HDF File ID for the output file
      integer(hid_t) :: output_file_id
+     !> HDF Metadata group ID
+     integer(hid_t) :: metadata_gid
      !> Do we want to save radiances?
      logical :: save_radiances
      !> Do we want to override the output file?

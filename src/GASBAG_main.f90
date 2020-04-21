@@ -17,12 +17,13 @@ program GASBAG
   use version_mod, only: git_branch, git_commit_hash, git_rev_no
   use control_mod, only: CS_t, populate_MCS
   use instruments_mod, only: generic_instrument
-  use file_utils_mod, only: check_hdf_error
+  use file_utils_mod, only: check_hdf_error, write_string_hdf_dataset
   use oco2_mod
 
   ! Third party modules
   use logger_mod, only: logger => master_logger
   use finer, only: file_ini
+  use stringifor, only: string
   use datetime_module
 
   ! System modules
@@ -37,6 +38,7 @@ program GASBAG
   class(generic_instrument), allocatable :: my_instrument ! The used instrument type
   integer :: hdferr ! HDF error variable
 
+  type(string) :: config_content
 
   type(datetime) :: gasbag_start
   type(datetime) :: gasbag_stop
@@ -106,9 +108,12 @@ program GASBAG
   call h5gcreate_f(CS%output%output_file_id, "/Metadata", &
        CS%output%metadata_gid, hdferr)
   call check_hdf_error(hdferr, "Main", "Error creating /Metadata group.")
-  
 
-  call fini%print(6, retain_comments=.true.)
+  ! Read file into string variable
+  call config_content%read_file(fini%filename)
+  ! .. and dump it into the /Metadata/ConfigurationFileContent field
+  call write_string_hdf_dataset(CS%output%output_file_id, &
+       "/Metadata/ConfigurationFileContent", config_content)
 
 
 
@@ -124,7 +129,7 @@ program GASBAG
   ! the config file should have been passed onto the MCS, hence why the main
   ! retrieval function needs no arguments apart from the choice of instrumentm,
   ! and also does not return anything back really.
-  call perform_retrievals(my_instrument, CS)
+  !call perform_retrievals(my_instrument, CS)
 
 
   ! Finishing touches

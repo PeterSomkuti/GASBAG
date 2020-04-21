@@ -8,6 +8,7 @@ module file_utils_mod
   use finer, only: file_ini
   use stringifor, only: string
 
+  use iso_c_binding
   use iso_fortran_env
   use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan
 
@@ -41,7 +42,7 @@ module file_utils_mod
      module procedure read_3D_INT_hdf_dataset
   end interface read_INT_hdf_dataset
 
-
+  ! Interface to extract value(s) out of the config file
   interface fini_extract
      module procedure fini_extract_DP
      module procedure fini_extract_DP_array
@@ -54,9 +55,41 @@ module file_utils_mod
        check_fini_error, fini_extract, &
        write_DP_hdf_dataset, read_DP_hdf_dataset, &
        write_INT_hdf_dataset, read_INT_hdf_dataset, &
-       read_one_arbitrary_value_dp
+       read_one_arbitrary_value_dp, write_string_hdf_dataset
 
 contains
+
+
+  subroutine write_string_hdf_dataset(file_id, dset_name, str)
+    integer(hid_t), intent(in) :: file_id
+    character(len=*), intent(in) :: dset_name
+    type(string), intent(in) :: str
+
+    character(len=:), allocatable, target :: c_arr
+    integer(hid_t) :: dims(1) = 1
+    integer(hid_t) :: c_len
+    integer :: hdferr
+
+    type(c_ptr) :: f_ptr
+    integer(hid_t) :: filetype, dspace_id, dset_id
+
+    c_arr = str%chars()
+    c_len = len(c_arr)
+
+    call h5tcopy_f(H5T_FORTRAN_S1, filetype, hdferr)
+    call h5tset_size_f(filetype, c_len, hdferr)
+    call h5screate_simple_f(1, dims, dspace_id, hdferr)
+    call h5dcreate_f(file_id, dset_name, filetype, dspace_id, dset_id, hdferr)
+
+    f_ptr = c_loc(c_arr)
+
+    call h5dwrite_f(dset_id, filetype, f_ptr, hdferr)
+
+    call h5dclose_f(dset_id, hdferr)
+    call h5sclose_f(dspace_id, hdferr)
+    call h5tclose_f(filetype, hdferr)
+
+  end subroutine write_string_hdf_dataset
 
   subroutine write_2D_INT_hdf_dataset(file_id, dset_name, array, dims, fill_value)
 

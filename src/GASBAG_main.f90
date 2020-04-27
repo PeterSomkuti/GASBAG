@@ -122,7 +122,8 @@ program GASBAG
        "/Metadata/Configuration")
 
 
-
+  ! Scan the L1B file for some global values that the rest of the
+  ! code needs (number of bands etc.)
   select type(my_instrument)
   type is (oco2_instrument)
      ! Scan the L1b file - we need some info from there, mostly the
@@ -136,7 +137,7 @@ program GASBAG
   ! retrieval function needs no arguments apart from the choice of instrumentm,
   ! and also does not return anything back really.
 
-  ! call perform_retrievals(my_instrument, CS)
+  call perform_retrievals(my_instrument, CS)
 
 
   ! Finishing touches

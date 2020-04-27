@@ -60,6 +60,67 @@ module file_utils_mod
 contains
 
 
+  subroutine write_config_into_groups(file_id, fini, root_group)
+    integer(hid_t), intent(in) :: file_id
+    type(file_ini), intent(in) :: fini
+    character(len=*), intent(in) :: root_group
+
+    character(len=*), parameter :: fname = "write_config_into_groups"
+    integer :: i
+    logical :: group_exists
+    integer(hid_t) :: gid
+    integer :: hdferr
+    character(len=:), allocatable :: item(:)
+    character(len=:), allocatable :: sections(:)
+    character(len=:), allocatable :: this_group
+    character(len=:), allocatable :: this_dataset
+    type(string) :: tmp_str
+
+
+    ! Get the sections from the config option
+    call fini%get_sections_list(sections)
+
+    ! Check if the root group exists in the file
+    call h5lexists_f(file_id, root_group, group_exists, hdferr)
+
+    ! Create new group if it doesn't exist (it really shouldn't)
+    if (.not. group_exists) then
+       call h5gcreate_f(file_id, root_group, gid, hdferr)
+       call check_hdf_error(hdferr, fname, "Error. Could not create group: " // trim(root_group))
+    end if
+
+    call logger%info(fname, "Writing configuration keys into file.")
+
+    ! Loop through each section
+    do i = 1, size(sections)
+
+       ! Current group will be this:
+       this_group = root_group // "/" // sections(i)
+
+       ! Again, check for the existence for the group
+       call h5lexists_f(file_id, this_group, group_exists, hdferr)
+       if (group_exists) then
+          ! This really should not happen, so flag it as warning
+          call logger%warning(fname, "Group " // this_group // " already exists. ")
+       else
+          call h5gcreate_f(file_id, this_group, gid, hdferr)
+          call check_hdf_error(hdferr, fname, "Error. Could not create group: " // trim(root_group))
+       end if
+
+       ! Now loop through each option in this section and save every key/value
+       ! pair as a string dataset
+       do while (fini%loop(section_name=sections(i), option_pairs=item))
+          ! Construct group name and value
+          this_dataset = trim(this_group) // "/" // item(1)
+          tmp_str = item(2)
+          ! Write it ito string dataset
+          call write_string_hdf_dataset(file_id, this_dataset, tmp_str)
+       end do
+    end do
+
+  end subroutine write_config_into_groups
+
+
   subroutine write_string_hdf_dataset(file_id, dset_name, str)
     integer(hid_t), intent(in) :: file_id
     character(len=*), intent(in) :: dset_name

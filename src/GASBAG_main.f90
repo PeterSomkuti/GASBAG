@@ -17,7 +17,8 @@ program GASBAG
   use version_mod, only: git_branch, git_commit_hash, git_rev_no
   use control_mod, only: CS_t, populate_MCS
   use instruments_mod, only: generic_instrument
-  use file_utils_mod, only: check_hdf_error, write_string_hdf_dataset
+  use file_utils_mod, only: check_hdf_error, write_string_hdf_dataset, &
+       write_config_into_groups
   use oco2_mod
 
   ! Third party modules
@@ -104,7 +105,7 @@ program GASBAG
   end if
 
   ! For traceability of results, we store the full config file contents
-  ! in the output file itself. (THIS MIGHT NEED REWORKING WHEN MOVING TO NC4)
+  ! in the output file itself. (THIS MIGHT NEED REWORKING WHEN MOVING TO NetCDF)
   call h5gcreate_f(CS%output%output_file_id, "/Metadata", &
        CS%output%metadata_gid, hdferr)
   call check_hdf_error(hdferr, "Main", "Error creating /Metadata group.")
@@ -114,6 +115,11 @@ program GASBAG
   ! .. and dump it into the /Metadata/ConfigurationFileContent field
   call write_string_hdf_dataset(CS%output%output_file_id, &
        "/Metadata/ConfigurationFileContent", config_content)
+
+  ! Additionally, write each config section and option into an
+  ! HDF5 group on its own.
+  call write_config_into_groups(CS%output%output_file_id, fini, &
+       "/Metadata/Configuration")
 
 
 
@@ -129,7 +135,8 @@ program GASBAG
   ! the config file should have been passed onto the MCS, hence why the main
   ! retrieval function needs no arguments apart from the choice of instrumentm,
   ! and also does not return anything back really.
-  !call perform_retrievals(my_instrument, CS)
+
+  ! call perform_retrievals(my_instrument, CS)
 
 
   ! Finishing touches

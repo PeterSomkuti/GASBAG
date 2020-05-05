@@ -217,6 +217,10 @@ contains
        valid_options(this_idx,46) = "ils_stretch_prior_1"
        ! Surface pressure jacobian covariance
        valid_options(this_idx,47) = "psurf_covariance"
+       ! Minimum land fraction to process sounding
+       valid_options(this_idx,48) = "minimum_land_fraction"
+       ! Maximum land fraction to process sounding
+       valid_options(this_idx,49) = "maximum_land_fraction"
 
     end do
 

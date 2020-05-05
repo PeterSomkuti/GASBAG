@@ -195,6 +195,10 @@ module control_mod
      integer :: frame_skip
      !> Only retrieve every x'th footprint
      integer :: footprint_skip
+     !> Minimum land fraction threshold to process sounding
+     double precision :: minimum_land_fraction
+     !> Maximum land fraction threshold to process sounding
+     double precision :: maximum_land_fraction
      !> Type of inverse method to use
      type(string) :: inverse_method
      !> Type of Radiative Transfer model to use
@@ -859,6 +863,34 @@ contains
           else
              CS%window(window_nr)%footprint_skip = fini_int
           end if
+
+          call fini_extract(fini, win_str, 'minimum_land_fraction', .false., fini_val)
+          if (fini_val < 0) then
+             CS%window(window_nr)%minimum_land_fraction = 0.0d0
+          else
+             CS%window(window_nr)%minimum_land_fraction = fini_val
+          end if
+
+          call fini_extract(fini, win_str, 'maximum_land_fraction', .false., fini_val)
+          if (fini_val < 0) then
+             CS%window(window_nr)%maximum_land_fraction = 100.0d0
+          else
+             CS%window(window_nr)%maximum_land_fraction = fini_val
+          end if
+
+          ! Extra check - we make sure here that the land fraction maximum is
+          ! larger than the land fraction minimum.
+
+          if (CS%window(window_nr)%maximum_land_fraction <= &
+               CS%window(window_nr)%minimum_land_fraction) then
+             call logger%fatal(fname, "Land fraction thresholds invalid (max <= min)!")
+             write(tmp_str, '(A, F10.3)') "Minimum value: ", CS%window(window_nr)%minimum_land_fraction
+             call logger%fatal(fname, trim(tmp_str))
+             write(tmp_str, '(A, F10.3)') "Maximum value: ", CS%window(window_nr)%maximum_land_fraction
+             call logger%fatal(fname, trim(tmp_str))
+             stop 1
+          end if
+
 
           call fini_extract(fini, win_str, 'sublayers', .false., fini_int)
           ! We round the number of sublayers to the next odd value > 2

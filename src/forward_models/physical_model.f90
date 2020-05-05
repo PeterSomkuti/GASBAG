@@ -756,11 +756,24 @@ contains
              call cpu_time(cpu_time_start)
 #endif
 
-             if (land_fraction(i_fp, i_fr) < 99.0d0) then
-                call logger%debug(fname, "Skipping water scene.")
-                retr_count = retr_count + 1
-                cycle
+
+
+             ! Depending on user input, and whether land fraction data is available,
+             ! we can skip certain scenes.
+             if (allocated(land_fraction)) then
+                if ( &
+                     (land_fraction(i_fp, i_fr) > &
+                     CS%window(i_win)%maximum_land_fraction) .or. &
+                     (land_fraction(i_fp, i_fr) < &
+                     CS%window(i_win)%minimum_land_fraction) &
+                     ) then
+                   write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fp, "/", i_fr, &
+                        ") skipped due to land fraction constraint."
+                   call logger%info(fname, trim(tmp_str))
+                   cycle
+                end if
              end if
+
 
              ! ---------------------------------------------------------------------
              ! Do the retrieval for this particular sounding -----------------------

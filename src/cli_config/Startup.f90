@@ -166,113 +166,124 @@ module startup_mod
     !! @param fini FINER ini object
     !! @param config_file_OK Is the configuration file deemed sane?
     subroutine check_config(fini, config_file_OK)
-        ! This checks only whether the configuration file has any unexpected
-        ! items in it. The downside - we MUST update the Kewords module anytime
-        ! there is an update in the code itself. Note that this routine
-        ! merely checks whether the config file structure makes sense. Any
-        ! further checks about the contents of the config file items themselves
-        ! are made down the line, when the respective item is actually used.
+      ! This checks only whether the configuration file has any unexpected
+      ! items in it. The downside - we MUST update the Kewords module anytime
+      ! there is an update in the code itself. Note that this routine
+      ! merely checks whether the config file structure makes sense. Any
+      ! further checks about the contents of the config file items themselves
+      ! are made down the line, when the respective item is actually used.
 
-        use finer, only: file_ini ! CLI argument parser module
-        use stringifor, only: string, trim ! For maniupulating strings
-        use keywords_mod, only: initialize_valid_sections, valid_sections, valid_options
+      use finer, only: file_ini ! CLI argument parser module
+      use stringifor, only: string, trim ! For maniupulating strings
+      use keywords_mod, only: initialize_valid_sections, valid_sections, valid_options
 
-        implicit none
+      implicit none
 
-        type(file_ini), intent(in out) :: fini ! Config file interface handler
-        logical, intent(out) :: config_file_OK ! Is the config OK?
+      type(file_ini), intent(in out) :: fini ! Config file interface handler
+      logical, intent(out) :: config_file_OK ! Is the config OK?
 
-        ! Local variables
-        character(len=:), allocatable :: sections(:) ! All sections in the file
-        character(len=:), allocatable :: option_pairs(:) ! Options in section
-        type(string) :: tmp_section, tmp_option
+      ! Local variables
+      character(len=:), allocatable :: sections(:) ! All sections in the file
+      character(len=:), allocatable :: option_pairs(:) ! Options in section
+      type(string) :: tmp_section, tmp_option
 
-        logical :: found_section ! Have we found the section yet?
-        logical :: found_option ! .. or the option?
-        ! The index used for valid_sections when a valid section has been found
-        integer :: section_idx
-        integer :: i, j, k ! Loop variables
+      logical :: found_section ! Have we found the section yet?
+      logical :: found_option ! .. or the option?
+      ! The index used for valid_sections when a valid section has been found
+      integer :: section_idx
+      integer :: i, j, k ! Loop variables
 
-        ! Initialise valid_sections from the keywords module here, so we can
-        ! access them from outside.
-        call initialize_valid_sections()
+      ! Initialise valid_sections from the keywords module here, so we can
+      ! access them from outside.
+      call initialize_valid_sections()
 
-        ! Assume the config file is OK for now
-        config_file_OK = .true.
-        section_idx = 0
+      ! Assume the config file is OK for now
+      config_file_OK = .true.
+      section_idx = 0
 
-        ! First, check if each section is a valid one, and whether each option
-        ! within that section is a valid option
-        call fini%get_sections_list(sections)
+      ! First, check if each section is a valid one, and whether each option
+      ! within that section is a valid option
+      call fini%get_sections_list(sections)
 
-        do i=1, size(sections)
-            ! Loop through every section item in the config and check it against
-            !  every known and valid keyword. If found, set found_section=true.
-            found_section = .false.
-            tmp_section = fini%section(i)
+      do i=1, size(sections)
+         ! Loop through every section item in the config and check it against
+         !  every known and valid keyword. If found, set found_section=true.
+         found_section = .false.
+         tmp_section = fini%section(i)
 
-            do j=1, size(valid_sections)
-                if (trim(tmp_section%lower()) == valid_sections(j)%chars()) then
-                    found_section = .true.
-                    write(*, '(A)') "Found section [" // &
-                                     trim(tmp_section%chars()) // "]"
-                    ! This section in the config file corresponds to section_idx
-                    ! in valid_sections, and valid_options(section_idx, :)
-                    section_idx = j
-                    exit
-                end if
+         do j=1, size(valid_sections)
+            if (trim(tmp_section%lower()) == valid_sections(j)%chars()) then
+               found_section = .true.
+               write(*, '(A)') "Found section [" // &
+                    trim(tmp_section%chars()) // "]"
+               ! This section in the config file corresponds to section_idx
+               ! in valid_sections, and valid_options(section_idx, :)
+               section_idx = j
+               exit
+            end if
+         end do
+
+         if (.not. found_section) then
+            ! Oh boy, this is not a valid section
+            write(*, '(A)') 'Sorry, section keyword [' // &
+                 tmp_section%chars() // &
+                 '] is not in the list of known sections.'
+            config_file_OK = .false.
+            stop 1
+         else
+            ! But if successful, we now need to check if all section options
+            ! are valid.
+            do while(fini%loop(section_name=fini%section(i), &
+                 option_pairs=option_pairs))
+
+               found_option = .false.
+
+               if (.not. allocated(option_pairs)) then
+                  write(*, '(A)') "Could not read an option-value pair."
+                  write(*, '(A)') "Make sure there are no strange characters, " &
+                       // "especially equal-signs in the option values!"
+                  stop 1
+               end if
+
+               ! option_pairs is (option name, whatever-is-right-of-equal-sign)
+
+               tmp_option = option_pairs(1)
+
+               do k=1, size(valid_options, 2)
+                  ! Loop over the 'dictionary' of valid options, corresponding
+                  ! to this particular section.
+
+                  ! If that option is emtpy, just skip it
+                  if (trim(valid_options(section_idx, k)) == "") then
+                     cycle
+                  end if
+
+                  ! .. otherwise, compare it against the config entry
+                  if (trim(tmp_option%lower()) == &
+                       valid_options(section_idx, k)%chars()) then
+                     ! Yes, we found a valid option!
+                     write(*, '(A)') 'Option: "' &
+                          // trim(option_pairs(1)) // '" found'
+                     write(*, '(A)') trim(option_pairs(1)) // ' value(s): ' // option_pairs(2)
+
+                     found_option = .true.
+                  end if
+               end do
+
+               if (.not. found_option) then
+                  ! This option is not in the list of recognized ones
+                  write(*, '(A)') 'Sorry - option "' &
+                       // option_pairs(1) &
+                       // '" is not recognized.'
+                  config_file_OK = .false.
+                  stop 1
+               end if
+
             end do
 
-            if (.not. found_section) then
-                ! Oh boy, this is not a valid section
-                write(*, '(A)') 'Sorry, section keyword [' // &
-                                tmp_section%chars() // &
-                                '] is not in the list of known sections.'
-                config_file_OK = .false.
-                stop 1
-            else
-                ! But if successful, we now need to check if all section options
-                ! are valid.
-                do while(fini%loop(section_name=fini%section(i), &
-                                   option_pairs=option_pairs))
-                    found_option = .false.
-                    ! option_pairs is (option name, whatever-is-right-of-equal-sign)
-                    tmp_option = option_pairs(1)
+         endif
+      end do ! end loop over sections
 
-                    do k=1, size(valid_options, 2)
-                        ! Loop over the 'dictionary' of valid options, corresponding
-                        ! to this particular section.
-
-                        ! If that option is emtpy, just skip it
-                        if (trim(valid_options(section_idx, k)) == "") then
-                            cycle
-                        end if
-
-                        ! .. otherwise, compare it against the config entry
-                        if (trim(tmp_option%lower()) == &
-                            valid_options(section_idx, k)%chars()) then
-                            ! Yes, we found a valid option!
-                            write(*, '(A)') 'Option: "' &
-                                            // trim(option_pairs(1)) // '" found'
-                            write(*, '(A)') trim(option_pairs(1)) // ' value(s): ' // option_pairs(2)
-
-                            found_option = .true.
-                        end if
-                    end do
-
-                    if (.not. found_option) then
-                        ! This option is not in the list of recognized ones
-                        write(*, '(A)') 'Sorry - option "' &
-                                        // option_pairs(1) &
-                                        // '" is not recognized.'
-                        config_file_OK = .false.
-                        stop 1
-                    end if
-                end do
-
-            endif
-        end do ! end loop over sections
-
-    end subroutine
+    end subroutine check_config
 
 end module ! end module Startup

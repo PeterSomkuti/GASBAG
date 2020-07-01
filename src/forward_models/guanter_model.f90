@@ -537,9 +537,15 @@ contains
     ! Now calculate the noise-equivalent radiances
     select type(my_instrument)
     type is (oco2_instrument)
-       call my_instrument%calculate_noise(snr_coefs, radiance_work, &
-            noise_work, i_fp, band, MaxMS(band), &
-            l1b_wl_idx_min, l1b_wl_idx_max)
+       call my_instrument%calculate_noise( &
+            snr_coefs, &
+            radiance_work, &
+            noise_work, &
+            i_fp, &
+            band, &
+            MaxMS(band), &
+            l1b_wl_idx_min, &
+            l1b_wl_idx_max)
     end select
 
     ! Do the slope correction for the selected spectrum. The second

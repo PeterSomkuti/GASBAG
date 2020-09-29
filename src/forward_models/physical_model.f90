@@ -725,8 +725,8 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       !frame_start = 2470
-       !frame_stop = 2500
+       ! frame_start = 1843
+       ! frame_stop = 2000
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -3578,7 +3578,7 @@ contains
 
     if (SV%num_sif > 0) then
        ! Put SIF prior covariance at the continuum level of the band
-       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (0.01d0 * continuum) ** 2
+       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (0.10d0 * continuum) ** 2
     end if
 
     if (SV%num_zlo > 0) then

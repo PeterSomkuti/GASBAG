@@ -18,6 +18,9 @@ module XRTM_mod
   use stringifor
   use logger_mod, only: logger => master_logger
 
+  ! System modules
+  use OMP_LIB
+
   implicit none
 
   public :: setup_XRTM, create_XRTM, solve_RT_problem_XRTM, calculate_XRTM_radiance
@@ -167,7 +170,7 @@ contains
                // tmp_str%chars())
 
        end if
-       
+
     end do
 
     success = .true.
@@ -188,7 +191,7 @@ contains
        n_kernel_quad, &
        xrtm_kernels, &
        success)
-    
+
     implicit none
 
     type(xrtm_type), intent(inout) :: xrtm
@@ -726,7 +729,7 @@ contains
     ! Surface albedo coefficient derivatives
     !
     ! --------------------------------------
-    
+
     do j = 1, SV%num_albedo
        i = SV%num_gas + SV%num_temp + j
 
@@ -889,7 +892,6 @@ contains
          lcoef_left=lcoef_left, & ! per-wl phasefunction derivatives
          coef_right=coef_right, & ! per-wl phasefunction coefficients
          lcoef_right=lcoef_right) ! per-wl phasefunction derivatives
-
 
     if (.not. xrtm_success) then
        call logger%error(fname, "Call to calculate_XRTM_radiance unsuccessful.")
@@ -1236,7 +1238,12 @@ contains
 
 
     pure_XRTM_duration = 0.0d0
+#ifdef _OPENMP
+    cpu_start = omp_get_wtime()
+#else
     call cpu_time(cpu_start)
+#endif
+
     do i=1, N_spec
 
        ! TOTAL atmospheric optical properties - these go into the
@@ -1247,6 +1254,8 @@ contains
        single_ltau(:,:) = ltau(i,:,:)
        single_lomega(:,:) = lomega(i,:,:)
        single_lsurf(:) = lsurf(i,:)
+
+
 
 #ifdef DEBUG
        if (any(ieee_is_nan(tau))) then
@@ -1282,10 +1291,12 @@ contains
 
 
        ! Interpolate phasefunction coefficients at wavelength, but only if
-       ! requested by the user. 
+       ! requested by the user.
        ! NOTE WARNING
        ! This is a fairly slow section of the code and can increase processing
        ! time by a couple of factors easily!
+
+
        if (.not. keep_coef_constant) then
           if (present(coef_left)) then
 
@@ -1314,6 +1325,8 @@ contains
           return
        end if
 #endif
+
+
 
        ! Plug in optical depth
        call xrtm_set_ltau_n_f90(xrtm, tau, xrtm_error)
@@ -1400,11 +1413,23 @@ contains
 #endif
        endif
 
+       ! NOTE
+       ! Absolutely NEVER use "call cpu_time()" in an OpenMP environment
+       ! as your performance will completely tank with more than a few cores.
+       ! I suspect it's some scheduling issue where a thread has to wait
+       ! until the no other thread uses this function.
+       ! So the solution here is to compile with "omp_get_wtime" whenever
+       ! we compile with OpenMP, and use "cpu_time" otherwise.
 
+
+#ifdef _OPENMP
+       cpu_start2 = omp_get_wtime()
+#else
        call cpu_time(cpu_start2)
+#endif
 
        ! Calculate TOA radiance!
-       call xrtm_radiance_f90( &
+      call xrtm_radiance_f90( &
             xrtm, & ! XRTM object
             xrtm_solver, & ! XRTM solver bitmask
             1 , & ! Number of output azimuths
@@ -1415,7 +1440,11 @@ contains
             K_m, & ! Downward jacobians
             xrtm_error)
 
-       call cpu_time(cpu_end2)
+#ifdef _OPENMP
+      cpu_end2 = omp_get_wtime()
+#else
+      call cpu_time(cpu_end2)
+#endif
 
        pure_XRTM_duration = pure_XRTM_duration + cpu_end2 - cpu_start2
 
@@ -1525,7 +1554,11 @@ contains
 
     end do
 
+#ifdef _OPENMP
+    cpu_end = omp_get_wtime()
+#else
     call cpu_time(cpu_end)
+#endif
 
     write(tmp_str, '(A, F7.3, A)') "Pure XRTM radiance calculations: ", pure_XRTM_duration, " sec."
     call logger%debug(fname, trim(tmp_str))

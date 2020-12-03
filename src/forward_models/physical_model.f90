@@ -406,7 +406,7 @@ contains
        write(tmp_str, '(A, A)') "Processing retrieval window: ", CS%window(i_win)%name%chars()
        call logger%info(fname, trim(tmp_str))
        call logger%info(fname,  "---------------------------")
-       
+
        ! At the beginning, we check which gases were defined for this window,
        ! and see if a gas with the corresponding name has been defined.
        call MCS_find_gases(CS%window, CS%gas, i_win)
@@ -619,7 +619,7 @@ contains
        ! ----------------------------------
        !
        ! Set up state vector structure here
-       ! 
+       !
        ! ----------------------------------
 
        ! We can do this once for every window, and simply clear the contents
@@ -789,7 +789,7 @@ contains
              ! ---------------------------------------------------------------------
 
              retr_count = retr_count + 1
-             
+
 #ifdef _OPENMP
              cpu_time_stop = omp_get_wtime()
 #else
@@ -923,6 +923,8 @@ contains
     type(CS_t), intent(in) :: CS
     integer, intent(inout) :: this_iterations
     logical :: converged
+
+    ! --- LOCAL VARAIBLES FROM HEREON ---
 
 
     ! CS window object
@@ -1159,6 +1161,7 @@ contains
     ! Initialize
     !
     ! ----------
+
     CS_win = CS%window(i_win)
     converged = .false.
     this_iterations = 0
@@ -1187,6 +1190,7 @@ contains
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
 
+    ! Calculate the tropopause pressure according to Reichelt et al.
     call twmo( &
          size(met_P_levels, 1), &
          met_T_profiles(:, i_fp, i_fr), &
@@ -1202,7 +1206,7 @@ contains
     ! -------------------------------------
     !
     ! Set the used radiative transfer model
-    ! 
+    !
     ! -------------------------------------
 
     if (CS_win%RT_model%lower() == "beer-lambert") then
@@ -1259,7 +1263,9 @@ contains
           allocate(radiance_l1b(CS%general%N_spec(band)))
           radiance_l1b(:) = 0.0d0
 
+          ! Maybe we don't want this anymore .. ?
           if (CS%algorithm%solar_footprint_averaging) then
+
              ! In solar measurement mode, and footprint averaging, we follow
              ! Kang Sun's procedure:
              ! Drop the lowest and highest 5%, and average the rest up but only
@@ -1298,7 +1304,6 @@ contains
                    end if
                 end do
              end do
-             
 
           else
              ! Normal radiance mode - just grab the index
@@ -1391,7 +1396,10 @@ contains
     !
     ! ----------------------------------------------------------
 
-    if (allocated(CS_win%smart_scale_first_guess_wl_in)) then
+    if ( &
+         allocated(CS_win%smart_scale_first_guess_wl_in) .and. &
+         allocated(CS_win%smart_scale_first_guess_wl_out) &
+         ) then
 
        allocate(scale_first_guess(size(CS_win%smart_scale_first_guess_wl_in)))
 
@@ -1410,7 +1418,7 @@ contains
     ! ----------------------------------------------
     !
     ! Print out some debug information for the scene
-    ! 
+    !
     ! ----------------------------------------------
 
     write(tmp_str, "(A, A)") "Date: ", scn%date%isoformat()
@@ -1525,7 +1533,7 @@ contains
     ! Get the albedo prior estimated through the L1B radiances using a simple
     ! Lambertian model. Also, use this opportunity to pre-allocate the solar
     ! continuum arrays and downsample it.
-    ! 
+    !
     ! -----------------------------------------------------------------------
 
     albedo_apriori = -1.0d0
@@ -1778,7 +1786,7 @@ contains
 
        ! Allocate the optical property containers for the scene
        call allocate_optical_properties(scn, N_hires, CS_win%num_gases)
-       
+
        scn%num_stokes = n_stokes
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
@@ -1827,7 +1835,7 @@ contains
           ! Obtain the number of active levels.
           call calculate_active_levels(scn)
           num_active_levels = scn%num_active_levels
-          
+
           ! Should SH drop below 0 for whatever reason, shift it back
           ! some tiny value.
           where (scn%atm%sh < 0.0d0) scn%atm%sh = 1.0d-10
@@ -1875,8 +1883,10 @@ contains
 
        if (iteration == 1) then
 
+          ! ----------------------------------------------
           ! Here we set up quantities that need to be done
           ! for the very first iteration.
+          ! ----------------------------------------------
 
           call logger%debug(fname, "First iteration - setting some initial values.")
           divergent_step = .false.
@@ -1894,7 +1904,7 @@ contains
           results%sv_prior(i_fp, i_fr, :) = SV%svap
           last_successful_sv(:) = SV%svap
           old_sv(:) = SV%svap
-          
+
        else
           ! This is not the very first iteration!
 
@@ -2205,7 +2215,7 @@ contains
              ! Calculate dTau/dTemp as finite difference
              !
              ! -----------------------------------------
-             
+
              if (SV%num_temp == 1) then
 
                 scn%op%gas_tau_dtemp(:,:,j) = &
@@ -2401,7 +2411,7 @@ contains
 
           ! This function produces the full radiances and Jacobians, any fancy
           ! fast RT methods are done within.
-
+          
           call solve_RT_problem_XRTM( &
                CS_win, & ! The microwindow structure
                CS%general, & ! The CS general structure
@@ -2785,7 +2795,7 @@ contains
              if (allocated(CS_win%ils_stretch_prior_1)) then
                 write(tmp_str, '(A, ES15.5)') "ILS stretch prior 1: ", CS_win%ils_stretch_prior_1(i_fp)
                 call logger%debug(fname, trim(tmp_str))
-                
+
                 if (size(CS_win%ils_stretch_prior_1) /= CS%general%N_fp) then
                    call logger%fatal(fname, "Number of ILS stretch prior 1 entries is not " &
                         // "equal to the number of footprints.")
@@ -3037,7 +3047,7 @@ contains
        ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. & ! Dsigma squire criterion is fulfilled
-            (iteration > CS_win%max_iterations) .or. & ! Number of iterations reach max value
+            (iteration >= CS_win%max_iterations) .or. & ! Number of iterations reach max value
             ((chi2_rel_change < 0.01) .and. (chi2_rel_change >= 0.0d0)) .or. & ! Relative change in CHI2 is smaller than some value
             (num_divergent_steps > 1) & ! Number of divergent steps is reached
             ) then

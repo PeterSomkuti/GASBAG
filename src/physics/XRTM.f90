@@ -12,7 +12,7 @@ module XRTM_mod
   use aerosols_mod
   use scene_mod
   use physical_model_addon_mod
-  
+
   ! Third-party modules
   use xrtm_int_f90
   use stringifor

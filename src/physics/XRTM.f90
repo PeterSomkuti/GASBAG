@@ -6,13 +6,14 @@ module XRTM_mod
 
   ! User modules
   use control_mod, only: CS_window_t
+  use misc_utils_mod
   use math_utils_mod
   use Rayleigh_mod, only : calculate_rayleigh_scatt_matrix, calculate_rayleigh_depolf
   use statevector_mod
   use aerosols_mod
   use scene_mod
   use physical_model_addon_mod
-  
+
   ! Third-party modules
   use xrtm_int_f90
   use stringifor
@@ -767,7 +768,7 @@ contains
     ! Aerosol height derivatives
     !
     ! --------------------------
-    ! 
+    !
     ! NOTE / TODO
     ! This is also a bit hacky since we take the aerosol width from the MCS, making this
     ! code a bit messy. It also works because right now, we can't change the aerosol
@@ -1238,11 +1239,7 @@ contains
 
 
     pure_XRTM_duration = 0.0d0
-#ifdef _OPENMP
-    cpu_start = omp_get_wtime()
-#else
-    call cpu_time(cpu_start)
-#endif
+    cpu_start = get_cpu_time()
 
     do i=1, N_spec
 
@@ -1421,15 +1418,9 @@ contains
        ! So the solution here is to compile with "omp_get_wtime" whenever
        ! we compile with OpenMP, and use "cpu_time" otherwise.
 
-
-#ifdef _OPENMP
-       cpu_start2 = omp_get_wtime()
-#else
-       call cpu_time(cpu_start2)
-#endif
-
+       cpu_start2 = get_cpu_time()
        ! Calculate TOA radiance!
-      call xrtm_radiance_f90( &
+       call xrtm_radiance_f90( &
             xrtm, & ! XRTM object
             xrtm_solver, & ! XRTM solver bitmask
             1 , & ! Number of output azimuths
@@ -1440,11 +1431,7 @@ contains
             K_m, & ! Downward jacobians
             xrtm_error)
 
-#ifdef _OPENMP
-      cpu_end2 = omp_get_wtime()
-#else
-      call cpu_time(cpu_end2)
-#endif
+       cpu_end2 = get_cpu_time()
 
        pure_XRTM_duration = pure_XRTM_duration + cpu_end2 - cpu_start2
 
@@ -1554,11 +1541,7 @@ contains
 
     end do
 
-#ifdef _OPENMP
-    cpu_end = omp_get_wtime()
-#else
-    call cpu_time(cpu_end)
-#endif
+    cpu_end = get_cpu_time()
 
     write(tmp_str, '(A, F7.3, A)') "Pure XRTM radiance calculations: ", pure_XRTM_duration, " sec."
     call logger%debug(fname, trim(tmp_str))

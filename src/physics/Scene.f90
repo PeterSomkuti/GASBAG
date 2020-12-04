@@ -168,6 +168,52 @@ module scene_mod
 
 contains
 
+
+  subroutine optical_depth_cleanup(scn)
+    type(scene), intent(inout) :: scn
+
+    ! Minimal value below which optical depths are clamped
+    double precision :: MIN_VAL = 1d-10
+
+    ! Set small values to some minimal value
+    if (allocated(scn%op%gas_tau)) then
+       where(scn%op%gas_tau < MIN_VAL) scn%op%gas_tau = MIN_VAL
+    end if
+
+    if (allocated(scn%op%ray_tau)) then
+       where(scn%op%ray_tau < MIN_VAL) scn%op%ray_tau = MIN_VAL
+    end if
+
+    ! Total optical depth is calculated as sum of all gas ODs plus Rayleigh OD
+    scn%op%layer_tau(:,:) = sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau
+
+    ! If there are aerosols in the scene, add them to the total OD
+
+    if (allocated(scn%op%aer_ext_tau)) then
+       scn%op%layer_tau(:,:) = scn%op%layer_tau(:,:) &
+            + sum(scn%op%aer_ext_tau(:,:,:), dim=3)
+    end if
+
+    ! Total column optical depth is just the sum over all active layers
+    ! (per wavelength still)
+    scn%op%total_tau(:) = sum(scn%op%layer_tau(:, 1:scn%num_active_levels - 1), dim=2)
+
+    ! The layer-resolved single scatter albedo is (Rayleigh + Aerosol) / (Total)
+    ! extinctions.
+    if (allocated(scn%op%aer_ext_tau)) then
+       scn%op%layer_omega(:,:) = &
+            (scn%op%ray_tau + sum(scn%op%aer_ext_tau(:,:,:), dim=3)) &
+            / scn%op%layer_tau(:,:)
+    else
+       ! Or without aerosols: Rayleigh / (Rayleigh + Gas)
+       scn%op%layer_omega(:,:) = scn%op%ray_tau(:,:) / scn%op%layer_tau(:,:)
+
+    end if
+
+
+  end subroutine optical_depth_cleanup
+
+
   !> @brief Calculates mid-layer pressures and humidities,
   !>        taking into account surface pressure
   !> @param scn Scene object

@@ -170,7 +170,7 @@ contains
           end do
 
        end do
-       
+
        ! And add Rayleigh contributions here (after partial aerosol sum)
        coef(1:3, :, l) = coef(1:3, :, l) + ray_coef(:, :) * ray_tau(l)
        ! and divide the entire layer-moments by the denominator

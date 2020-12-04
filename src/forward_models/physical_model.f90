@@ -25,6 +25,7 @@ module physical_model_mod
   use oco2_mod
   use solar_model_mod
   use math_utils_mod
+  use misc_utils_mod
   use statevector_mod
   use Beer_Lambert_mod
   use XRTM_mod
@@ -464,16 +465,17 @@ contains
                CS%window(i_win)%gases, &
                initial_atm)
 
+          ! TODO
+          ! Add in an option that would read the atmosphere
+          ! from an OCO-type prior file from J. Laughner's TCCON
+          ! tools.
+
        end if
-
-       ! Similarly, find the aerosols which the user wants for this window
-
 
        ! The currently used band / spectrometer number
        band = CS%window(i_win)%band
        ! Grab the number of spectral pixels in this band
        num_pixel = CS%general%N_spec(band)
-
 
        ! If solar footprint averaging is required - we MUST preload the
        ! spectra here.
@@ -748,14 +750,8 @@ contains
        do i_fr=frame_start, frame_stop, frame_skip
           do i_fp=1, num_fp !, CS%window(i_win)%footprint_skip
 
-#ifdef _OPENMP
-             this_thread = OMP_GET_THREAD_NUM()
-             cpu_time_start = omp_get_wtime()
-#else
-             this_thread = 0
-             call cpu_time(cpu_time_start)
-#endif
 
+             cpu_time_start = get_cpu_time()
 
 
              ! Depending on user input, and whether land fraction data is available,
@@ -767,7 +763,7 @@ contains
                      (land_fraction(i_fp, i_fr) < &
                      CS%window(i_win)%minimum_land_fraction) &
                      ) then
-                   write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fp, "/", i_fr, &
+                   write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
                         ") skipped due to land fraction constraint."
                    call logger%info(fname, trim(tmp_str))
                    cycle
@@ -790,11 +786,8 @@ contains
 
              retr_count = retr_count + 1
 
-#ifdef _OPENMP
-             cpu_time_stop = omp_get_wtime()
-#else
-             call cpu_time(cpu_time_stop)
-#endif
+             cpu_time_stop = get_cpu_time()
+
              ! Calculate the retrieval duration time
              results%processing_time(i_fp, i_fr) = cpu_time_stop - cpu_time_start
 
@@ -1756,7 +1749,7 @@ contains
     ! Main iteration loop for the retrieval process.
     do while (keep_iterating)
 
-       call cpu_time(cpu_iter_start)
+       cpu_iter_start = get_cpu_time()
 
        ! Increase iteration count. If last iteration was divergent,
        ! do not increase. The iteration count only counts successful
@@ -2011,7 +2004,7 @@ contains
 
 
           call logger%debug(fname, "Gases present in atmosphere - starting gas calculations.")
-          call cpu_time(cpu_gas_start)
+          cpu_gas_start = get_cpu_time()
 
           ! For the gas calculations, we need to use a "current" VMR profile for
           ! a specific gas. The prior VMR profiles are needed later for the scaling
@@ -2284,44 +2277,10 @@ contains
 
           ! ---------------------------------------------------------------
           ! Optical depth cleanup
+          ! (Calculate some quantities and check for bad values)
           ! ---------------------------------------------------------------
 
-          ! Set tiny gas OD values to some lower threshold. Some RT solvers
-          ! do not like gas OD = 0
-          if (allocated(scn%op%gas_tau)) then
-             where(scn%op%gas_tau < 1d-10) scn%op%gas_tau = 1d-10
-          end if
-
-          if (allocated(scn%op%ray_tau)) then
-             where(scn%op%ray_tau < 1d-10) scn%op%ray_tau = 1d-10
-          end if
-
-          ! Total optical depth is calculated as sum of all gas ODs
-          scn%op%layer_tau(:,:) = sum(scn%op%gas_tau, dim=3) + scn%op%ray_tau
-
-          ! If there are aerosols in the scene, add them to the total OD
-          if (allocated(scn%op%aer_ext_tau)) then
-             call logger%debug(fname, "Adding aerosol extinction")
-             scn%op%layer_tau(:,:) = scn%op%layer_tau(:,:) &
-                  + sum(scn%op%aer_ext_tau(:,:,:), dim=3)
-          end if
-
-
-          scn%op%total_tau(:) = sum(scn%op%layer_tau(:, 1:num_active_levels - 1), dim=2)
-
-          ! The layer-resolved single scatter albedo is (Rayleigh + Aerosol) / (Total)
-          ! extinctions.
-          if (allocated(scn%op%aer_ext_tau)) then
-             call logger%debug(fname, "Calculating SSA including aerosols")
-             scn%op%layer_omega(:,:) = &
-                  (scn%op%ray_tau + sum(scn%op%aer_ext_tau(:,:,:), dim=3)) &
-                  / scn%op%layer_tau(:,:)
-          else
-
-             scn%op%layer_omega(:,:) = scn%op%ray_tau(:,:) / scn%op%layer_tau(:,:)
-
-          end if
-
+          call optical_depth_cleanup(scn)
 
           ! ----------------------------------
           !
@@ -2329,7 +2288,7 @@ contains
           !
           ! ----------------------------------
 
-          call cpu_time(cpu_gas_stop)
+          cpu_gas_stop = get_cpu_time()
           write(tmp_str, '(A, F10.7)') "Gas and aerosol calc. time (s): ", cpu_gas_stop - cpu_gas_start
           call logger%debug(fname, trim(tmp_str))
        end if
@@ -2411,7 +2370,7 @@ contains
 
           ! This function produces the full radiances and Jacobians, any fancy
           ! fast RT methods are done within.
-          
+
           call solve_RT_problem_XRTM( &
                CS_win, & ! The microwindow structure
                CS%general, & ! The CS general structure
@@ -2838,7 +2797,7 @@ contains
        ! Note: we are only passing the ILS arrays that correspond to the
        ! actual pixel boundaries of the chosen microwindow.
 
-       call cpu_time(cpu_conv_start)
+       cpu_conv_start = get_cpu_time()
 
        select type(my_instrument)
        type is (oco2_instrument)
@@ -2936,7 +2895,8 @@ contains
           end do
        end if
 
-       call cpu_time(cpu_conv_stop)
+       cpu_conv_stop = get_cpu_time()
+
        write(tmp_str, '(A, F10.7)') "Total convolution time (s): ", cpu_conv_stop - cpu_conv_start
        call logger%debug(fname, trim(tmp_str))
 
@@ -3013,7 +2973,7 @@ contains
        ! We limit the retrieved albedo, but only in downlooking mode
        if (CS%algorithm%observation_mode == "downlooking") then
           if (SV%num_albedo > 0) then
-             if (SV%svsv(SV%idx_albedo(1)) < 0.0d0) then
+             if (SV%svsv(SV%idx_albedo(1)) <= 0.0d0) then
                 SV%svsv(SV%idx_albedo(1)) = 1.0d-4
              end if
           end if
@@ -3309,8 +3269,7 @@ contains
        end if
 
 
-
-       call cpu_time(cpu_iter_stop)
+       cpu_iter_stop = get_cpu_time()
 
        !---------------------------------------------------------------------
        ! STEP-THROUGH MODE

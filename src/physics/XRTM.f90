@@ -13,6 +13,7 @@ module XRTM_mod
   use aerosols_mod
   use scene_mod
   use physical_model_addon_mod
+  use PCART_mod
 
   ! Third-party modules
   use xrtm_int_f90
@@ -288,6 +289,9 @@ contains
 
     double precision, allocatable :: monochr_radiance(:,:)
     double precision, allocatable :: monochr_weighting_functions(:,:,:)
+
+    type(PCA_handler_t) :: PCA_handler
+
 
     integer :: num_act_lev
     integer :: num_lay
@@ -566,6 +570,28 @@ contains
                SV%num_aerosol_aod + &
                SV%num_aerosol_height + 1)
        end if
+
+    else if (CS_win%RT_strategy%lower() == "pca") then
+
+       call logger%debug(fname, "Using PCA-based fast RT strategy.")
+
+       ! Initialize the PCA object
+       call initialize_PCA(scn, PCA_handler)
+       ! Perform spectral binning
+       call assign_pushkar_bins(scn, PCA_handler)
+       ! Bail-out: if unassigned points remain, exit
+       if (count(PCA_handler%assigned_bin(:) == -1) > 0) then
+          call logger%error(fname, "Unassigned spectral points remain.")
+          return
+       end if
+
+       ! Allocate the PCA object matrices
+       call allocate_PCA(PCA_handler)
+
+       stop 1
+
+
+
     else
 
        call logger%fatal(fname, "RT strategy: '" // CS_win%RT_strategy%chars() &

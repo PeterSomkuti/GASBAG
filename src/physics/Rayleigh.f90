@@ -76,10 +76,9 @@ contains
 
     double precision :: F
     double precision :: depolf
-    double precision :: depol_rho
     double precision :: Nair
     double precision :: wl2, wl4
-    double precision :: wli2, wli4
+    double precision :: wli2
     double precision, parameter :: pi3 = pi * pi * pi
     integer :: i, j, N
 

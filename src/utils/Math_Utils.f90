@@ -11,6 +11,7 @@ module math_utils_mod
 
   ! User modules
   use logger_mod, only: logger => master_logger
+  use misc_utils_mod, only: get_cpu_time
 
   ! System modules
   use, intrinsic :: ieee_arithmetic, only: ieee_is_nan, ieee_value, ieee_quiet_nan
@@ -431,7 +432,7 @@ contains
     double precision, external :: ddot
     double precision, external :: dasum
 
-    call cpu_time(cpu_start)
+    cpu_start = get_cpu_time()
 
     N_wl = size(wl_input)
     N_pix = size(wl_output)
@@ -517,7 +518,7 @@ contains
 
     success = .true.
 
-    call cpu_time(cpu_stop)
+    cpu_stop = get_cpu_time()
     write(tmp_str, '(A, F10.7)') "Convolution time (s): ", cpu_stop - cpu_start
     call logger%debug(fname, trim(tmp_str))
 

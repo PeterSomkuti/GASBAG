@@ -727,8 +727,8 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       ! frame_start = 1843
-       ! frame_stop = 2000
+       !frame_start = 1
+       !frame_stop = 50
 
        ! For OpenMP, we set some private and shared variables, as well as set the
        ! scheduling type. Right now, it's set to DYNAMIC, so the assignment of
@@ -752,7 +752,6 @@ contains
 
 
              cpu_time_start = get_cpu_time()
-
 
              ! Depending on user input, and whether land fraction data is available,
              ! we can skip certain scenes.
@@ -1183,14 +1182,15 @@ contains
     scn%lat = lat(i_fp, i_fr)
     scn%alt = altitude(i_fp, i_fr)
 
-    ! Calculate the tropopause pressure according to Reichelt et al.
+    ! This is the tropopause pressure calculation based
+    ! on the method by T. Reichler et al.
     call twmo( &
-         size(met_P_levels, 1), &
-         met_T_profiles(:, i_fp, i_fr), &
-         met_P_levels(:, i_fp, i_fr), &
-         45000.0d0, &
-         7500.0d0, &
-         -0.002d0, &
+         size(met_P_levels, 1), & ! Number of layers
+         met_T_profiles(:, i_fp, i_fr), & ! T profile
+         met_P_levels(:, i_fp, i_fr), & ! P levels
+         45000.0d0, & ! "Upper" tropopause limit
+         7500.0d0, & ! "Lower" tropopause limit
+         -0.002d0, & ! "Gamma" value in K/m
          ptropo)
 
     write(tmp_str, '(A, F8.3)') "Tropopause pressure: ", ptropo
@@ -1220,6 +1220,7 @@ contains
        else
           n_stokes = 1
        end if
+
     else
        call logger%error(fname, "RT Method: " // CS_win%RT_model%chars() // " unknown.")
        stop 1
@@ -3547,7 +3548,7 @@ contains
 
     if (SV%num_sif > 0) then
        ! Put SIF prior covariance at the continuum level of the band
-       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (0.10d0 * continuum) ** 2
+       Sa(SV%idx_sif(1), SV%idx_sif(1)) = (1.00d0 * continuum) ** 2
     end if
 
     if (SV%num_zlo > 0) then

@@ -83,7 +83,8 @@ contains
        ray_tau, &
        aer_sca_tau, &
        coef, &
-       lcoef)
+       lcoef, &
+       success)
 
     type(scene), intent(in) :: scn
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
@@ -95,6 +96,7 @@ contains
     double precision, intent(in) :: aer_sca_tau(:,:)
     double precision, allocatable, intent(inout) :: coef(:,:,:)
     double precision, allocatable, intent(inout) :: lcoef(:,:,:,:)
+    logical, intent(inout) :: success
 
     character(len=*), parameter :: fname = "compute_coef_at_wl"
 
@@ -113,6 +115,8 @@ contains
     double precision :: this_aero_height
     double precision, allocatable :: ray_coef(:,:)
     double precision, allocatable :: aerpmom(:,:,:,:)
+
+    success = .false.
 
     n_layer = scn%num_active_levels - 1
     n_aer = scn%num_aerosols
@@ -236,14 +240,15 @@ contains
 
     if (any(ieee_is_nan(coef))) then
        call logger%error(fname, "I found NaN(s) in the COEF calculation.")
-       stop 1
+       return
     end if
 
     if (any(ieee_is_nan(lcoef))) then
        call logger%error(fname, "I found NaN(s) in the LCOEF calculation.")
-       stop 1
+       return
     end if
 
+    success = .true.
 
   end subroutine compute_coef_at_wl
 

@@ -218,7 +218,7 @@ contains
     call logger%debug(fname, trim(tmp_str))
     write(tmp_str, '(A, G0.1)') "XRTM Solver bit mask: ", xrtm_solvers
     call logger%debug(fname, trim(tmp_str))
-    
+
     call xrtm_create_f90( &
          xrtm, &  ! XRTM object
          xrtm_options, & ! XRTM option bitmask
@@ -616,6 +616,8 @@ contains
 
     ! Were the calls to XRTM successful?
     logical :: xrtm_success
+    ! Were the coef calculations successful?
+    logical :: coef_success
     ! Number of active levels
     integer :: n_levels
     ! Number of (active) layers
@@ -655,6 +657,7 @@ contains
     integer :: i, j, l
 
     success = .false.
+    coef_success = .false.
     xrtm_success = .false.
 
     ! Derive some useful values here
@@ -829,11 +832,19 @@ contains
     call logger%debug(fname, "Computing phase function coefficients and derivatives at band edges.")
     call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(1), n_mom, n_derivs, &
          scn%op%ray_tau(1,:), scn%op%aer_sca_tau(1,:,:), &
-         coef_left, lcoef_left)
+         coef_left, lcoef_left, coef_success)
+
+    if (.not. coef_success) then
+       return
+    end if
 
     call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(n_wl), n_mom, n_derivs, &
          scn%op%ray_tau(n_wl,:), scn%op%aer_sca_tau(n_wl,:,:), &
-         coef_right, lcoef_right)
+         coef_right, lcoef_right, coef_success)
+
+    if (.not. coef_success) then
+       return
+    end if
 
     call logger%debug(fname, "Determining number of phase function coefficients per layer used in XRTM.")
     ! Figure out how many coefficients we are giving to XRTM

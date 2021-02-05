@@ -444,7 +444,8 @@ contains
 
              ! And then finally it needs to have the right value
              if (CS_win%RT_streams(1) < 2) then
-                write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", CS_win%RT_streams(1)
+                write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", &
+                     CS_win%RT_streams(1)
                 call logger%fatal(fname, trim(tmp_str))
                 stop 1
              end if
@@ -585,8 +586,13 @@ contains
           return
        end if
 
-       ! Allocate the PCA object matrices
-       call allocate_PCA(PCA_handler)
+       ! Allocate some of the PCA object matrices
+       call allocate_first_PCA(PCA_handler)
+
+       ! Perform the PCA on the optical property matrices
+
+       ! Allocate the rest of the PCA object matrices
+
 
        stop 1
 

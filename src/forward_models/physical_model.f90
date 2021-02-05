@@ -727,7 +727,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       !frame_start = 1
+       !frame_start = 1235
        !frame_stop = 50
 
        ! For OpenMP, we set some private and shared variables, as well as set the
@@ -3160,15 +3160,20 @@ contains
           ! such that sigma(SIF) can automatically scale according to the instrument
           ! Stokes coefficients.
 
-          if (SV%num_zlo == 1) then
-             results%sv_uncertainty(i_fp, i_fr, SV%idx_zlo(1)) = &
-                  results%sv_uncertainty(i_fp, i_fr, SV%idx_zlo(1)) / stokes_coef(1, i_fp, i_fr)
-          end if
+          ! Addendum:
+          ! I think this is wrong .. you should not need this fudge factor
+          ! since the forward model lives in "true radiance before polarizer"-space
+          ! right until the comparison with the measurement..
 
-          if (SV%num_sif == 1) then
-             results%sv_uncertainty(i_fp, i_fr, SV%idx_sif(1)) = &
-                  results%sv_uncertainty(i_fp, i_fr, SV%idx_sif(1)) / stokes_coef(1, i_fp, i_fr)
-          end if
+          !if (SV%num_zlo == 1) then
+          !   results%sv_uncertainty(i_fp, i_fr, SV%idx_zlo(1)) = &
+          !        results%sv_uncertainty(i_fp, i_fr, SV%idx_zlo(1)) / stokes_coef(1, i_fp, i_fr)
+          !end if
+
+          !if (SV%num_sif == 1) then
+             !results%sv_uncertainty(i_fp, i_fr, SV%idx_sif(1)) = &
+             !     results%sv_uncertainty(i_fp, i_fr, SV%idx_sif(1)) / stokes_coef(1, i_fp, i_fr)
+          !end if
 
           ! Save retrieved CHI2 (before the last update)
           results%chi2(i_fp, i_fr) = this_chi2

@@ -45,7 +45,7 @@ contains
     character(len=*), parameter :: fname = "print_my_gauss_info"
     character(len=999) :: tmp_str
 
-    call logger%debug(fname, "___________________________________")
+    call logger%debug(fname, "----------------------------------")
     call logger%debug(fname, "| Gauss-type aerosol: " // self%name)
     write(tmp_str, '(A, F10.4)') "| Total column OD: ", self%AOD
     call logger%debug(fname, trim(tmp_str))
@@ -150,6 +150,7 @@ contains
     allocate(scn%op%aer_ext_q(size(scn%op%wl), scn%num_aerosols))
     allocate(scn%op%aer_sca_q(size(scn%op%wl), scn%num_aerosols))
     allocate(scn%op%aer_ssa(size(scn%op%wl), scn%num_aerosols))
+    allocate(scn%op%aer_frac(size(scn%op%wl)))
 
     allocate(scn%op%aer_ext_tau(size(scn%op%wl), &
          scn%num_levels-1, scn%num_aerosols))
@@ -244,6 +245,7 @@ contains
     deallocate(scn%op%aer_ext_q)
     deallocate(scn%op%aer_sca_q)
     deallocate(scn%op%aer_ssa)
+    deallocate(scn%op%aer_frac)
 
     deallocate(scn%op%aer_ext_tau)
     deallocate(scn%op%aer_sca_tau)

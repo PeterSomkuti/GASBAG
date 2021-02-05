@@ -94,6 +94,8 @@ module scene_mod
      double precision, allocatable :: aer_sca_q(:,:)
      !> Aerosol single scatter albedo (spectral, aerosol)
      double precision, allocatable :: aer_ssa(:,:)
+     !> Aerosol interpolation factor (may be needed by PCA) (spectral)
+     double precision, allocatable :: aer_frac(:)
 
      !> Aerosol reference AOD (aerosol)
      double precision, allocatable :: reference_aod(:)

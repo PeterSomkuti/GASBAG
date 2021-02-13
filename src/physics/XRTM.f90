@@ -291,7 +291,8 @@ contains
     double precision, allocatable :: monochr_weighting_functions(:,:,:)
 
     type(PCA_handler_t) :: PCA_handler
-
+    type(string), allocatable :: PCA_xrtm_solvers_lo(:), PCA_xrtm_solvers_hi(:)
+    type(scene), allocatable :: PCA_scn(:)
 
     integer :: num_act_lev
     integer :: num_lay
@@ -315,6 +316,8 @@ contains
     integer, allocatable :: n_coef(:)
     !
     integer :: i, j
+    !
+    double precision :: cpu_start_pca, cpu_stop_pca
 
 
     ! Initialize success variable
@@ -574,6 +577,15 @@ contains
 
     else if (CS_win%RT_strategy%lower() == "pca") then
 
+       ! --------------------------------------------------------------------
+       ! PCA-based fast RT
+       ! --------------------------------------------------------------------
+       !
+       ! Look at Somkuti et al. 2016 for details
+       ! --------------------------------------------------------------------
+
+       cpu_start_pca = get_cpu_time()
+
        call logger%debug(fname, "Using PCA-based fast RT strategy.")
 
        ! Initialize the PCA object
@@ -589,14 +601,139 @@ contains
        ! Allocate some of the PCA object matrices
        call allocate_first_PCA(PCA_handler)
 
-       ! Perform the PCA on the optical property matrices
+       ! Construct optical property matrices
+       call create_F_matrix(scn, PCA_handler)
 
-       ! Allocate the rest of the PCA object matrices
+       ! Perform optical property matrix forward transform
+       call forward_transform_F_matrix(PCA_handler)
+
+       ! Perform optical property matrix mean removal
+       ! (also computes mean optical states)
+       call F_matrix_mean_removal(PCA_handler)
+
+       ! Perform principal component analysis on mean-removed
+       ! optical state matrices. Also allocates the necessary
+       ! matrices within PCA_handler
+       call perform_PCA(PCA_handler)
+
+       ! Create scene object array from PCA data
+       ! (mean and perturbed states, which we can then stick into XRTM)
+       call create_scenes_from_PCA(PCA_handler, scn, PCA_scn)
+
+       ! --------------------------------------------------------------------
+       ! PCA set-up done!
+       !
+       ! All required values are now available inside of the object
+       ! "PCA_handler"
+       ! --------------------------------------------------------------------
+
+       cpu_stop_pca = get_cpu_time()
+
+       write(*,*) "PCA cost: ", cpu_stop_pca - cpu_start_pca
+
+       ! For the time being, we want to keep the PCA method as:
+       ! Low accuracy: SS + 2S
+       ! High accuracy: SS + EIG_BVP
+       ! (maybe change later on..)
+       ! NOTE
+       ! In XRTM, TWO_STREAM computes both single scattering AND diffuse 2S contributions.
+       ! This is different in LIDORT, 2STREAM etc.
+
+       allocate(PCA_xrtm_solvers_lo(1))
+       allocate(PCA_xrtm_solvers_hi(1))
+
+       PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
+       PCA_xrtm_solvers_hi(1) = "SINGLE"
+
+
+       call setup_XRTM( &
+            CS_win%xrtm_options, &
+            PCA_xrtm_solvers_lo, &
+            .false., & ! Polarization? Not for low accuracy run!
+            CS_win%constant_coef, &
+            xrtm_options, &
+            xrtm_solvers, &
+            xrtm_kernels, &
+            xrtm_success)
+
+       if (.not. xrtm_success) then
+          call logger%error(fname, "Call to setup_XRTM unsuccessful.")
+          return
+       end if
+
+       ! Set up number of derivatives needed by XRTM
+       xrtm_n_derivs = ( &
+            + SV%num_gas &
+            + SV%num_temp &
+            + SV%num_albedo &
+            + SV%num_aerosol_aod &
+            + SV%num_aerosol_height &
+            + SV%num_psurf &
+            )
+
+       ! --------------------------------------------------------------------
+       ! Perform low-accuracy line-by-line run for TWO_STREAM
+       ! contributions.
+       !
+       ! All required values are now available inside of the object
+       ! "PCA_handler"
+       ! --------------------------------------------------------------------
+
+       call create_XRTM( &
+            xrtm, & ! XRTM handler
+            xrtm_options(1), & ! XRTM options bitmask
+            xrtm_solvers(1), & ! XRTM solvers combined bitmask
+            max(3, scn%max_pfmom), & ! Max coef - either 3 for Rayleigh, or whatever we have for aerosols
+            1, & ! Quadrature points per hemisphere
+            n_stokes, & ! Number of stokes coeffs
+            xrtm_n_derivs, & ! Number of derivatives
+            num_lay, & ! Number of layers
+            1, & ! Number of surface kernels
+            50, & ! Number of kernel quadrature points
+            xrtm_kernels, & ! XRTM surface kernels
+            xrtm_success) ! Call successful?
+
+       ! Allocate the arrays which hold the radiances and weighting functions
+       ! for the line-by-line low accuracy run.
+       allocate(monochr_radiance(size(scn%op%wl), scn%num_stokes))
+       allocate(monochr_weighting_functions(size(scn%op%wl), scn%num_stokes, xrtm_n_derivs))
+
+       monochr_radiance(:,:) = 0.0d0
+       monochr_weighting_functions(:,:,:) = 0.0d0
+
+       call XRTM_monochromatic( &
+            xrtm, &
+            xrtm_n_derivs, &
+            scn, &
+            SV, &
+            CS_win, &
+            CS_general, &
+            CS_aerosol, &
+            monochr_radiance, &
+            monochr_weighting_functions, &
+            xrtm_success)
+
+       if (.not. xrtm_success) then
+          call logger%error(fname, "Call to XRTM_monochromatic unsuccessful.")
+          call xrtm_destroy_f90(xrtm, xrtm_error)
+          return
+       end if
+
+       ! Need to clean up xrtm object
+       call xrtm_destroy_f90(xrtm, xrtm_error)
+
+       ! --------------------------------------------------------------------
+       !
+       !
+       ! Perform high-accuracy binned calculations.
+       !
+       !
+       ! --------------------------------------------------------------------
+
+       
 
 
        stop 1
-
-
 
     else
 
@@ -1007,12 +1144,12 @@ contains
     double precision, intent(inout) :: derivs(:,:,:)
 
     double precision, allocatable, intent(in), optional :: coef(:,:,:,:) !(pfmom, elem, n_layers, spectral)
-    double precision, allocatable, intent(in), optional :: lcoef(:,:,:,:,:)  !(pfmom, elem, n_derivs, n_layers, spectral)
+    double precision, allocatable, intent(in), optional :: lcoef(:,:,:,:,:) !(pfmom, elem, n_derivs, n_layers, spectral)
 
     double precision, allocatable, intent(in), optional :: coef_left(:,:,:) !(pfmom, elem, n_layers)
-    double precision, allocatable, intent(in), optional :: lcoef_left(:,:,:,:)  !(pfmom, elem, n_derivs, n_layers)
-    double precision, allocatable, intent(in), optional :: coef_right(:,:,:)  !(pfmom, elem, n_layers)
-    double precision, allocatable, intent(in), optional :: lcoef_right(:,:,:,:)  !(pfmom, elem, n_derivs, n_layers)
+    double precision, allocatable, intent(in), optional :: lcoef_left(:,:,:,:) !(pfmom, elem, n_derivs, n_layers)
+    double precision, allocatable, intent(in), optional :: coef_right(:,:,:) !(pfmom, elem, n_layers)
+    double precision, allocatable, intent(in), optional :: lcoef_right(:,:,:,:) !(pfmom, elem, n_derivs, n_layers)
 
     logical, intent(inout) :: success
 

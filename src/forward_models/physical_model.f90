@@ -1193,7 +1193,7 @@ contains
          -0.002d0, & ! "Gamma" value in K/m
          ptropo)
 
-    write(tmp_str, '(A, F8.3)') "Tropopause pressure: ", ptropo
+    write(tmp_str, '(A, F15.2, A)') "Tropopause pressure: ", ptropo, " Pa"
     call logger%debug(fname, trim(tmp_str))
 
     ! -------------------------------------

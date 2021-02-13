@@ -52,7 +52,6 @@ module PCART_mod
           s_fra, e_fra, &
           s_sur, e_sur
 
-
      !> PCA bin objects
      type(PCA_bin_t), allocatable :: PCA_bin(:)
   end type PCA_handler_t
@@ -99,19 +98,29 @@ contains
 
     ! Rayleigh optical depth
     PCA_handler%s_ray = PCA_handler%e_tau + 1
-    PCA_handler%e_ray = PCA_handler%s_ray + scn%num_active_levels ! + nlay - 1
+    PCA_handler%e_ray = PCA_handler%s_ray + scn%num_active_levels - 2! + nlay - 1
 
     ! Surface parameteres (so far only Lambertian surface here)
     PCA_handler%s_sur = PCA_handler%e_ray + 1
     PCA_handler%e_sur = PCA_handler%s_sur
 
-    ! Aerosol scattering ratio/coefficient
-    PCA_handler%s_aer = PCA_handler%e_sur + 1
-    PCA_handler%e_aer =  PCA_handler%s_aer + size(scn%op%reference_aod) - 1
+    if (allocated(scn%op%reference_aod)) then
+       ! Aerosol scattering ratio/coefficient
+       PCA_handler%s_aer = PCA_handler%e_sur + 1
+       PCA_handler%e_aer =  PCA_handler%s_aer + size(scn%op%reference_aod) - 1
 
-    ! Aerosol interpolation coefficient (one one needed)
-    PCA_handler%s_fra = PCA_handler%e_aer + 1
-    PCA_handler%e_fra = PCA_handler%s_fra
+       ! Aerosol interpolation coefficient (only one needed)
+       PCA_handler%s_fra = PCA_handler%e_aer + 1
+       PCA_handler%e_fra = PCA_handler%s_fra
+    else
+       ! Set these indices to negative values, so the code
+       ! will throw an error if elements of F are accessed
+       ! that shouldn't be accessed.
+       PCA_handler%s_aer = -1
+       PCA_handler%e_aer = -1
+       PCA_handler%s_fra = -1
+       PCA_handler%e_fra = -1
+    end if
 
   end subroutine initialize_PCA
 
@@ -151,7 +160,6 @@ contains
     ! Assign each spectral point to a bin according to taug
     ! is there a neat way to do an equivalent to np.searchsorted
     do i = 1, nspect
-
        do j = 1, size(bounds) - 1
           if ( &
                (scn%op%total_tau(i) .ge. bounds(j)) .and. &
@@ -248,6 +256,9 @@ contains
        allocate(PCA_handler%PCA_bin(i)%F_centered(nspect, nopt))
        allocate(PCA_handler%PCA_bin(i)%mean_opt(nopt))
 
+       PCA_handler%PCA_bin(i)%N_spect = nspect
+       PCA_handler%PCA_bin(i)%N_EOF = 5
+
     end do
   end subroutine allocate_first_PCA
 
@@ -256,7 +267,7 @@ contains
     type(scene), intent(in) :: scn
     type(PCA_handler_t), intent(inout) :: PCA_handler
 
-    integer :: i, j, k
+    integer :: i, j, k, l
 
     integer :: s_tau
     integer :: e_tau
@@ -264,13 +275,31 @@ contains
     integer :: e_ray
     integer :: s_sur
     integer :: e_sur
+    integer :: s_aer
+    integer :: e_aer
+    integer :: s_fra
+    integer :: e_fra
 
     s_tau = PCA_handler%s_tau
     e_tau = PCA_handler%e_tau
+
     s_ray = PCA_handler%s_ray
     e_ray = PCA_handler%e_ray
+
     s_sur = PCA_handler%s_sur
     e_sur = PCA_handler%e_sur
+
+    s_aer = PCA_handler%s_aer
+    e_aer = PCA_handler%e_aer
+
+    s_fra = PCA_handler%s_fra
+    e_fra = PCA_handler%e_fra
+
+    write(*,*) "TAU", s_tau, e_tau
+    write(*,*) "RAY", s_ray, e_ray
+    write(*,*) "SUR", s_sur, e_sur
+    write(*,*) "AER", s_aer, e_aer
+    write(*,*) "FRA", s_fra, e_fra
 
     do j = 1, PCA_handler%N_bin
        k = 1
@@ -288,20 +317,227 @@ contains
 
              ! Aerosols present?
              if (allocated(scn%op%reference_aod)) then
-
+                PCA_handler%PCA_bin(j)%F(k, s_aer:e_aer) = scn%op%aer_sca_q(i, :)
+                PCA_handler%PCA_bin(j)%F(k, s_fra:e_fra) = scn%op%aer_frac(i)
              end if
+
+             ! Increment wavelength counter
+             k = k + 1
 
           end if
 
        end do
     end do
 
-
-
-
   end subroutine create_F_matrix
 
 
+  !> @brief Peform forward transform of optical property matrix
+  subroutine forward_transform_F_matrix(PCA_handler)
+    type(PCA_handler_t), intent(inout) :: PCA_handler
+    integer :: wl, bin, opt
+
+    do bin = 1, PCA_handler%N_bin
+
+       do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
+          do opt = 1, PCA_handler%N_opt
+
+             if (opt == PCA_handler%s_fra) then
+                PCA_handler%PCA_bin(bin)%F_centered(wl, opt) = &
+                     PCA_handler%PCA_bin(bin)%F(wl, opt)
+             else
+                PCA_handler%PCA_bin(bin)%F_centered(wl, opt) = &
+                     log(PCA_handler%PCA_bin(bin)%F(wl, opt))
+             end if
+
+          end do
+       end do
+
+    end do
+
+  end subroutine forward_transform_F_matrix
+
+
+  subroutine F_matrix_mean_removal(PCA_handler)
+    type(PCA_handler_t) :: PCA_handler
+    integer :: bin, opt
+
+    do bin=1, PCA_handler%N_bin
+       do opt=1, PCA_handler%N_opt
+          ! Compute the mean optical property and subsetted into bins
+          PCA_Handler%PCA_bin(bin)%mean_opt(opt) = sum(PCA_handler%PCA_bin(bin)%F(:, opt)) / &
+               PCA_handler%PCA_bin(bin)%N_spect
+          PCA_Handler%PCA_bin(bin)%F_centered(:, opt) = PCA_Handler%PCA_bin(bin)%F(:, opt) - &
+               PCA_Handler%PCA_bin(bin)%mean_opt(opt)
+       end do
+    end do
+
+  end subroutine F_matrix_mean_removal
+
+
+  subroutine perform_PCA(PCA_handler)
+    type(PCA_handler_t) :: PCA_handler
+
+    character(len=*), parameter :: fname = "perform_PCA"
+    character(len=99) :: tmp_str
+
+    external DSYEVD
+    external DSYEV
+
+    integer :: bin, opt, eof, wl
+
+    ! covariance matrix (need a temporary container)
+    double precision, allocatable :: C(:,:)
+    ! array to hold eigenvalues temporarily
+    double precision, allocatable :: tmp_eigval(:)
+
+    double precision, allocatable :: work(:), iwork(:)
+    integer :: lwork, liwork, info, info2
+
+    integer :: N_opt
+    integer :: N_spect
+    integer :: N_EOF
+
+    N_opt = PCA_handler%N_opt
+
+    LWORK = 10 + 6*PCA_handler%N_opt + 2*(PCA_handler%N_opt**2)
+    LIWORK = 10 + 5*PCA_handler%N_opt
+
+    ! Required workspaces for DSYEVD and DSYEV
+    allocate(work(lwork))
+    allocate(iwork(liwork))
+    allocate(tmp_eigval(N_opt))
+    allocate(C(N_opt, N_opt))
+
+    do bin = 1, PCA_handler%N_bin
+
+       N_spect = PCA_handler%PCA_bin(bin)%N_spect
+       N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
+       info = -999
+       info2 = -999
+
+       allocate(PCA_handler%PCA_bin(bin)%C(N_opt, N_opt))
+       allocate(PCA_handler%PCA_bin(bin)%EigVal(N_opt))
+       allocate(PCA_handler%PCA_bin(bin)%EigVec(N_opt, N_opt))
+       allocate(PCA_handler%PCA_bin(bin)%sEOF(N_opt, N_opt))
+       allocate(PCA_handler%PCA_bin(bin)%PC(N_spect, N_opt))
+       allocate(PCA_handler%PCA_bin(bin)%pert_opt_states(-N_EOF:N_EOF, N_opt))
+
+       PCA_handler%PCA_bin(bin)%C = 0.0d0
+       PCA_handler%PCA_bin(bin)%EigVal = 0.0d0
+       PCA_handler%PCA_bin(bin)%EigVec = 0.0d0
+       PCA_handler%PCA_bin(bin)%sEOF = 0.0d0
+       PCA_handler%PCA_bin(bin)%PC = 0.0d0
+       PCA_handler%PCA_bin(bin)%pert_opt_states = 0.0d0
+
+       ! Calculate correlation matrix F^T dot T / (N - 1)
+       C = matmul( &
+            transpose(PCA_handler%PCA_bin(bin)%F_centered), &
+            PCA_handler%PCA_bin(bin)%F_centered) / (N_spect - 1)
+
+       PCA_handler%PCA_bin(bin)%C(:,:) = C(:,:)
+
+       ! Perform eigenvalue decomposition on C
+       call DSYEVD('V', 'U', N_opt, C, N_opt, &
+            tmp_eigval, work, lwork, &
+            iwork, liwork, info)
+
+       if (info /= 0) then
+          ! Occasionally, DSYEVD will fail (numerical instabilities?)
+          ! However, we can still try to perform the eigenvalue decomposition
+          ! using DSYEV
+
+          ! Copy back C in case it was modified by DSYEVD
+          C(:,:) = PCA_handler%PCA_bin(bin)%C(:,:)
+          ! Try again
+          call DSYEV('V', 'U', N_opt, C, N_opt, &
+               tmp_eigval, work, lwork, info2)
+
+          if (info2 /= 0) then
+             call logger%error(fname, "Eigenvalue decomposition failed with both DSYEVD and DSYEV!")
+          else
+             call logger%debug(fname, "Eigenvalue decomposition with DSYEV was successful!")
+          end if
+
+       else
+          call logger%debug(fname, "Eigenvalue decomposition with DSYEVD was successful!")
+       end if
+
+       ! Store Eigenvalues, but need to reverse the order (descending)!
+       PCA_handler%PCA_bin(bin)%EigVal(:) = tmp_eigval(N_opt:1:-1)
+
+       ! Store Eigenvectors, and reverse order as well
+       PCA_handler%PCA_bin(bin)%EigVec(:,:) = C(:, N_opt:1:-1)
+
+       ! If some eigenvalue drops below a tiny value, just set them to zero
+       ! along with the corresponding eigenvectors and EOFs
+       do opt = 1, N_opt
+          if (PCA_handler%PCA_bin(bin)%EigVal(opt) < 1E-15) then
+
+             PCA_handler%PCA_bin(bin)%EigVal(opt) = 0.0
+             PCA_handler%PCA_bin(bin)%EigVec(:,opt) = 0.0
+             PCA_handler%PCA_bin(bin)%sEOF(:,opt) = 0.0
+
+          else
+             ! Scaled EOF is eigenvector times sqrt of eigenvalue
+             PCA_handler%PCA_bin(bin)%sEOF(:, opt) = PCA_handler%PCA_bin(bin)%EigVec(:, opt) * &
+                  sqrt(PCA_handler%PCA_bin(bin)%EigVal(opt))
+
+          end if
+       end do
+
+       ! Let the user know how much variance is contained in each eigenvector
+       !do opt = 1, 10
+       !   write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A)') &
+       !        "Explained variance for bin ", bin, ", #", opt, ": ", &
+       !        100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / sum(PCA_handler%PCA_bin(bin)%EigVal(:)), &
+       !        "%"
+       !   call logger%debug(fname, trim(tmp_str))
+       !end do
+
+       ! Calculate and store the optical state vectors for every perturbation
+       do eof = -N_EOF, N_EOF
+             do opt = 1, N_opt
+
+                if (eof == 0) then
+                   PCA_handler%PCA_bin(bin)%pert_opt_states(eof, opt) = &
+                        PCA_handler%PCA_bin(bin)%mean_opt(opt)
+                else
+                   PCA_handler%PCA_bin(bin)%pert_opt_states(eof, opt) = &
+                        PCA_handler%PCA_bin(bin)%mean_opt(opt) + &
+                        sign(1, eof) * PCA_handler%PCA_bin(bin)%sEOF(opt, abs(eof))
+                end if
+
+             end do
+       end do
+
+       ! Calculate principal components (PCs)
+       do opt = 1, N_opt
+
+          if (PCA_handler%PCA_bin(bin)%EigVal(opt) > 1E-15) then
+
+             PCA_handler%PCA_bin(bin)%PC(:, opt) = matmul(&
+                  PCA_handler%PCA_bin(bin)%F_centered, &
+                  PCA_handler%PCA_bin(bin)%sEOF(:, opt)) / &
+                  PCA_handler%PCA_bin(bin)%EigVal(opt)
+
+          end if
+
+       end do
+
+    end do
+
+    deallocate(C, work, iwork, tmp_eigval)
+
+  end subroutine perform_PCA
+
+  subroutine create_scenes_from_PCA(PCA_handler, scn, PCA_scn)
+    type(PCA_handler_t) :: PCA_handler
+    type(scene) :: scn
+    type(scene), allocatable :: PCA_scn(:)
+
+
+  end subroutine create_scenes_from_PCA
 
 
 end module PCART_mod

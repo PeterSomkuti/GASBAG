@@ -115,7 +115,7 @@ contains
           call logger%warning(fname, trim(tmp_str))
           write(tmp_str, '(A, ES10.6)') "Mom file: ", aerosol%wavelengths(i)
           call logger%warning(fname, trim(tmp_str))
-          
+
        end if
     end do
 
@@ -163,6 +163,9 @@ contains
          scn%num_levels-1, scn%num_aerosols))
 
     allocate(scn%op%reference_aod(scn%num_aerosols))
+
+    scn%op%aer_frac(:) = (scn%op%wl(:) - scn%op%wl(1)) / &
+         (scn%op%wl(size(scn%op%wl)) - scn%op%wl(1))
 
     ! ------------------------------------------------------
     ! Loop through all aerosols specified in the config file

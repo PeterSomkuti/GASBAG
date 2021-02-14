@@ -184,6 +184,12 @@ contains
        ! Now that we have beta, we can 'simply' calculate the derivative inputs
        ! needed by the RT model(s).
 
+       ! We start counting the position of aerosol indicies here
+       l_aero_idx = 2 * n_layer
+       if (SV%num_albedo > 0) then
+          l_aero_idx = l_aero_idx + 1
+       end if
+
        ! Aerosol AODs
        do i = 1, SV%num_aerosol_aod
 
@@ -192,7 +198,7 @@ contains
           ! TODO: this is a bit hacky, would be nice to have some global
           ! dictionary where one can look these up
 
-          l_aero_idx = SV%num_gas + SV%num_temp + SV%num_albedo + i
+          l_aero_idx = l_aero_idx + i
           ! Which aerosol belongs to SV index 'i'?
           aer_sv_idx = SV%aerosol_aod_idx_lookup(i)
           ! What is the corresponding aerosol in the MCS?
@@ -201,7 +207,6 @@ contains
           ! And calculate dBeta/dAOD
           lcoef(:,:,l_aero_idx,l) = aer_sca_tau(l, aer_sv_idx) / scn%op%reference_aod(aer_sv_idx) * &
                (aerpmom(aer_sv_idx,:,:,l) - coef(:,:,l)) / (aer_sca_tau(l, aer_sv_idx) + ray_tau(l))
-
        end do
 
        ! Aerosol heights
@@ -214,7 +219,8 @@ contains
           ! TODO: this is a bit hacky, would be nice to have some global
           ! dictionary where one can look these up
 
-          l_aero_idx = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + i
+          ! Keep using the l_aero_idx
+          l_aero_idx =  l_aero_idx + i
           ! Which aerosol belongs to SV index 'i'?
           aer_sv_idx = SV%aerosol_height_idx_lookup(i)
           ! What is the corresponding aerosol in the MCS?

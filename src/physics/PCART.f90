@@ -532,10 +532,66 @@ contains
   end subroutine perform_PCA
 
   subroutine create_scenes_from_PCA(PCA_handler, scn, PCA_scn)
-    type(PCA_handler_t) :: PCA_handler
-    type(scene) :: scn
-    type(scene), allocatable :: PCA_scn(:)
+    type(PCA_handler_t), intent(in) :: PCA_handler
+    type(scene), intent(in) :: scn
+    type(scene), allocatable, intent(inout) :: PCA_scn(:, :)
 
+    type(optical_properties) :: op
+    integer :: N_EOF, max_EOF
+    integer :: i, j
+    integer :: bin, opt, wl, eof
+
+
+    ! Count the total number of binned calculations
+    ! N_BIN * (2*N_EOF + 1) holds only when all bins have the same
+    ! number of EOFs, but we might change that at some point..
+
+    max_EOF = maxval(PCA_handler%PCA_bin(:)%N_EOF)
+    allocate(PCA_scn(PCA_handler%N_bin, -max_EOF:max_EOF))
+
+    ! Go through all scene objects and populate them with
+    ! the constants that go unchanged from the original
+    ! scene. (pretty much everything apart from the optical props)
+    ! Each scene will only consist of a single wavelength point.
+
+    do bin = 1, PCA_handler%N_bin
+       N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
+
+       do eof = -N_EOF, N_EOF
+          PCA_scn(bin, eof)%num_levels = scn%num_levels
+          PCA_scn(bin, eof)%num_active_levels = scn%num_active_levels
+          PCA_scn(bin, eof)%num_gases = scn%num_gases
+          PCA_scn(bin, eof)%num_aerosols = scn%num_aerosols
+          PCA_scn(bin, eof)%max_pfmom = scn%max_pfmom
+          PCA_scn(bin, eof)%num_stokes = scn%num_stokes
+
+          PCA_scn(bin, eof)%atm = scn%atm
+          PCA_scn(bin, eof)%date = scn%date
+          PCA_scn(bin, eof)%epoch = scn%epoch
+          PCA_scn(bin, eof)%lon = scn%lon
+          PCA_scn(bin, eof)%lat = scn%lat
+          PCA_scn(bin, eof)%SZA = scn%SZA
+          PCA_scn(bin, eof)%mu0 = scn%mu0
+          PCA_scn(bin, eof)%VZA = scn%VZA
+          PCA_scn(bin, eof)%mu = scn%mu
+          PCA_scn(bin, eof)%SAA = scn%SAA
+          PCA_scn(bin, eof)%VAA = scn%VAA
+       end do
+    end do
+
+    ! Now construct the optical properties for each bin, and for each perturbed
+    ! state within each bin.
+    do bin = 1, PCA_handler%N_bin
+       N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
+       do eof = -N_EOF, N_EOF
+
+          ! Allocate the optical property arrays inside the scene
+          call allocate_optical_properties(PCA_scn(bin, eof), 1, scn%num_gases)
+
+
+
+       end do
+    end do
 
   end subroutine create_scenes_from_PCA
 

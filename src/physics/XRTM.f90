@@ -292,7 +292,7 @@ contains
 
     type(PCA_handler_t) :: PCA_handler
     type(string), allocatable :: PCA_xrtm_solvers_lo(:), PCA_xrtm_solvers_hi(:)
-    type(scene), allocatable :: PCA_scn(:)
+    type(scene), allocatable :: PCA_scn(:,:) ! (bin, eof)
 
     integer :: num_act_lev
     integer :: num_lay
@@ -315,7 +315,7 @@ contains
     !
     integer, allocatable :: n_coef(:)
     !
-    integer :: i, j
+    integer :: i, j, q
     !
     double precision :: cpu_start_pca, cpu_stop_pca
 
@@ -389,14 +389,10 @@ contains
           return
        end if
 
-       xrtm_n_derivs = ( &
-            + SV%num_gas &
-            + SV%num_temp &
-            + SV%num_albedo &
-            + SV%num_aerosol_aod &
-            + SV%num_aerosol_height &
-            + SV%num_psurf &
-            )
+       xrtm_n_derivs = 2 * (scn%num_active_levels - 1)
+       if (SV%num_albedo > 0) xrtm_n_derivs = xrtm_n_derivs + 1
+       xrtm_n_derivs = xrtm_n_derivs + SV%num_aerosol_aod
+       xrtm_n_derivs = xrtm_n_derivs + SV%num_aerosol_height
 
        ! Allocate the arrays which hold the radiances and weighting functions
        allocate(monochr_radiance(size(scn%op%wl), scn%num_stokes))
@@ -532,18 +528,52 @@ contains
        call logger%debug(fname, "Mapping weighting functions back to Jacobians.")
        ! Recover the Jacobians from the XRTM container
        ! Store gas subcolumn derivatives
-       do j=1, SV%num_gas
-          dI_dgas(:,j,:) = monochr_weighting_functions(:,:,j)
+       do j = 1, SV%num_gas
+          dI_dgas(:,j,:) = 0.0d0 ! (wavelength, SV%num_gas, stokes)
+          ! "i" is the layer number
+          do i = SV%s_start(j), SV%s_stop(j) - 1
+             do q = 1, n_stokes
+                ! d/dtau component
+                dI_dgas(:,j,q) = dI_dgas(:,j,q) + monochr_weighting_functions(:,q,i) * &
+                     ( &
+                     scn%op%gas_tau(:, i, SV%gas_idx_lookup(j)) / &
+                     SV%svsv(SV%idx_gas(j,1)) &
+                     )
+                ! d/domega component
+                dI_dgas(:,j,q) = dI_dgas(:,j,q) + monochr_weighting_functions(:,q,num_lay+i) * &
+                     ( &
+                     -scn%op%layer_omega(:,i) &
+                     / scn%op%layer_tau(:,i) &
+                     * scn%op%gas_tau(:, i, SV%gas_idx_lookup(j)) / &
+                     SV%svsv(SV%idx_gas(j,1)) &
+                     )
+          end do
+          end do
        end do
 
        ! Store the temperature offset Jacobian if needed
        if (SV%num_temp == 1) then
-          dI_dTemp(:,:) = monochr_weighting_functions(:,:,SV%num_gas + 1)
+          j = SV%num_gas + 1
+          dI_dTemp(:,:) = 0.0d0
+          do i = 1, num_lay
+             do q = 1, n_stokes
+                ! d/dtau component
+                dI_dTemp(:,q) = dI_dTemp(:,q) + monochr_weighting_functions(:,q,i) * &
+                     sum(scn%op%gas_tau_dtemp(:,i,:), dim=2)
+                ! d/domega component
+                dI_dTemp(:,q) = dI_dTemp(:,q) + monochr_weighting_functions(:,q,num_lay+i) * &
+                     (-scn%op%layer_omega(:,i)) / scn%op%layer_tau(:,i) * &
+                     sum(scn%op%gas_tau_dtemp(:,i,:), dim=2)
+             end do
+          end do
        end if
 
        ! Store surface Jacobian
        do j=1, SV%num_albedo
-          dI_dsurf(:,j,:) = monochr_weighting_functions(:,:,SV%num_gas + SV%num_temp + j)
+          do q = 1, n_stokes
+             dI_dsurf(:,j,q) = monochr_weighting_functions(:,q, 2 * num_lay + 1) * &
+                  (scn%op%wl(:) - scn%op%wl(int(size(scn%op%wl) / 2)))**(dble(j-1))
+          end do
        end do
 
        ! Store aerosol optical depth Jacobians
@@ -643,7 +673,7 @@ contains
        allocate(PCA_xrtm_solvers_hi(1))
 
        PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
-       PCA_xrtm_solvers_hi(1) = "SINGLE"
+       PCA_xrtm_solvers_hi(1) = "EIG_BVP"
 
 
        call setup_XRTM( &
@@ -663,13 +693,11 @@ contains
 
        ! Set up number of derivatives needed by XRTM
        xrtm_n_derivs = ( &
-            + SV%num_gas &
-            + SV%num_temp &
-            + SV%num_albedo &
-            + SV%num_aerosol_aod &
-            + SV%num_aerosol_height &
-            + SV%num_psurf &
+            4 * (scn%num_active_levels - 1 ) & ! 2 * N_lay
+            + 1 &! Surface albedo
             )
+
+       xrtm_n_derivs = 20
 
        ! --------------------------------------------------------------------
        ! Perform low-accuracy line-by-line run for TWO_STREAM
@@ -729,8 +757,6 @@ contains
        !
        !
        ! --------------------------------------------------------------------
-
-       
 
 
        stop 1
@@ -799,12 +825,12 @@ contains
     integer :: n_mom
     ! Number of used phasefunction expansion coefficients, per layer
     integer, allocatable :: n_coef(:)
-    ! Linearized optical depth input (spectral, n_derivs, n_layers)
-    double precision, allocatable :: ltau(:,:,:)
-    ! Linearized single scatter alebdos (spectral, n_derivs, n_layers)
-    double precision, allocatable :: lomega(:,:,:)
+    ! Linearized optical depth input (n_derivs, n_layers)
+    double precision, allocatable :: ltau(:,:)
+    ! Linearized single scatter alebdos (n_derivs, n_layers)
+    double precision, allocatable :: lomega(:,:)
     ! Linearized surface inputs (specetral, n_derivs)
-    double precision, allocatable :: lsurf(:,:)
+    double precision, allocatable :: lsurf(:)
     ! Aerosol shape factor required for Jacobians (n_layers)
     double precision, allocatable :: aero_fac(:)
     ! Phase function coefficients for left hand side (lower-wavelength edge of band)
@@ -835,13 +861,13 @@ contains
     n_wl = size(scn%op%wl)
 
     ! Allocate the RT inputs, and zero them
-    allocate(ltau(n_wl, n_derivs, n_layers))
-    allocate(lomega(n_wl, n_derivs, n_layers))
-    allocate(lsurf(n_wl, n_derivs))
+    allocate(ltau(n_derivs, n_layers))
+    allocate(lomega(n_derivs, n_layers))
+    allocate(lsurf(n_derivs))
 
-    ltau(:,:,:) = 0.0d0
-    lomega(:,:,:) = 0.0d0
-    lsurf(:,:) = 0.0d0
+    ltau(:,:) = 0.0d0
+    lomega(:,:) = 0.0d0
+    lsurf(:) = 0.0d0
 
     if (scn%num_stokes == 1) then
        n_mom = 1
@@ -857,7 +883,28 @@ contains
     ! Calculate all required linearized inputs, and do some bookkeeping and debugging
     ! to keep track of the weighting function positions.
     ! -------------------------------------------------------------------------------
+
     call logger%debug(fname, "Calculating linearized inputs for RT.")
+
+    ! -------------------------------------------------------------------------------
+    ! New arrangement for RT linearized inputs:
+    !               1 : N_layers     is (d/dtau)
+    !    N_layers + 1 : 2 * N_layers is (d/domega) 
+    !    ....
+    !    Surface properties / albedo (1)
+    !    Aerosol OD jacobians (1 each)
+    !    Aerosol height jacobians (1 each)
+
+    do j = 1, n_layers
+       ltau(j, j) = 1.0d0
+       lomega(n_layers + j, j) = 1.0d0
+    end do
+
+    if (SV%num_albedo > 0) then
+       lsurf(2 * n_layers + 1) = 1.0d0
+    end if
+
+
     deriv_counter = 0
 
     ! --------------------------
@@ -866,19 +913,19 @@ contains
     !
     ! --------------------------
 
-    do j = 1, SV%num_gas
-       ltau(:, j, SV%s_start(j):SV%s_stop(j)-1) = &
-            scn%op%gas_tau(:, SV%s_start(j):SV%s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
+    !do j = 1, SV%num_gas
+    !   ltau(:, j, SV%s_start(j):SV%s_stop(j)-1) = &
+    !        scn%op%gas_tau(:, SV%s_start(j):SV%s_stop(j)-1, SV%gas_idx_lookup(j)) / SV%svsv(SV%idx_gas(j,1))
 
-       lomega(:, j, SV%s_start(j):SV%s_stop(j)-1) = &
-            -scn%op%layer_omega(:,SV%s_start(j):SV%s_stop(j)-1) &
-            / scn%op%layer_tau(:,SV%s_start(j):SV%s_stop(j)-1) &
-            * ltau(:, j, SV%s_start(j):SV%s_stop(j)-1)
+    !   lomega(:, j, SV%s_start(j):SV%s_stop(j)-1) = &
+    !        -scn%op%layer_omega(:,SV%s_start(j):SV%s_stop(j)-1) &
+    !        / scn%op%layer_tau(:,SV%s_start(j):SV%s_stop(j)-1) &
+    !        * ltau(:, j, SV%s_start(j):SV%s_stop(j)-1)
 
-       deriv_counter = deriv_counter + 1
-       write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": gas sub-column #", j
-       call logger%debug(fname, trim(tmp_str))
-    end do
+    !   deriv_counter = deriv_counter + 1
+    !   write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": gas sub-column #", j
+    !   call logger%debug(fname, trim(tmp_str))
+    !end do
 
     ! ----------------------
     !
@@ -886,16 +933,16 @@ contains
     !
     ! ----------------------
 
-    if (SV%num_temp == 1) then
-       j = SV%num_gas + 1
+    !if (SV%num_temp == 1) then
+    !   j = SV%num_gas + 1
 
-       ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:n_layers,:), dim=3)
-       lomega(:,j,:) = -scn%op%layer_omega(:,1:n_layers) / scn%op%layer_tau(:,1:n_layers) * ltau(:,j,:)
+    !   ltau(:,j,:) = sum(scn%op%gas_tau_dtemp(:,1:n_layers,:), dim=3)
+    !   lomega(:,j,:) = -scn%op%layer_omega(:,1:n_layers) / scn%op%layer_tau(:,1:n_layers) * ltau(:,j,:)
 
-       deriv_counter = deriv_counter + 1
-       write(tmp_str, '(A, G0.1, A)') "Derivative #", deriv_counter, ": temperature"
-       call logger%debug(fname, trim(tmp_str))
-    end if
+    !   deriv_counter = deriv_counter + 1
+    !   write(tmp_str, '(A, G0.1, A)') "Derivative #", deriv_counter, ": temperature"
+    !   call logger%debug(fname, trim(tmp_str))
+    !end if
 
     ! --------------------------------------
     !
@@ -903,15 +950,15 @@ contains
     !
     ! --------------------------------------
 
-    do j = 1, SV%num_albedo
-       i = SV%num_gas + SV%num_temp + j
+    !do j = 1, SV%num_albedo
+    !   i = SV%num_gas + SV%num_temp + j
 
-       lsurf(:,i) = (scn%op%wl(:) - scn%op%wl(int(size(scn%op%wl) / 2)))**(dble(j-1))
+    !   lsurf(:,i) = (scn%op%wl(:) - scn%op%wl(int(size(scn%op%wl) / 2)))**(dble(j-1))
 
-       deriv_counter = deriv_counter + 1
-       write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": albedo parameter #", j
-       call logger%debug(fname, trim(tmp_str))
-    end do
+    !   deriv_counter = deriv_counter + 1
+    !   write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": albedo parameter #", j
+    !   call logger%debug(fname, trim(tmp_str))
+    !end do
 
     ! -----------------------
     !
@@ -919,21 +966,21 @@ contains
     !
     ! -----------------------
 
-    do j = 1, SV%num_aerosol_aod
-       i = SV%num_gas + SV%num_temp + SV%num_albedo + j
-       aer_idx = SV%aerosol_aod_idx_lookup(j)
+    !do j = 1, SV%num_aerosol_aod
+    !   i = SV%num_gas + SV%num_temp + SV%num_albedo + j
+    !   aer_idx = SV%aerosol_aod_idx_lookup(j)
 
-       ltau(:,i,:) = scn%op%aer_ext_tau(:,1:n_layers,aer_idx) / scn%op%reference_aod(aer_idx)
+    !   ltau(:,i,:) = scn%op%aer_ext_tau(:,1:n_layers,aer_idx) / scn%op%reference_aod(aer_idx)
        ! This should be tau_aer_ext / AOD * (omega_a/tau - omega/tau)
-       lomega(:,i,:) = ltau(:,i,:) * ( &
-            (scn%op%aer_sca_tau(:,1:n_layers,aer_idx) / scn%op%aer_ext_tau(:,1:n_layers,aer_idx)  &
-            - scn%op%layer_omega(:,1:n_layers)) / scn%op%layer_tau(:,1:n_layers) &
-            )
+    !   lomega(:,i,:) = ltau(:,i,:) * ( &
+    !        (scn%op%aer_sca_tau(:,1:n_layers,aer_idx) / scn%op%aer_ext_tau(:,1:n_layers,aer_idx) &
+    !        - scn%op%layer_omega(:,1:n_layers)) / scn%op%layer_tau(:,1:n_layers) &
+    !        )
 
-       deriv_counter = deriv_counter + 1
-       write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol OD #", j
-       call logger%debug(fname, trim(tmp_str))
-    end do
+    !   deriv_counter = deriv_counter + 1
+    !   write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol OD #", j
+    !   call logger%debug(fname, trim(tmp_str))
+    !end do
 
     ! --------------------------
     !
@@ -946,35 +993,35 @@ contains
     ! code a bit messy. It also works because right now, we can't change the aerosol
     ! layer width at this point in time. (OCO-like instruments not really sensitive to layer width)
 
-    do j = 1, SV%num_aerosol_height
+    !do j = 1, SV%num_aerosol_height
 
-       allocate(aero_fac(n_layers))
+    !   allocate(aero_fac(n_layers))
 
-       i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j
-       aer_idx = SV%aerosol_height_idx_lookup(j)
+    !   i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + j
+    !   aer_idx = SV%aerosol_height_idx_lookup(j)
 
        ! This factor is required for the aerosol height Jacobians
-       call calculate_aero_height_factors( &
-            scn%atm%p_layers(:), &
-            exp(SV%svsv(SV%idx_aerosol_height(j))) * scn%atm%psurf, &
-            CS_aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
-            aero_fac)
+    !   call calculate_aero_height_factors( &
+    !        scn%atm%p_layers(:), &
+    !        exp(SV%svsv(SV%idx_aerosol_height(j))) * scn%atm%psurf, &
+    !        CS_aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
+    !        aero_fac)
 
-       do l = 1, n_layers
-          ltau(:,i,l) = scn%op%aer_ext_tau(:,l,aer_idx) * aero_fac(l) * scn%atm%psurf
-       end do
+    !   do l = 1, n_layers
+    !      ltau(:,i,l) = scn%op%aer_ext_tau(:,l,aer_idx) * aero_fac(l) * scn%atm%psurf
+    !   end do
 
-       lomega(:,i,:) = ltau(:,i,:) * ( &
-            (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
-            - scn%op%layer_omega(:,1:n_layers)) / scn%op%layer_tau(:,1:n_layers) &
-            )
+    !   lomega(:,i,:) = ltau(:,i,:) * ( &
+    !        (scn%op%aer_sca_tau(:,:,aer_idx) / scn%op%aer_ext_tau(:,:,aer_idx)  &
+    !        - scn%op%layer_omega(:,1:n_layers)) / scn%op%layer_tau(:,1:n_layers) &
+    !        )
 
-       deallocate(aero_fac)
+    !   deallocate(aero_fac)
 
-       deriv_counter = deriv_counter + 1
-       write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol height #", j
-       call logger%debug(fname, trim(tmp_str))
-    end do
+    !   deriv_counter = deriv_counter + 1
+    !   write(tmp_str, '(A, G0.1, A, G0.1)') "Derivative #", deriv_counter, ": aerosol height #", j
+    !   call logger%debug(fname, trim(tmp_str))
+    !end do
 
     ! ---------------------------
     !
@@ -982,23 +1029,23 @@ contains
     !
     ! ---------------------------
 
-    if (SV%num_psurf == 1) then
-       i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + SV%num_aerosol_height + 1
+    !if (SV%num_psurf == 1) then
+    !   i = SV%num_gas + SV%num_temp + SV%num_albedo + SV%num_aerosol_aod + SV%num_aerosol_height + 1
 
        ! Make sure to keep the minus sign here!
-       do l = 1, n_layers
+    !   do l = 1, n_layers
           ! Sum over contributions from all gases, since we have dTau/dPsurf per gas
-          ltau(:, i, l) = -sum(scn%op%gas_tau_dpsurf(:, l, :), dim=2)
-          lomega(:, i, l) = -scn%op%layer_omega(:, l) / scn%op%layer_tau(:, l) * ltau(:, i, l)
-       end do
+    !      ltau(:, i, l) = -sum(scn%op%gas_tau_dpsurf(:, l, :), dim=2)
+    !      lomega(:, i, l) = -scn%op%layer_omega(:, l) / scn%op%layer_tau(:, l) * ltau(:, i, l)
+    !   end do
 
-       deriv_counter = deriv_counter + 1
-       write(tmp_str, '(A, G0.1, A)') "Derivative #", deriv_counter, ": surface pressure"
-       call logger%debug(fname, trim(tmp_str))
-    end if
+    !   deriv_counter = deriv_counter + 1
+    !   write(tmp_str, '(A, G0.1, A)') "Derivative #", deriv_counter, ": surface pressure"
+    !   call logger%debug(fname, trim(tmp_str))
+    !end if
 
     ! Calculate coef and lcoef at band edges
-    call logger%debug(fname, "Computing phase function coefficients and derivatives at band edges.")
+    !call logger%debug(fname, "Computing phase function coefficients and derivatives at band edges.")
     call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(1), n_mom, n_derivs, &
          scn%op%ray_tau(1,:), scn%op%aer_sca_tau(1,:,:), &
          coef_left, lcoef_left, coef_success)
@@ -1007,12 +1054,24 @@ contains
        return
     end if
 
-    call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(n_wl), n_mom, n_derivs, &
-         scn%op%ray_tau(n_wl,:), scn%op%aer_sca_tau(n_wl,:,:), &
-         coef_right, lcoef_right, coef_success)
+    ! Only need right-side coeffs if we have more than one spectral point in this
+    ! scene collection.
+    if (n_wl > 1) then
 
-    if (.not. coef_success) then
-       return
+       call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(n_wl), n_mom, n_derivs, &
+            scn%op%ray_tau(n_wl,:), scn%op%aer_sca_tau(n_wl,:,:), &
+            coef_right, lcoef_right, coef_success)
+
+       if (.not. coef_success) then
+          return
+       end if
+
+    else
+       allocate(coef_right, source=coef_left)
+       allocate(lcoef_right, source=lcoef_left)
+
+       coef_right = coef_left
+       lcoef_right = lcoef_left
     end if
 
     call logger%debug(fname, "Determining number of phase function coefficients per layer used in XRTM.")
@@ -1130,9 +1189,9 @@ contains
     double precision, intent(in) :: altitude_levels(:)
     double precision, intent(in) :: layer_tau(:,:)
     double precision, intent(in) :: layer_omega(:,:)
-    double precision, intent(in) :: ltau(:,:,:)
-    double precision, intent(in) :: lomega(:,:,:)
-    double precision, intent(in) :: lsurf(:,:)
+    double precision, intent(in) :: ltau(:,:)
+    double precision, intent(in) :: lomega(:,:)
+    double precision, intent(in) :: lsurf(:)
 
     integer, intent(in) :: n_stokes
     integer, intent(in) :: n_derivs
@@ -1428,9 +1487,9 @@ contains
        tau(:) = layer_tau(i, 1:n_layers)
        omega(:) = layer_omega(i, 1:n_layers)
 
-       single_ltau(:,:) = ltau(i,:,:)
-       single_lomega(:,:) = lomega(i,:,:)
-       single_lsurf(:) = lsurf(i,:)
+       single_ltau(:,:) = ltau(:,:)
+       single_lomega(:,:) = lomega(:,:)
+       single_lsurf(:) = lsurf(:)
 
 
 
@@ -1502,7 +1561,6 @@ contains
           return
        end if
 #endif
-
 
 
        ! Plug in optical depth

@@ -5,6 +5,7 @@
 module PCART_mod
 
   ! User modules
+  use control_mod, only: CS_aerosol_t
   use scene_mod
   use math_utils_mod
 
@@ -73,16 +74,18 @@ contains
     ! 2 * Number of layers
     ! + number of aerosols
     ! + number of surface parameters
-    ! + 1 for aerosol interpolation coefficient
+    ! + 1 for wavelength interpolation coefficient
 
     PCA_handler%N_opt = 2 * (scn%num_active_levels - 1)
 
-    ! Add the number of aerosols plus one for the interpolation coefficient
+    ! Add the number of aerosols
     ! (regardless of number of retrieved aerosol parameters)
     if (allocated(scn%op%reference_aod)) then
-       PCA_handler%N_opt = PCA_handler%N_opt + size(scn%op%reference_aod)
-       PCA_handler%N_opt = PCA_handler%N_opt + 1
+       PCA_handler%N_opt = PCA_handler%N_opt + scn%num_aerosols
     end if
+
+    ! Add one for wavlenegth interpolation coefficient
+    PCA_handler%N_opt = PCA_handler%N_opt + 1
 
     ! Add the number surface parameters
     ! (regardless of number of retrieved surface parameters)
@@ -104,22 +107,20 @@ contains
     PCA_handler%s_sur = PCA_handler%e_ray + 1
     PCA_handler%e_sur = PCA_handler%s_sur
 
+    ! Aerosol interpolation coefficient (only one needed)
+    PCA_handler%s_fra = PCA_handler%e_sur + 1
+    PCA_handler%e_fra = PCA_handler%s_fra
+
     if (allocated(scn%op%reference_aod)) then
        ! Aerosol scattering ratio/coefficient
-       PCA_handler%s_aer = PCA_handler%e_sur + 1
-       PCA_handler%e_aer =  PCA_handler%s_aer + size(scn%op%reference_aod) - 1
-
-       ! Aerosol interpolation coefficient (only one needed)
-       PCA_handler%s_fra = PCA_handler%e_aer + 1
-       PCA_handler%e_fra = PCA_handler%s_fra
+       PCA_handler%s_aer = PCA_handler%e_fra + 1
+       PCA_handler%e_aer =  PCA_handler%s_aer + scn%num_aerosols - 1
     else
        ! Set these indices to negative values, so the code
        ! will throw an error if elements of F are accessed
        ! that shouldn't be accessed.
        PCA_handler%s_aer = -1
        PCA_handler%e_aer = -1
-       PCA_handler%s_fra = -1
-       PCA_handler%e_fra = -1
     end if
 
   end subroutine initialize_PCA
@@ -269,6 +270,8 @@ contains
 
     integer :: i, j, k, l
 
+    integer :: n_lay
+
     integer :: s_tau
     integer :: e_tau
     integer :: s_ray
@@ -279,6 +282,8 @@ contains
     integer :: e_aer
     integer :: s_fra
     integer :: e_fra
+
+    n_lay = scn%num_active_levels - 1
 
     s_tau = PCA_handler%s_tau
     e_tau = PCA_handler%e_tau
@@ -309,16 +314,17 @@ contains
              ! spectral point "i" belongs to bin "PCA_bin_idx_map(j)"
 
              ! Copies layer-resolved total optical depth
-             PCA_handler%PCA_bin(j)%F(k, s_tau:e_tau) = scn%op%layer_tau(i, :)
+             PCA_handler%PCA_bin(j)%F(k, s_tau:e_tau) = scn%op%layer_tau(i, 1:n_lay)
              ! Copies layer-resolved Rayleigh optical depth
-             PCA_handler%PCA_bin(j)%F(k, s_ray:e_ray) = scn%op%ray_tau(i, :)
+             PCA_handler%PCA_bin(j)%F(k, s_ray:e_ray) = scn%op%ray_tau(i, 1:n_lay)
              ! Copies surface parameter
              PCA_handler%PCA_bin(j)%F(k, s_sur:e_sur) = scn%op%albedo(i)
+             ! Copies aerosol interpolation fraction (needed for wavelength)
+             PCA_handler%PCA_bin(j)%F(k, s_fra:e_fra) = scn%op%aer_frac(i)
 
              ! Aerosols present?
-             if (allocated(scn%op%reference_aod)) then
+             if (scn%num_aerosols > 0) then
                 PCA_handler%PCA_bin(j)%F(k, s_aer:e_aer) = scn%op%aer_sca_q(i, :)
-                PCA_handler%PCA_bin(j)%F(k, s_fra:e_fra) = scn%op%aer_frac(i)
              end if
 
              ! Increment wavelength counter
@@ -365,9 +371,9 @@ contains
     do bin=1, PCA_handler%N_bin
        do opt=1, PCA_handler%N_opt
           ! Compute the mean optical property and subsetted into bins
-          PCA_Handler%PCA_bin(bin)%mean_opt(opt) = sum(PCA_handler%PCA_bin(bin)%F(:, opt)) / &
+          PCA_Handler%PCA_bin(bin)%mean_opt(opt) = sum(PCA_handler%PCA_bin(bin)%F_centered(:, opt)) / &
                PCA_handler%PCA_bin(bin)%N_spect
-          PCA_Handler%PCA_bin(bin)%F_centered(:, opt) = PCA_Handler%PCA_bin(bin)%F(:, opt) - &
+          PCA_Handler%PCA_bin(bin)%F_centered(:, opt) = PCA_Handler%PCA_bin(bin)%F_centered(:, opt) - &
                PCA_Handler%PCA_bin(bin)%mean_opt(opt)
        end do
     end do
@@ -531,14 +537,15 @@ contains
 
   end subroutine perform_PCA
 
-  subroutine create_scenes_from_PCA(PCA_handler, scn, PCA_scn)
+  subroutine create_scenes_from_PCA(PCA_handler, CS_aerosol, scn, PCA_scn)
     type(PCA_handler_t), intent(in) :: PCA_handler
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(scene), intent(in) :: scn
     type(scene), allocatable, intent(inout) :: PCA_scn(:, :)
 
     type(optical_properties) :: op
     integer :: N_EOF, max_EOF
-    integer :: i, j
+    integer :: i, j, aer
     integer :: bin, opt, wl, eof
 
 
@@ -560,7 +567,7 @@ contains
        do eof = -N_EOF, N_EOF
           PCA_scn(bin, eof)%num_levels = scn%num_levels
           PCA_scn(bin, eof)%num_active_levels = scn%num_active_levels
-          PCA_scn(bin, eof)%num_gases = scn%num_gases
+          PCA_scn(bin, eof)%num_gases = 1 !scn%num_gases
           PCA_scn(bin, eof)%num_aerosols = scn%num_aerosols
           PCA_scn(bin, eof)%max_pfmom = scn%max_pfmom
           PCA_scn(bin, eof)%num_stokes = scn%num_stokes
@@ -585,15 +592,191 @@ contains
        N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
        do eof = -N_EOF, N_EOF
 
-          ! Allocate the optical property arrays inside the scene
-          call allocate_optical_properties(PCA_scn(bin, eof), 1, scn%num_gases)
+          ! Allocate the optical property arrays inside the scene.
+          ! Each scene has only one wavelength
+          call allocate_optical_properties(PCA_scn(bin, eof), 1, 1)
 
+          ! Aerosol related objects require a separate allocation
+          ! NOTE:
+          ! We don't want to make use of the "aerosol_init" function,
+          ! as it ends up doing more than we need right now. So just allocate
+          ! arrays manually and copy over some values from the "mother" scn object
+          allocate(PCA_scn(bin, eof)%op%aer_wl_idx_l(scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_wl_idx_r(scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_mcs_map(scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_ext_q(1, scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_sca_q(1, scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_ssa(1, scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_ext_tau(1, &
+               scn%num_levels-1, scn%num_aerosols))
+          allocate(PCA_scn(bin, eof)%op%aer_sca_tau(1, &
+               scn%num_levels-1, scn%num_aerosols))
 
+          ! Copy over the needed bookkeeping variables
+
+          if (scn%num_aerosols > 0) then 
+             PCA_scn(bin, eof)%op%reference_aod = scn%op%reference_aod
+             PCA_scn(bin, eof)%op%aer_mcs_map = scn%op%aer_mcs_map
+             PCA_scn(bin, eof)%op%aer_wl_idx_l = scn%op%aer_wl_idx_l
+             PCA_scn(bin, eof)%op%aer_wl_idx_r = scn%op%aer_wl_idx_r
+          end if
+
+          ! Reconstruct total optical depth profiles
+          PCA_scn(bin, eof)%op%layer_tau(1, :) = &
+               exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
+               PCA_handler%s_tau:PCA_handler%e_tau))
+
+          ! Reconstruct Rayleigh extinction optical depth
+          PCA_scn(bin, eof)%op%ray_tau(1, :) = &
+               exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
+               PCA_handler%s_ray:PCA_handler%e_ray))
+
+          ! Reconstruct surface albedo
+          PCA_scn(bin, eof)%op%albedo(1) = &
+               exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
+               PCA_handler%s_sur))
+
+          PCA_scn(bin, eof)%op%aer_frac(1) = &
+               PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
+               PCA_handler%s_fra)
+
+          ! Reconstruct aerosol scattering efficiency, one per aerosol
+          do j = 1, PCA_scn(bin, eof)%num_aerosols
+             PCA_scn(bin, eof)%op%aer_sca_q(1, j) = &
+                  exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
+                  PCA_handler%s_aer + j - 1))
+          end do
+
+          ! Rayleigh scattering matrix needs a notion of wavelength
+          PCA_scn(bin, eof)%op%wl(1) = (1.0d0 - PCA_scn(bin, eof)%op%aer_frac(1)) * &
+               scn%op%wl(1) + PCA_scn(bin, eof)%op%aer_frac(1) * scn%op%wl(size(scn%op%wl))
+
+          ! --------------------------------------------------------
+          ! From here on we can derive the other required quantities
+          ! --------------------------------------------------------
+
+          ! First, we must reconstruct the aerosol scattering optical depth,
+          ! which is done via the aerosol scattering efficiency, that
+          ! relates the aerosol scattering optical depth at the band edges
+          ! to whatever spectral point we have.
+
+          ! Step 1) Reconstruct the single scattering albedo as well as
+          !         the aerosol scattering optical depth.
+          ! 
+
+          ! Single scattering albedo:
+
+          ! Rayleigh component
+          PCA_scn(bin, eof)%op%layer_omega(1,:) = &
+               PCA_scn(bin, eof)%op%ray_tau(1,:) / PCA_scn(bin, eof)%op%layer_tau(1,:)
+
+          ! Aerosol component(s)
+          if (scn%num_aerosols > 0) then
+             do aer = 1, scn%num_aerosols
+                PCA_scn(bin, eof)%op%aer_sca_tau(1, :, aer) = &
+                     scn%op%aer_ext_tau_edge(1, :, aer) * PCA_scn(bin, eof)%op%aer_sca_q(1, aer) &
+                     / CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
+
+                PCA_scn(bin, eof)%op%layer_omega(1,:) = PCA_scn(bin, eof)%op%layer_omega(1,:) + &
+                     PCA_scn(bin, eof)%op%aer_sca_tau(1, :, aer) / PCA_scn(bin, eof)%op%layer_tau(1,:)
+
+             end do
+          end if
+
+          ! Trim the layer single-scattering albedos back to 0 > ssa > 0.999999
+          WHERE(PCA_scn(bin, eof)%op%layer_omega > 0.999999) PCA_scn(bin, eof)%op%layer_omega = 0.999999
+          WHERE(PCA_scn(bin, eof)%op%layer_omega < 1e-6) PCA_scn(bin, eof)%op%layer_omega = 1e-6
 
        end do
     end do
 
   end subroutine create_scenes_from_PCA
+
+
+  subroutine map_PCA_radiances(PCA_handler, binned_hi, binned_lo, monochromatic)
+
+    type(PCA_handler_t), intent(in) :: PCA_handler
+    double precision, intent(in) :: binned_hi(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
+    double precision, intent(in) :: binned_lo(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
+    double precision, intent(inout) :: monochromatic(:,:)
+
+    integer :: bin, eof, wl, q, i
+    integer :: n_stokes
+
+    double precision, allocatable :: delta_minus(:), delta_plus(:), delta_zero(:)
+    double precision, allocatable :: monochromatic_tmp(:,:)
+
+
+    n_stokes = size(monochromatic, 2)
+
+    allocate(delta_minus(n_stokes))
+    allocate(delta_plus(n_stokes))
+    allocate(delta_zero(n_stokes))
+
+
+    do bin = 1, PCA_handler%N_bin
+
+       allocate(monochromatic_tmp(PCA_handler%PCA_bin(bin)%N_spect, n_stokes))
+       monochromatic_tmp(:,:) = 0.0d0
+
+       delta_zero(1) = log(binned_hi(bin, 0, 1) / binned_lo(bin, 0, 1))
+       monochromatic_tmp(:,1) = delta_zero(1)
+
+       do q = 2, n_stokes
+          delta_zero(q) = binned_hi(bin, 0, q) - binned_lo(bin, 0, q)
+       end do
+
+       do eof = 1, PCA_handler%PCA_bin(bin)%N_EOF
+          delta_plus(1) = log(binned_hi(bin, eof, 1) / binned_lo(bin, eof, 1))
+          delta_minus(1) = log(binned_hi(bin, -eof, 1) / binned_lo(bin, -eof, 1))
+
+          do q = 2, n_stokes
+             delta_plus(q) = binned_hi(bin, eof, q) - binned_lo(bin, eof, q)
+             delta_minus(q) = binned_hi(bin, -eof, q) - binned_lo(bin, -eof, q)
+          end do
+       end do
+
+       do q = 1, n_stokes
+          do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
+
+             monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
+                  0.5 * (delta_plus(q) - delta_minus(q)) * &
+                  PCA_handler%PCA_bin(bin)%PC(wl, eof)
+
+             monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
+                  0.5 * (delta_plus(q) - 2.0d0 * delta_zero(q) + delta_minus(q)) * &
+                  (PCA_handler%PCA_bin(bin)%PC(wl, eof) ** 2)
+          end do
+
+       end do
+
+       ! Exponentiate radiances
+       monochromatic_tmp(:, 1) = exp(monochromatic_tmp(:, 1))
+
+       ! Back-assign and add to low-accuracy result
+       i = 1
+       do wl = 1, size(monochromatic, 1)
+
+          if (PCA_handler%PCA_bin_idx_map(bin) == PCA_handler%assigned_bin(wl)) then
+
+             monochromatic(wl, 1) = monochromatic(wl, 1) * monochromatic_tmp(i, 1)
+
+             do q = 2, n_stokes
+                monochromatic(wl, q) = monochromatic(wl, q) + monochromatic_tmp(i, q)
+             end do
+
+             ! Wavelength counter for binned spectral points
+             i = i + 1
+          end if
+       end do
+
+       deallocate(monochromatic_tmp)
+
+    end do
+
+
+  end subroutine map_PCA_radiances
+
 
 
 end module PCART_mod

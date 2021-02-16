@@ -259,6 +259,7 @@ contains
     scn%op%wl(:) = 0.0d0
     allocate(scn%op%albedo(N_hires))
     scn%op%albedo(:) = 0.0d0
+    allocate(scn%op%aer_frac(N_hires))
 
     ! NOTE
     ! This explicitly does NOT include aerosols, as those are handled
@@ -295,6 +296,7 @@ contains
 
     deallocate(scn%op%wl)
     deallocate(scn%op%albedo)
+    deallocate(scn%op%aer_frac)
 
     if (allocated(scn%op%gas_tau)) deallocate(scn%op%gas_tau)
     if (allocated(scn%op%gas_tau_dpsurf)) deallocate(scn%op%gas_tau_dpsurf)

@@ -150,7 +150,6 @@ contains
     allocate(scn%op%aer_ext_q(size(scn%op%wl), scn%num_aerosols))
     allocate(scn%op%aer_sca_q(size(scn%op%wl), scn%num_aerosols))
     allocate(scn%op%aer_ssa(size(scn%op%wl), scn%num_aerosols))
-    allocate(scn%op%aer_frac(size(scn%op%wl)))
 
     allocate(scn%op%aer_ext_tau(size(scn%op%wl), &
          scn%num_levels-1, scn%num_aerosols))
@@ -163,9 +162,6 @@ contains
          scn%num_levels-1, scn%num_aerosols))
 
     allocate(scn%op%reference_aod(scn%num_aerosols))
-
-    scn%op%aer_frac(:) = (scn%op%wl(:) - scn%op%wl(1)) / &
-         (scn%op%wl(size(scn%op%wl)) - scn%op%wl(1))
 
     ! ------------------------------------------------------
     ! Loop through all aerosols specified in the config file
@@ -226,7 +222,7 @@ contains
                   * (scn%op%wl(l) / CS_aerosol(i)%wavelengths(idx_l)) ** (-alpha_ext)
 
              scn%op%aer_sca_q(l, j) = CS_aerosol(i)%qsca(idx_l) &
-                  * (scn%op%wl(l) / CS_aerosol(i)%wavelengths(idx_l)) ** (-alpha_ext)
+                  * (scn%op%wl(l) / CS_aerosol(i)%wavelengths(idx_l)) ** (-alpha_sca)
 
              scn%op%aer_ssa(l, j) = scn%op%aer_sca_q(l, j) / scn%op%aer_ext_q(l, j)
 
@@ -248,7 +244,6 @@ contains
     deallocate(scn%op%aer_ext_q)
     deallocate(scn%op%aer_sca_q)
     deallocate(scn%op%aer_ssa)
-    deallocate(scn%op%aer_frac)
 
     deallocate(scn%op%aer_ext_tau)
     deallocate(scn%op%aer_sca_tau)
@@ -419,10 +414,15 @@ contains
        do wl = 1, size(scn%op%wl)
 
           do lay = 1, scn%num_active_levels - 1
-             scn%op%aer_ext_tau(wl,lay,aer) = exp( &
-                  -((scn%atm%p_layers(lay) - scn_aer(aer)%height)**2) &
-                  / (2 * scn_aer(aer)%width * scn_aer(aer)%width)) &
-                  * scn_aer(aer)%AOD / aod_norm
+             scn%op%aer_ext_tau(wl,lay,aer) = &
+                  scn%op%aer_ext_tau_edge(1, lay, aer) * scn%op%aer_ext_q(wl, aer) / &
+                  CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
+
+             ! This is not the correct way to do it...
+             !scn%op%aer_ext_tau(wl,lay,aer) = exp( &
+             !     -((scn%atm%p_layers(lay) - scn_aer(aer)%height)**2) &
+             !     / (2 * scn_aer(aer)%width * scn_aer(aer)%width)) &
+             !     * scn_aer(aer)%AOD / aod_norm
           end do
 
           scn%op%aer_sca_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) * scn%op%aer_ssa(wl, aer)

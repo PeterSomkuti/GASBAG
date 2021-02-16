@@ -180,7 +180,6 @@ contains
        ! and divide the entire layer-moments by the denominator
        coef(:, :, l) = coef(:, :, l) / denom
 
-
        ! Now that we have beta, we can 'simply' calculate the derivative inputs
        ! needed by the RT model(s).
 
@@ -246,6 +245,19 @@ contains
 
     if (any(ieee_is_nan(coef))) then
        call logger%error(fname, "I found NaN(s) in the COEF calculation.")
+
+       do a = 1, size(coef, 1)
+          do l = 1, size(coef, 2)
+             do p = 1, size(coef, 3)
+
+                if (ieee_is_nan(coef(a,l,p))) then
+                   write(*,*) "NaN at: ",  a, l, p
+                end if
+             end do
+          end do
+       end do
+
+
        return
     end if
 

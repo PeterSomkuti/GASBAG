@@ -1784,6 +1784,9 @@ contains
        scn%num_stokes = n_stokes
        ! Put hires grid into scene container for easy access later on
        scn%op%wl(:) = hires_grid
+       ! Store linear interpolation coefficients
+       scn%op%aer_frac(:) = (scn%op%wl(:) - scn%op%wl(1)) / &
+            (scn%op%wl(size(scn%op%wl)) - scn%op%wl(1))
        scn%num_active_levels = -1
 
        if (CS_win%num_gases > 0) then

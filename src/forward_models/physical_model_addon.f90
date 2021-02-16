@@ -173,7 +173,12 @@ contains
 
           end do
 
-       end do
+       end do ! end aerosol type loop
+       !write(*,*) "debug info"
+       !write(*,*) "l, fac, ray, denom: ", l, fac, ray_tau(l), denom
+       !write(*,*) "aer sca: ", aer_sca_tau(l, :)
+       !write(*,*) "coef: ", coef(1:3, :, l) !, aerpmom(1, 1:3, 1, l)
+
 
        ! And add Rayleigh contributions here (after partial aerosol sum)
        coef(1:3, :, l) = coef(1:3, :, l) + ray_coef(:, :) * ray_tau(l)
@@ -246,6 +251,7 @@ contains
     if (any(ieee_is_nan(coef))) then
        call logger%error(fname, "I found NaN(s) in the COEF calculation.")
 
+       read(*,*)
        do a = 1, size(coef, 1)
           do l = 1, size(coef, 2)
              do p = 1, size(coef, 3)
@@ -257,7 +263,7 @@ contains
           end do
        end do
 
-
+       read(*,*)
        return
     end if
 

@@ -9,6 +9,9 @@ module PCART_mod
   use scene_mod
   use math_utils_mod
 
+  ! System modules
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan, ieee_is_finite
+
   implicit none
 
   type PCA_bin_t
@@ -143,6 +146,7 @@ contains
 
     double precision, allocatable :: ssa_tot(:)
     double precision :: ssa_median
+    double precision :: total_aod
 
     character(len=*), parameter :: fname = "assign_pushkar_bins"
     character(len=99) :: tmp_str
@@ -156,15 +160,29 @@ contains
 
     ! Sum up the gas opds to get the total taug
     ! taug_tot(:) = sum(taug, 1)
-    ssa_tot(:) = sum(scn%op%layer_omega, 2)
+    ssa_tot(:) = sum(scn%op%layer_omega(:, 1:scn%num_active_levels - 1), 2)
+
+    if (scn%num_aerosols > 0) then
+       total_aod = sum(scn%op%reference_aod(:))
+    else
+       total_aod = 0.0d0
+    end if
 
     ! Assign each spectral point to a bin according to taug
     ! is there a neat way to do an equivalent to np.searchsorted
+
+    ! NOTE
+    ! Pushkar's binning scheme is adjusted here to take into account
+    ! the total AOD, which changes the optical depth distribution
+    ! significantly. In order to get more bins, we thus take out
+    ! the total AOD value from the total tau for the purposes of
+    ! binning, which spreads out the points significantly into more
+    ! bins - especially at larger AOD > 0.1.
     do i = 1, nspect
        do j = 1, size(bounds) - 1
           if ( &
-               (scn%op%total_tau(i) .ge. bounds(j)) .and. &
-               (scn%op%total_tau(i) .lt. bounds(j+1))) then
+               (scn%op%total_tau(i) - total_aod .ge. bounds(j)) .and. &
+               (scn%op%total_tau(i) - total_aod .lt. bounds(j+1))) then
              single_assigned_bins(i) = j
           endif
        enddo
@@ -176,8 +194,13 @@ contains
     j = 1
     do i = 1, size(bounds) - 1
 
+       if (count(single_assigned_bins == i) == 0) then
+          cycle
+       end if
+
        ! calculate the median of total SSA within bin "i"
        ssa_median = percentile(pack(ssa_tot, single_assigned_bins == i), 50.0d0)
+       !write(*,*) "SSA median", i, ssa_median
 
        ! Find all scenes with a total SSA <= than median and assign it to bin index "j"
        where ((single_assigned_bins == i) .and. (ssa_tot <= ssa_median))
@@ -192,6 +215,26 @@ contains
        j = j + 1
 
     enddo
+
+    ! Now, if there is only a single wavelength in a bin (which can happen),
+    ! we need to move that spectral point over to some other bin
+
+    do i = 1, maxval(PCA_handler%assigned_bin)
+
+       if (count(PCA_handler%assigned_bin == i) == 1) then
+          ! Loop through next higher bin and see if that one is non-empty
+          do j = i + 1, maxval(PCA_handler%assigned_bin)
+             if (count(PCA_handler%assigned_bin == j) > 0) then
+                where(PCA_handler%assigned_bin == i) PCA_handler%assigned_bin = j
+                exit
+             end if
+          end do
+
+       end if
+
+    end do
+
+
 
     PCA_handler%N_bin = 0
     ! Debug: print the number of points in each bin
@@ -211,8 +254,23 @@ contains
     enddo
 
     ! Also let the user know if there are any unassigned spectral points
-    write(tmp_str, "(A, G0.1)") "Unassigned points: ", count(PCA_handler%assigned_bin(:) == -1)
-    call logger%debug(fname, trim(tmp_str))
+    if (count(PCA_handler%assigned_bin(:) == -1) > 0) then
+       write(tmp_str, "(A, G0.1)") "Unassigned points: ", count(PCA_handler%assigned_bin(:) == -1)
+       call logger%error(fname, trim(tmp_str))
+
+       !do i = 1, nspect
+       !   write(*,*) i, single_assigned_bins(i), PCA_handler%assigned_bin(i), scn%op%total_tau(i) - total_aod, ssa_tot(i)
+
+       !   do j = 1, scn%num_active_levels - 1
+       !      write(*,*) j, scn%op%layer_omega(i, j)
+       !   end do
+
+       !   write(*,*) sum(scn%op%layer_omega(i, :)), sum(scn%op%layer_omega(i:i,:), dim=2)
+
+       !   read(*,*)
+       !end do
+    end if
+
 
     ! How many non-empty bins do we have?
     write(tmp_str, "(A, G0.1)") "Number of non-empty bins: ", PCA_handler%N_bin
@@ -258,7 +316,7 @@ contains
        allocate(PCA_handler%PCA_bin(i)%mean_opt(nopt))
 
        PCA_handler%PCA_bin(i)%N_spect = nspect
-       PCA_handler%PCA_bin(i)%N_EOF = 5
+       PCA_handler%PCA_bin(i)%N_EOF = nopt
 
     end do
   end subroutine allocate_first_PCA
@@ -300,11 +358,11 @@ contains
     s_fra = PCA_handler%s_fra
     e_fra = PCA_handler%e_fra
 
-    write(*,*) "TAU", s_tau, e_tau
-    write(*,*) "RAY", s_ray, e_ray
-    write(*,*) "SUR", s_sur, e_sur
-    write(*,*) "AER", s_aer, e_aer
-    write(*,*) "FRA", s_fra, e_fra
+    !write(*,*) "TAU", s_tau, e_tau
+    !write(*,*) "RAY", s_ray, e_ray
+    !write(*,*) "SUR", s_sur, e_sur
+    !write(*,*) "AER", s_aer, e_aer
+    !write(*,*) "FRA", s_fra, e_fra
 
     do j = 1, PCA_handler%N_bin
        k = 1
@@ -344,21 +402,21 @@ contains
     integer :: wl, bin, opt
 
     do bin = 1, PCA_handler%N_bin
-
-       do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
           do opt = 1, PCA_handler%N_opt
 
              if (opt == PCA_handler%s_fra) then
-                PCA_handler%PCA_bin(bin)%F_centered(wl, opt) = &
-                     PCA_handler%PCA_bin(bin)%F(wl, opt)
+                PCA_handler%PCA_bin(bin)%F(:, opt) = &
+                     PCA_handler%PCA_bin(bin)%F(:, opt)
              else
-                PCA_handler%PCA_bin(bin)%F_centered(wl, opt) = &
-                     log(PCA_handler%PCA_bin(bin)%F(wl, opt))
+                PCA_handler%PCA_bin(bin)%F(:, opt) = &
+                     log(PCA_handler%PCA_bin(bin)%F(:, opt))
              end if
 
-          end do
-       end do
+             !if (bin == 1) then
+             !   write(*,*) opt, PCA_handler%PCA_bin(bin)%F(1, opt)
+             !end if
 
+          end do
     end do
 
   end subroutine forward_transform_F_matrix
@@ -371,18 +429,24 @@ contains
     do bin=1, PCA_handler%N_bin
        do opt=1, PCA_handler%N_opt
           ! Compute the mean optical property and subsetted into bins
-          PCA_Handler%PCA_bin(bin)%mean_opt(opt) = sum(PCA_handler%PCA_bin(bin)%F_centered(:, opt)) / &
+          PCA_Handler%PCA_bin(bin)%mean_opt(opt) = sum(PCA_handler%PCA_bin(bin)%F(:, opt)) / &
                PCA_handler%PCA_bin(bin)%N_spect
-          PCA_Handler%PCA_bin(bin)%F_centered(:, opt) = PCA_Handler%PCA_bin(bin)%F_centered(:, opt) - &
+          PCA_Handler%PCA_bin(bin)%F_centered(:, opt) = PCA_Handler%PCA_bin(bin)%F(:, opt) - &
                PCA_Handler%PCA_bin(bin)%mean_opt(opt)
+
+          !if (bin == 1) then
+          !   write(*,*) opt, PCA_Handler%PCA_bin(bin)%mean_opt(opt), PCA_Handler%PCA_bin(bin)%F_centered(1, opt)
+          !end if
+
        end do
     end do
 
   end subroutine F_matrix_mean_removal
 
 
-  subroutine perform_PCA(PCA_handler)
-    type(PCA_handler_t) :: PCA_handler
+  subroutine perform_PCA(PCA_handler, success)
+    type(PCA_handler_t), intent(inout) :: PCA_handler
+    logical, intent(inout) :: success
 
     character(len=*), parameter :: fname = "perform_PCA"
     character(len=99) :: tmp_str
@@ -404,6 +468,8 @@ contains
     integer :: N_spect
     integer :: N_EOF
 
+    success = .false.
+
     N_opt = PCA_handler%N_opt
 
     LWORK = 10 + 6*PCA_handler%N_opt + 2*(PCA_handler%N_opt**2)
@@ -418,7 +484,7 @@ contains
     do bin = 1, PCA_handler%N_bin
 
        N_spect = PCA_handler%PCA_bin(bin)%N_spect
-       N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
+       !N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
        info = -999
        info2 = -999
 
@@ -427,14 +493,13 @@ contains
        allocate(PCA_handler%PCA_bin(bin)%EigVec(N_opt, N_opt))
        allocate(PCA_handler%PCA_bin(bin)%sEOF(N_opt, N_opt))
        allocate(PCA_handler%PCA_bin(bin)%PC(N_spect, N_opt))
-       allocate(PCA_handler%PCA_bin(bin)%pert_opt_states(-N_EOF:N_EOF, N_opt))
 
        PCA_handler%PCA_bin(bin)%C = 0.0d0
        PCA_handler%PCA_bin(bin)%EigVal = 0.0d0
        PCA_handler%PCA_bin(bin)%EigVec = 0.0d0
        PCA_handler%PCA_bin(bin)%sEOF = 0.0d0
        PCA_handler%PCA_bin(bin)%PC = 0.0d0
-       PCA_handler%PCA_bin(bin)%pert_opt_states = 0.0d0
+
 
        ! Calculate correlation matrix F^T dot T / (N - 1)
        C = matmul( &
@@ -461,6 +526,7 @@ contains
 
           if (info2 /= 0) then
              call logger%error(fname, "Eigenvalue decomposition failed with both DSYEVD and DSYEV!")
+             return
           else
              call logger%debug(fname, "Eigenvalue decomposition with DSYEV was successful!")
           end if
@@ -492,14 +558,32 @@ contains
           end if
        end do
 
-       ! Let the user know how much variance is contained in each eigenvector
-       !do opt = 1, 10
-       !   write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A)') &
-       !        "Explained variance for bin ", bin, ", #", opt, ": ", &
-       !        100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / sum(PCA_handler%PCA_bin(bin)%EigVal(:)), &
-       !        "%"
-       !   call logger%debug(fname, trim(tmp_str))
-       !end do
+       ! Determine the number of EOFs used via the explained fraction
+       do opt = 1, N_opt
+          !write(tmp_str, '(A, G0.1, A, G0.1, A, F6.2, A)') &
+          !     "Explained variance for bin ", bin, ", #", opt, ": ", &
+          !     100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / sum(PCA_handler%PCA_bin(bin)%EigVal(:)), &
+          !     "%"
+          !call logger%debug(fname, trim(tmp_str))
+
+          if (100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / &
+               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 96.0d0) then
+
+             PCA_handler%PCA_bin(bin)%N_EOF = opt
+
+             write(tmp_str, '(A, G0.1, A, G0.1, A), ') "Chosen ", opt, " PCAs for bin # ", bin, "."
+             call logger%debug(fname, trim(tmp_str))
+             exit
+
+          end if
+
+       end do
+
+       ! Since we now know how many EOFs we need per bin, allocate
+       ! the structure to hold the perturbed states
+       N_EOF = PCA_handler%PCA_bin(bin)%N_EOF
+       allocate(PCA_handler%PCA_bin(bin)%pert_opt_states(-N_EOF:N_EOF, N_opt))
+       PCA_handler%PCA_bin(bin)%pert_opt_states = 0.0d0
 
        ! Calculate and store the optical state vectors for every perturbation
        do eof = -N_EOF, N_EOF
@@ -535,6 +619,8 @@ contains
 
     deallocate(C, work, iwork, tmp_eigval)
 
+    success = .true.
+
   end subroutine perform_PCA
 
   subroutine create_scenes_from_PCA(PCA_handler, CS_aerosol, scn, PCA_scn)
@@ -547,7 +633,7 @@ contains
     integer :: N_EOF, max_EOF
     integer :: i, j, aer
     integer :: bin, opt, wl, eof
-
+    integer :: n_lay
 
     ! Count the total number of binned calculations
     ! N_BIN * (2*N_EOF + 1) holds only when all bins have the same
@@ -573,6 +659,7 @@ contains
           PCA_scn(bin, eof)%num_stokes = scn%num_stokes
 
           PCA_scn(bin, eof)%atm = scn%atm
+
           PCA_scn(bin, eof)%date = scn%date
           PCA_scn(bin, eof)%epoch = scn%epoch
           PCA_scn(bin, eof)%lon = scn%lon
@@ -585,6 +672,8 @@ contains
           PCA_scn(bin, eof)%VAA = scn%VAA
        end do
     end do
+
+    n_lay = scn%num_active_levels - 1
 
     ! Now construct the optical properties for each bin, and for each perturbed
     ! state within each bin.
@@ -622,19 +711,30 @@ contains
           end if
 
           ! Reconstruct total optical depth profiles
-          PCA_scn(bin, eof)%op%layer_tau(1, :) = &
+          PCA_scn(bin, eof)%op%layer_tau(1, 1:n_lay) = &
                exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
                PCA_handler%s_tau:PCA_handler%e_tau))
+          where(PCA_scn(bin, eof)%op%gas_tau < 1d-10) PCA_scn(bin, eof)%op%gas_tau = 1d-10
+
 
           ! Reconstruct Rayleigh extinction optical depth
-          PCA_scn(bin, eof)%op%ray_tau(1, :) = &
+          PCA_scn(bin, eof)%op%ray_tau(1, 1:n_lay) = &
                exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
                PCA_handler%s_ray:PCA_handler%e_ray))
+          where(PCA_scn(bin, eof)%op%ray_tau < 1d-10) PCA_scn(bin, eof)%op%ray_tau = 1d-10
 
           ! Reconstruct surface albedo
           PCA_scn(bin, eof)%op%albedo(1) = &
                exp(PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
                PCA_handler%s_sur))
+
+          if (PCA_scn(bin, eof)%op%albedo(1) > 0.999999) then
+             PCA_scn(bin, eof)%op%albedo(1) = 0.999999
+          end if
+
+          if (PCA_scn(bin, eof)%op%albedo(1) < 1d-6) then
+             PCA_scn(bin, eof)%op%albedo(1) = 1d-6
+          end if
 
           PCA_scn(bin, eof)%op%aer_frac(1) = &
                PCA_handler%PCA_bin(bin)%pert_opt_states(eof, &
@@ -662,30 +762,43 @@ contains
 
           ! Step 1) Reconstruct the single scattering albedo as well as
           !         the aerosol scattering optical depth.
-          ! 
 
           ! Single scattering albedo:
 
           ! Rayleigh component
-          PCA_scn(bin, eof)%op%layer_omega(1,:) = &
-               PCA_scn(bin, eof)%op%ray_tau(1,:) / PCA_scn(bin, eof)%op%layer_tau(1,:)
+          PCA_scn(bin, eof)%op%layer_omega(1,1:n_lay) = &
+               PCA_scn(bin, eof)%op%ray_tau(1,1:n_lay) / PCA_scn(bin, eof)%op%layer_tau(1,1:n_lay)
 
           ! Aerosol component(s)
-          if (scn%num_aerosols > 0) then
-             do aer = 1, scn%num_aerosols
-                PCA_scn(bin, eof)%op%aer_sca_tau(1, :, aer) = &
-                     scn%op%aer_ext_tau_edge(1, :, aer) * PCA_scn(bin, eof)%op%aer_sca_q(1, aer) &
-                     / CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
+          do aer = 1, scn%num_aerosols
+             PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay, aer) = &
+                  scn%op%aer_ext_tau_edge(1,1:n_lay, aer) * PCA_scn(bin, eof)%op%aer_sca_q(1,aer) &
+                  / CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
 
-                PCA_scn(bin, eof)%op%layer_omega(1,:) = PCA_scn(bin, eof)%op%layer_omega(1,:) + &
-                     PCA_scn(bin, eof)%op%aer_sca_tau(1, :, aer) / PCA_scn(bin, eof)%op%layer_tau(1,:)
+             WHERE(PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay,aer) < 1d-10) &
+                  PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay,aer) = 1d-10
 
-             end do
-          end if
+             if (.not. all(ieee_is_finite(PCA_scn(bin, eof)%op%aer_sca_tau(:,1:n_lay,:)))) then
+                write(*,*) "WHOOPS - nonfinite aer sca tau", bin, eof
+                !write(*,*) CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
+                write(*,*) PCA_scn(bin, eof)%op%aer_sca_q(1, aer)
+                write(*,*) PCA_handler%PCA_bin(bin)%pert_opt_states(eof, PCA_handler%s_aer:PCA_handler%e_aer)
+                !do j = 1, size(PCA_handler%PCA_bin(bin)%pert_opt_states, 2)
+                !   write(*,*) j, PCA_handler%PCA_bin(bin)%pert_opt_states(eof, j), PCA_handler%PCA_bin(bin)%mean_opt(j), PCA_scn(bin, eof)%op%aer_sca_tau(1,j,1)
+                !end do
+
+                !write(*,*) scn%op%aer_ext_tau_edge(1, :, aer)
+                !read(*,*)
+             end if
+
+             PCA_scn(bin, eof)%op%layer_omega(1,:) = PCA_scn(bin, eof)%op%layer_omega(1,:) + &
+                  PCA_scn(bin, eof)%op%aer_sca_tau(1, :, aer) / PCA_scn(bin, eof)%op%layer_tau(1,:)
+
+          end do
 
           ! Trim the layer single-scattering albedos back to 0 > ssa > 0.999999
           WHERE(PCA_scn(bin, eof)%op%layer_omega > 0.999999) PCA_scn(bin, eof)%op%layer_omega = 0.999999
-          WHERE(PCA_scn(bin, eof)%op%layer_omega < 1e-6) PCA_scn(bin, eof)%op%layer_omega = 1e-6
+          !WHERE(PCA_scn(bin, eof)%op%layer_omega < 1e-6) PCA_scn(bin, eof)%op%layer_omega = 1e-6
 
        end do
     end do
@@ -693,11 +806,11 @@ contains
   end subroutine create_scenes_from_PCA
 
 
-  subroutine map_PCA_radiances(PCA_handler, binned_hi, binned_lo, monochromatic)
+  subroutine map_PCA_radiances(PCA_handler, binned_lo, binned_hi, monochromatic)
 
     type(PCA_handler_t), intent(in) :: PCA_handler
-    double precision, intent(in) :: binned_hi(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
     double precision, intent(in) :: binned_lo(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
+    double precision, intent(in) :: binned_hi(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
     double precision, intent(inout) :: monochromatic(:,:)
 
     integer :: bin, eof, wl, q, i
@@ -727,30 +840,33 @@ contains
        end do
 
        do eof = 1, PCA_handler%PCA_bin(bin)%N_EOF
+
           delta_plus(1) = log(binned_hi(bin, eof, 1) / binned_lo(bin, eof, 1))
           delta_minus(1) = log(binned_hi(bin, -eof, 1) / binned_lo(bin, -eof, 1))
+
+          !write(*,*) bin, eof, delta_zero(1), delta_plus(1), delta_minus(1)
 
           do q = 2, n_stokes
              delta_plus(q) = binned_hi(bin, eof, q) - binned_lo(bin, eof, q)
              delta_minus(q) = binned_hi(bin, -eof, q) - binned_lo(bin, -eof, q)
           end do
-       end do
 
-       do q = 1, n_stokes
-          do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
+          do q = 1, n_stokes
+             do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
 
-             monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
-                  0.5 * (delta_plus(q) - delta_minus(q)) * &
-                  PCA_handler%PCA_bin(bin)%PC(wl, eof)
+                monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
+                     0.5 * (delta_plus(q) - delta_minus(q)) * &
+                     PCA_handler%PCA_bin(bin)%PC(wl, eof)
 
-             monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
-                  0.5 * (delta_plus(q) - 2.0d0 * delta_zero(q) + delta_minus(q)) * &
-                  (PCA_handler%PCA_bin(bin)%PC(wl, eof) ** 2)
+                monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
+                     0.5 * (delta_plus(q) - 2.0d0 * delta_zero(q) + delta_minus(q)) * &
+                     (PCA_handler%PCA_bin(bin)%PC(wl, eof) ** 2)
+             end do
           end do
 
        end do
 
-       ! Exponentiate radiances
+       ! Exponentiate radiance correction factors
        monochromatic_tmp(:, 1) = exp(monochromatic_tmp(:, 1))
 
        ! Back-assign and add to low-accuracy result
@@ -759,6 +875,7 @@ contains
 
           if (PCA_handler%PCA_bin_idx_map(bin) == PCA_handler%assigned_bin(wl)) then
 
+             !write(*,*) wl, i,  monochromatic_tmp(i, 1)
              monochromatic(wl, 1) = monochromatic(wl, 1) * monochromatic_tmp(i, 1)
 
              do q = 2, n_stokes
@@ -776,6 +893,73 @@ contains
 
 
   end subroutine map_PCA_radiances
+
+  subroutine map_PCA_jacobians(PCA_handler, wfunctions_lo, wfunctions_hi, wfunctions_mono)
+    type(PCA_handler_t), intent(in) :: PCA_handler
+    double precision, intent(in) :: wfunctions_lo(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:,:)
+    double precision, intent(in) :: wfunctions_hi(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:,:)
+    double precision, intent(inout) :: wfunctions_mono(:,:,:)
+
+    integer :: n_stokes
+    integer :: n_deriv
+    integer :: n_wl
+    integer :: q, l, i, wl, eof, bin, deriv
+
+    double precision :: delta_minus, delta_plus, delta_zero
+    double precision :: delta_o1, delta_o2
+    double precision, allocatable :: corr_wfunctions(:,:,:)
+
+
+    n_wl = size(wfunctions_mono, 1)
+    n_stokes = size(wfunctions_mono, 2)
+    n_deriv = size(wfunctions_mono, 3)
+
+    allocate(corr_wfunctions, mold=wfunctions_mono)
+    corr_wfunctions = 0.0d0
+
+    ! Jacobians will be corrected just like non-radiance Stokes components,
+    ! i.e. via differences and not through a product.
+
+    do bin = 1, PCA_handler%N_bin
+       do deriv = 1, n_deriv
+          do q = 1, n_stokes
+
+             delta_zero = wfunctions_hi(bin, 0, q, deriv) - wfunctions_lo(bin, 0, q, deriv)
+
+             do eof = 1, PCA_handler%PCA_bin(bin)%N_EOF
+
+                delta_plus = wfunctions_hi(bin, eof, q, deriv) - wfunctions_lo(bin, eof, q, deriv)
+                delta_minus = wfunctions_hi(bin, -eof, q, deriv) - wfunctions_lo(bin, -eof, q, deriv)
+
+                delta_o1 = 0.5d0 * (delta_plus - delta_minus)
+                delta_o2 = 0.5d0 * (delta_plus + delta_minus - 2 * delta_zero)
+
+                i = 1
+                do wl = 1, n_wl
+                   if (PCA_handler%PCA_bin_idx_map(bin) == PCA_handler%assigned_bin(wl)) then
+
+                      if (eof == 1) then
+                         corr_wfunctions(wl,q,deriv) = delta_zero
+                      end if
+
+                      corr_wfunctions(wl,q,deriv) = corr_wfunctions(wl,q,deriv) + &
+                           delta_o1 * PCA_handler%PCA_bin(bin)%PC(i, eof) + &
+                           delta_o2 * PCA_handler%PCA_bin(bin)%PC(i, eof)**2 
+
+                      i = i + 1
+                   end if
+                end do
+
+             end do
+
+
+          end do
+       end do
+    end do
+
+    wfunctions_mono(:,:,:) = wfunctions_mono(:,:,:) + corr_wfunctions(:,:,:)
+
+  end subroutine map_PCA_jacobians
 
 
 

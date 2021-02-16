@@ -22,6 +22,8 @@ module XRTM_mod
 
   ! System modules
   use OMP_LIB
+  use, intrinsic :: ieee_arithmetic, only: ieee_value, ieee_quiet_nan, ieee_is_nan, ieee_is_finite
+
 
   implicit none
 
@@ -247,6 +249,8 @@ contains
        xrtm_solvers_string, &
        do_polarization, &
        keep_coef_constant, &
+       max_pfmom, &
+       n_streams, &
        xrtm_options, &
        xrtm_solvers, &
        xrtm_kernels, &
@@ -257,6 +261,8 @@ contains
     type(string), allocatable, intent(in) :: xrtm_solvers_string(:)
     logical, intent(in) :: do_polarization
     logical, intent(in) :: keep_coef_constant
+    integer, intent(in) :: max_pfmom
+    integer, intent(in) :: n_streams
     integer, allocatable, intent(inout) :: xrtm_options(:)
     integer, allocatable, intent(inout) :: xrtm_solvers(:)
     integer, intent(inout) :: xrtm_kernels(:)
@@ -319,7 +325,6 @@ contains
 
        ! Grab local copy of string
        tmp_str = xrtm_solvers_string(i)
-
        if (tmp_str == "TWO_OS") then
 
           ! Vijay-like 2OS, gives you SECOND ORDER ONLY
@@ -338,21 +343,27 @@ contains
 
           ! Dedicated 2-Stream solver
           call logger%debug(fname, "Using XRTM in two-stream mode")
-          call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
+          !call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
           xrtm_solvers(i) = XRTM_SOLVER_TWO_STREAM
           xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SFI)
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+
+          if (max_pfmom >= (2 * n_streams + 1)) then
+             xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+             xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+          end if
 
        else if (tmp_str == "EIG_BVP") then
 
           ! Quadrature (LIDORT-like)
-          xrtm_solvers(i) = XRTM_SOLVER_EIG_BVP
           call logger%debug(fname, "Using XRTM in discrete-ordinate (EIG_BVP) mode")
-          call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
+          !call logger%debug(fname, "Using N-T TMS correction and Delta-M scaling.")
+          xrtm_solvers(i) = XRTM_SOLVER_EIG_BVP
           xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SFI)
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+
+          if (max_pfmom >= (2 * n_streams + 1)) then
+             xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+             xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+          end if
 
        else if (tmp_str == "MEM_BVP") then
 
@@ -374,6 +385,7 @@ contains
           xrtm_solvers(i) = XRTM_SOLVER_PADE_ADD
 
        else
+
 
           call logger%error(fname, "XRTM solver option is not implemented, and will be ignored: " &
                // tmp_str%chars())
@@ -505,12 +517,14 @@ contains
     type(PCA_handler_t) :: PCA_handler
     type(string), allocatable :: PCA_xrtm_solvers_lo(:), PCA_xrtm_solvers_hi(:)
     type(scene), allocatable :: PCA_scn(:,:) ! (bin, eof)
+
     integer :: bin, eof
 
     integer :: num_act_lev
     integer :: num_lay
     integer :: num_wl
     integer :: n_mom
+    integer :: max_pfmom
     ! XRTM Radiative Transfer model handler
     type(xrtm_type) :: xrtm
     ! Actual options variable
@@ -530,8 +544,9 @@ contains
     !
     integer :: i, j, q
     !
+    logical :: PCA_success
     double precision :: cpu_start_pca, cpu_stop_pca
-
+    double precision :: pca_overhead_time
 
     ! Initialize success variable
     xrtm_success = .false.
@@ -540,6 +555,7 @@ contains
     num_act_lev = scn%num_active_levels
     num_lay = num_act_lev - 1
     num_wl = size(scn%op%wl)
+    max_pfmom = max(scn%max_pfmom, 3)
 
     allocate(n_coef(num_lay))
 
@@ -592,6 +608,8 @@ contains
             CS_win%xrtm_solvers, &
             CS_win%do_polarization, &
             CS_win%constant_coef, &
+            max_pfmom, &
+            CS_win%RT_streams(1) / 2, &
             xrtm_options, &
             xrtm_solvers, &
             xrtm_kernels, &
@@ -620,12 +638,13 @@ contains
        ! XRTM solvers, and the results for jacobians
        ! AND radiances will be ADDED up. The user
        ! must know what they are doing.
-       ! 
+       !
        ! -------------------------------------------
 
        do i = 1, size(xrtm_solvers)
 
-          ! --------------------------------------
+          ! ----------------------------------------------
+          !
           ! Derive the number of quadrature points
           !
           ! If more than one was supplied by the user,
@@ -635,7 +654,7 @@ contains
           ! option is only required for RT solvers that
           ! require some notion of "streams", such as
           ! BVP.
-          ! --------------------------------------
+          ! ----------------------------------------------
 
           if ( &
                (iand(xrtm_solvers(i), XRTM_SOLVER_EIG_BVP) /= 0) .or. &
@@ -678,7 +697,7 @@ contains
                xrtm, & ! XRTM handler
                xrtm_options(i), & ! XRTM options bitmask
                xrtm_solvers(i), & ! XRTM solvers combined bitmask
-               max(3, scn%max_pfmom), & ! Max coef - either 3 for Rayleigh, or whatever we have for aerosols
+               max_pfmom, & ! Max coef - either 3 for Rayleigh, or whatever we have for aerosols
                xrtm_streams, & ! Quadrature points
                n_stokes, & ! Number of stokes coeffs
                xrtm_n_derivs, & ! Number of derivatives
@@ -789,6 +808,7 @@ contains
        !
        ! Look at Somkuti et al. 2016 for details
        ! --------------------------------------------------------------------
+       pca_overhead_time = 0.0d0
 
        cpu_start_pca = get_cpu_time()
 
@@ -820,8 +840,35 @@ contains
        ! Perform principal component analysis on mean-removed
        ! optical state matrices. Also allocates the necessary
        ! matrices within PCA_handler
-       call perform_PCA(PCA_handler)
+       call perform_PCA(PCA_handler, PCA_success)
 
+       if (.not. PCA_success) then
+          call logger%error(fname, "Could not successfully perform PCA.")
+          return
+       end if
+
+       ! Check here if any of the perturbed optical properties is a non-finite
+       ! value..
+       do j = 1, PCA_handler%N_bin
+          if (.not. all(ieee_is_finite(PCA_handler%PCA_bin(j)%pert_opt_states(:,:)))) then
+             call logger%error(fname, "Sorry - non-finite value encountered after PCA.")
+
+             !do i = 1, size(PCA_handler%PCA_bin(j)%pert_opt_states, 1)
+             !   write(*,*) i, PCA_handler%PCA_bin(j)%pert_opt_states(i,:)
+             !end do
+
+
+             !do i = 1, size(PCA_handler%PCA_bin(j)%mean_opt)
+             !   write(*,*) i, PCA_handler%PCA_bin(j)%mean_opt(i), PCA_handler%PCA_bin(j)%F(1, i), PCA_handler%PCA_bin(j)%F_centered(1, i)
+             !end do
+
+             !write(*,*) j
+             !read(*,*)
+
+             call xrtm_destroy_f90(xrtm, xrtm_error)
+             return
+          end if
+       end do
        ! Create scene object array from PCA data
        ! (mean and perturbed states, which we can then stick into XRTM)
        call create_scenes_from_PCA(PCA_handler, CS_aerosol, scn, PCA_scn)
@@ -835,7 +882,7 @@ contains
 
        cpu_stop_pca = get_cpu_time()
 
-       write(*,*) "PCA cost: ", cpu_stop_pca - cpu_start_pca
+       pca_overhead_time = pca_overhead_time + cpu_stop_pca - cpu_start_pca
 
        ! For the time being, we want to keep the PCA method as:
        ! Low accuracy: SS + 2S
@@ -857,6 +904,8 @@ contains
             PCA_xrtm_solvers_lo, &
             .false., & ! Polarization? Not for low accuracy run!
             CS_win%constant_coef, &
+            max_pfmom, &
+            CS_win%RT_streams(1) / 2, &
             xrtm_options, &
             xrtm_solvers, &
             xrtm_kernels, &
@@ -887,8 +936,8 @@ contains
             xrtm, & ! XRTM handler
             xrtm_options(1), & ! XRTM options bitmask
             xrtm_solvers(1), & ! XRTM solvers combined bitmask
-            max(3, scn%max_pfmom), & ! Max coef - either 3 for Rayleigh or max_pfmom for aerosols
-            1, & ! Quadrature points per hemisphere
+            max_pfmom, & ! Max coef - either 3 for Rayleigh or max_pfmom for aerosols
+            CS_win%RT_streams(1) / 2, & ! Quadrature points per hemisphere
             n_stokes, & ! Number of stokes coeffs
             xrtm_n_derivs, & ! Number of derivatives
             num_lay, & ! Number of layers
@@ -904,6 +953,7 @@ contains
 
        monochr_radiance(:,:) = 0.0d0
        monochr_weighting_functions(:,:,:) = 0.0d0
+
 
        call XRTM_monochromatic( &
             xrtm, &
@@ -934,12 +984,10 @@ contains
        allocate(binned_results_lo(PCA_handler%N_bin, &
             -maxval(PCA_handler%PCA_bin(:)%N_EOF):maxval(PCA_handler%PCA_bin(:)%N_EOF), &
             1, scn%num_stokes))
-       binned_results_lo(:,:,:,:) = 0.0d0
 
        allocate(binned_weighting_functions_lo(PCA_handler%N_bin, &
             -maxval(PCA_handler%PCA_bin(:)%N_EOF):maxval(PCA_handler%PCA_bin(:)%N_EOF), &
             1, scn%num_stokes, xrtm_n_derivs))
-       binned_weighting_functions_lo(:,:,:,:,:) = 0.0d0
 
        do bin = 1, PCA_handler%N_bin
           do eof = -PCA_handler%PCA_bin(bin)%N_EOF, PCA_handler%PCA_bin(bin)%N_EOF
@@ -961,6 +1009,7 @@ contains
 
              if (.not. xrtm_success) then
                 call logger%error(fname, "Error while calculating low-accuracy bins.")
+                call xrtm_destroy_f90(xrtm, xrtm_error)
                 return
              end if
 
@@ -979,12 +1028,10 @@ contains
        allocate(binned_results_hi(PCA_handler%N_bin, &
             -maxval(PCA_handler%PCA_bin(:)%N_EOF):maxval(PCA_handler%PCA_bin(:)%N_EOF), &
             1, scn%num_stokes))
-       binned_results_hi(:,:,:,:) = 0.0d0
 
        allocate(binned_weighting_functions_hi(PCA_handler%N_bin, &
             -maxval(PCA_handler%PCA_bin(:)%N_EOF):maxval(PCA_handler%PCA_bin(:)%N_EOF), &
             1, scn%num_stokes, xrtm_n_derivs))
-       binned_weighting_functions_lo(:,:,:,:,:) = 0.0d0
 
        ! We need to create new XRTM solvers, options
        call xrtm_destroy_f90(xrtm, xrtm_error)
@@ -1003,6 +1050,8 @@ contains
             PCA_xrtm_solvers_hi, &
             CS_win%do_polarization, &
             CS_win%constant_coef, &
+            max_pfmom, &
+            CS_win%RT_streams(2) / 2, &
             xrtm_options, &
             xrtm_solvers, &
             xrtm_kernels, &
@@ -1017,8 +1066,8 @@ contains
             xrtm, & ! XRTM handler
             xrtm_options(1), & ! XRTM options bitmask
             xrtm_solvers(1), & ! XRTM solvers combined bitmask
-            max(3, scn%max_pfmom), & ! Max coef - either 3 for Rayleigh or max_pfmom for aerosols
-            CS_win%RT_streams(1) / 2, & ! Quadrature points per hemisphere
+            max_pfmom, & ! Max coef - either 3 for Rayleigh or max_pfmom for aerosols
+            CS_win%RT_streams(2) / 2, & ! Quadrature points per hemisphere
             n_stokes, & ! Number of stokes coeffs
             xrtm_n_derivs, & ! Number of derivatives
             num_lay, & ! Number of layers
@@ -1046,13 +1095,41 @@ contains
                   xrtm_success)
 
              if (.not. xrtm_success) then
-                call logger%error(fname, "Error while calculating low-accuracy bins.")
+                call xrtm_destroy_f90(xrtm, xrtm_error)
+                call logger%error(fname, "Error while calculating high-accuracy bins.")
                 return
              end if
 
           end do
        end do
 
+
+       call xrtm_destroy_f90(xrtm, xrtm_error)
+       if (xrtm_error /= 0) then
+          call logger%error(fname, "Call to destroy XRTM unsuccessful.")
+          return
+       end if
+
+
+       !do bin = 1, PCA_handler%N_bin
+          !do eof = -PCA_handler%PCA_bin(bin)%N_EOF, PCA_handler%PCA_bin(bin)%N_EOF
+       !   eof = 0
+
+       !   write(*,*) "layer, tau, ray, aer_sca, omega"
+       !   do j = 1, PCA_scn(bin, eof)%num_active_levels - 1
+       !      write(*,*) j, PCA_scn(bin, eof)%op%layer_tau(1, j), PCA_scn(bin, eof)%op%ray_tau(1, j), PCA_scn(bin, eof)%op%aer_sca_tau(1, j, :), PCA_scn(bin, eof)%op%layer_omega(1, j)
+       !   end do
+
+
+       !   write(*,*) bin, eof, binned_results_hi(bin, eof, 1, :) / binned_results_lo(bin, eof, 1, :) 
+
+          !end do
+       !end do
+       !write(*,*) "TEST"
+       !do bin = 1, PCA_handler%N_bin
+       !   write(*,*) bin, binned_results_hi(bin, 0, 1, :), binned_results_lo(bin, 0, 1, :)
+       !end do
+       !stop 1
 
        ! --------------------------------------------------------------------
        !
@@ -1063,12 +1140,34 @@ contains
        !
        ! --------------------------------------------------------------------
 
+       cpu_start_pca = get_cpu_time()
        call map_PCA_radiances(PCA_handler, &
             binned_results_lo(:,:,1,:), &
             binned_results_hi(:,:,1,:), &
             monochr_radiance)
 
+       call map_PCA_jacobians(PCA_handler, &
+            binned_weighting_functions_lo(:,:,1,:,:), &
+            binned_weighting_functions_hi(:,:,1,:,:), &
+            monochr_weighting_functions)
+
+       cpu_stop_pca = get_cpu_time()
+
+       pca_overhead_time = pca_overhead_time + cpu_stop_pca - cpu_start_pca
+
+       write(tmp_str, '(A, F10.5)') "Total PCA overhead time: ",  pca_overhead_time
+       call logger%debug(fname, trim(tmp_str))
+
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
+       call calculate_XRTM_gas_jacobians(SV, scn, monochr_weighting_functions, dI_dgas)
+       call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
+       call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
+       call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
+       call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAOD)
+
+
+       deallocate(PCA_handler%PCA_bin)
+
 
     else
 
@@ -1245,21 +1344,24 @@ contains
     call logger%debug(fname, "Determining number of phase function coefficients per layer used in XRTM.")
     ! Figure out how many coefficients we are giving to XRTM
     ! The default is 3 for Rayleigh-only
+
     allocate(n_coef(n_layers))
-    n_coef(:) = 3
-    if (scn%num_aerosols > 0) then
+    n_coef(:) = max(3, scn%max_pfmom)
+
+    !n_coef(:) = 3
+    !if (scn%num_aerosols > 0) then
        ! Loop through all layers and look at how much aerosol
        ! extinction is present if below some threshold value,
        ! we just assume that 3 coefficients is enough for a
        ! (at best) Rayleigh-only layer
-       do l = 1, n_layers
-          if (sum(scn%op%aer_ext_tau(1,l,:)) < 1.0d-6) then
-             n_coef(l) = 3
-          else
-             n_coef(l) = scn%max_pfmom
-          end if
-       end do
-    end if
+    !   do l = 1, n_layers
+    !      if (sum(scn%op%aer_ext_tau(1,l,:)) < 1.0d-6) then
+    !         n_coef(l) = 3
+    !      else
+    !         n_coef(l) = scn%max_pfmom
+    !      end if
+    !   end do
+    !end if
 
     ! ------------------------------------------
     !
@@ -1769,6 +1871,17 @@ contains
 
        if ((.not. keep_coef_constant) .or. (i == 1)) then
           ! Plug in the phase function expansion moments
+
+          ! XRTM might complain if the first phase function
+          ! expansion coefficient is not EXACTLY 1.0d0
+          ! If the actual value is < 1d-10 away from 1.0d0,
+          ! we can somewhat safely assume that the calculation
+          ! was done correctly, but floating point business
+          ! ends up giving us a value away from 1.0
+
+          where(abs(this_coef(1,1,:) - 1.0d0) < 1d-10) this_coef(1,1,:) = 1.0d0
+          
+
           call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
 #ifdef DEBUG
           if (xrtm_error /= 0) then

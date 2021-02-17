@@ -83,11 +83,9 @@ contains
 
     ! Add the number of aerosols
     ! (regardless of number of retrieved aerosol parameters)
-    if (allocated(scn%op%reference_aod)) then
-       PCA_handler%N_opt = PCA_handler%N_opt + scn%num_aerosols
-    end if
+    PCA_handler%N_opt = PCA_handler%N_opt + scn%num_aerosols
 
-    ! Add one for wavlenegth interpolation coefficient
+    ! Add one for wavelength interpolation coefficient
     PCA_handler%N_opt = PCA_handler%N_opt + 1
 
     ! Add the number surface parameters
@@ -110,7 +108,7 @@ contains
     PCA_handler%s_sur = PCA_handler%e_ray + 1
     PCA_handler%e_sur = PCA_handler%s_sur
 
-    ! Aerosol interpolation coefficient (only one needed)
+    ! Aerosol/wavelength interpolation coefficient (only one needed)
     PCA_handler%s_fra = PCA_handler%e_sur + 1
     PCA_handler%e_fra = PCA_handler%s_fra
 
@@ -135,10 +133,15 @@ contains
 
     ! Manually set bin boundaries in total tau_gas space
     ! huge(0.0d0) is largest double precision number
+    !double precision, parameter :: bounds(12) = &
+    !     [0d0, 0.01d0, 0.025d0, 0.05d0, &
+    !      0.1d0, 0.25d0, 0.5d0, 0.625d0, &
+    !      0.75d0, 1.0d0, 5.0d0, huge(0.0d0)]
+
     double precision, parameter :: bounds(12) = &
-         [0d0, 0.01d0, 0.025d0, 0.05d0, &
-          0.1d0, 0.25d0, 0.5d0, 0.625d0, &
-          0.75d0, 1.0d0, 5.0d0, huge(0.0d0)]
+         [0d0, 0.005d0, 0.01d0, 0.015d0, 0.025d0, 0.05d0, &
+         0.1d0, 0.25d0, 0.5d0, &
+         0.75d0, 1.0d0, huge(0.0d0)]
 
     integer :: nspect, i, j
 
@@ -181,8 +184,8 @@ contains
     do i = 1, nspect
        do j = 1, size(bounds) - 1
           if ( &
-               (scn%op%total_tau(i) - total_aod .ge. bounds(j)) .and. &
-               (scn%op%total_tau(i) - total_aod .lt. bounds(j+1))) then
+               (max(scn%op%total_tau(i) - total_aod, 0.0d0) .ge. bounds(j)) .and. &
+               (max(scn%op%total_tau(i) - total_aod, 0.0d0) .lt. bounds(j+1))) then
              single_assigned_bins(i) = j
           endif
        enddo
@@ -316,7 +319,7 @@ contains
        allocate(PCA_handler%PCA_bin(i)%mean_opt(nopt))
 
        PCA_handler%PCA_bin(i)%N_spect = nspect
-       PCA_handler%PCA_bin(i)%N_EOF = nopt
+       PCA_handler%PCA_bin(i)%N_EOF = 3! nopt
 
     end do
   end subroutine allocate_first_PCA
@@ -567,9 +570,9 @@ contains
           !call logger%debug(fname, trim(tmp_str))
 
           if (100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / &
-               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 96.0d0) then
+               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 95.0d0) then
 
-             PCA_handler%PCA_bin(bin)%N_EOF = opt
+             !PCA_handler%PCA_bin(bin)%N_EOF = opt
 
              write(tmp_str, '(A, G0.1, A, G0.1, A), ') "Chosen ", opt, " PCAs for bin # ", bin, "."
              call logger%debug(fname, trim(tmp_str))
@@ -634,6 +637,7 @@ contains
     integer :: i, j, aer
     integer :: bin, opt, wl, eof
     integer :: n_lay
+    integer :: idx
 
     ! Count the total number of binned calculations
     ! N_BIN * (2*N_EOF + 1) holds only when all bins have the same
@@ -791,14 +795,49 @@ contains
                 !read(*,*)
              end if
 
-             PCA_scn(bin, eof)%op%layer_omega(1,:) = PCA_scn(bin, eof)%op%layer_omega(1,:) + &
-                  PCA_scn(bin, eof)%op%aer_sca_tau(1, :, aer) / PCA_scn(bin, eof)%op%layer_tau(1,:)
+             PCA_scn(bin, eof)%op%layer_omega(1,1:n_lay) = &
+                  PCA_scn(bin, eof)%op%layer_omega(1,1:n_lay) + &
+                  PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay,aer) / &
+                  PCA_scn(bin, eof)%op%layer_tau(1,1:n_lay)
 
           end do
 
           ! Trim the layer single-scattering albedos back to 0 > ssa > 0.999999
           WHERE(PCA_scn(bin, eof)%op%layer_omega > 0.999999) PCA_scn(bin, eof)%op%layer_omega = 0.999999
           !WHERE(PCA_scn(bin, eof)%op%layer_omega < 1e-6) PCA_scn(bin, eof)%op%layer_omega = 1e-6
+
+
+          if (bin == 1) then
+
+             idx = minloc(scn%op%total_tau(:), 1)
+             !write(*,*) "EOF: ", eof
+
+             do j = 1, n_lay
+             !   write(*,*) j, scn%op%layer_tau(idx, j), PCA_scn(bin, eof)%op%layer_tau(1, j)
+             end do
+             write(*,*) "total tau:", sum(scn%op%layer_tau(idx, 1:n_lay)), sum(PCA_scn(bin, eof)%op%layer_tau(1, 1:n_lay))
+
+             do j = 1, n_lay
+             !   write(*,*) j, scn%op%ray_tau(idx, j), PCA_scn(bin, eof)%op%ray_tau(1, j)
+             end do
+
+             write(*,*) "#####"
+
+             do j = 1, n_lay
+             !   write(*,*) j, scn%op%aer_sca_tau(idx, j, 1), PCA_scn(bin, eof)%op%aer_sca_tau(1, j, 1)
+             end do
+
+             write(*,*) "#####"
+
+             do j = 1, n_lay
+             !   write(*,*) j, scn%op%layer_omega(idx, j), PCA_scn(bin, eof)%op%layer_omega(1, j)
+             end do
+
+             !read(*,*)
+            
+
+          end if
+
 
        end do
     end do
@@ -855,12 +894,13 @@ contains
              do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
 
                 monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
-                     0.5 * (delta_plus(q) - delta_minus(q)) * &
+                     0.5d0 * (delta_plus(q) - delta_minus(q)) * &
                      PCA_handler%PCA_bin(bin)%PC(wl, eof)
 
                 monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
-                     0.5 * (delta_plus(q) - 2.0d0 * delta_zero(q) + delta_minus(q)) * &
+                     0.5d0 * (delta_plus(q) - 2.0d0 * delta_zero(q) + delta_minus(q)) * &
                      (PCA_handler%PCA_bin(bin)%PC(wl, eof) ** 2)
+
              end do
           end do
 
@@ -875,7 +915,6 @@ contains
 
           if (PCA_handler%PCA_bin_idx_map(bin) == PCA_handler%assigned_bin(wl)) then
 
-             !write(*,*) wl, i,  monochromatic_tmp(i, 1)
              monochromatic(wl, 1) = monochromatic(wl, 1) * monochromatic_tmp(i, 1)
 
              do q = 2, n_stokes

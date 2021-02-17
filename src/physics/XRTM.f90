@@ -371,6 +371,11 @@ contains
           call logger%debug(fname, "Using XRTM in matrix exponential discrete-ordinate mode")
           xrtm_solvers(i) = XRTM_SOLVER_MEM_BVP
 
+          if (max_pfmom >= (2 * n_streams + 1)) then
+             xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+             xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+          end if
+
        else if (tmp_str == "SOS") then
 
           ! Pade approximation and adding
@@ -864,8 +869,6 @@ contains
 
              !write(*,*) j
              !read(*,*)
-
-             call xrtm_destroy_f90(xrtm, xrtm_error)
              return
           end if
        end do
@@ -1141,6 +1144,7 @@ contains
        ! --------------------------------------------------------------------
 
        cpu_start_pca = get_cpu_time()
+
        call map_PCA_radiances(PCA_handler, &
             binned_results_lo(:,:,1,:), &
             binned_results_hi(:,:,1,:), &
@@ -1809,7 +1813,6 @@ contains
              wl_fac = (wavelengths(i) - wavelengths(1)) / (wavelengths(N_spec) - wavelengths(1))
              this_coef(:,:,:) = (1.0d0 - wl_fac) * coef_left(:,:,:) + wl_fac * coef_right(:,:,:)
              this_lcoef(:,:,:,:) = (1.0d0 - wl_fac) * lcoef_left(:,:,:,:) + wl_fac * lcoef_right(:,:,:,:)
-
           else
              ! Plug in the layer and wavelength-dependent scattering matrix
              ! Spectrally varying scattering properties
@@ -1880,7 +1883,7 @@ contains
           ! ends up giving us a value away from 1.0
 
           where(abs(this_coef(1,1,:) - 1.0d0) < 1d-10) this_coef(1,1,:) = 1.0d0
-          
+
 
           call xrtm_set_coef_n_f90(xrtm, n_coef, this_coef, xrtm_error)
 #ifdef DEBUG

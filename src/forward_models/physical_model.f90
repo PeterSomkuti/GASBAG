@@ -727,7 +727,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       !frame_start = 1235
+       frame_start = 555
        !frame_stop = 50
 
        ! For OpenMP, we set some private and shared variables, as well as set the

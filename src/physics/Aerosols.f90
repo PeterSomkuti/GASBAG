@@ -398,7 +398,7 @@ contains
              write(tmp_str, '(A,A)') "Aerosol extinction, scattering and SSA for left edge and aerosol: ", &
                   CS_aerosol(scn%op%aer_mcs_map(aer))%name%chars()
              call logger%debug(fname, trim(tmp_str))
-             do lay = 1, scn%num_levels - 1
+             do lay = 1, scn%num_active_levels - 1
 
                 write(tmp_str,'(A, I3, ES15.5, ES15.5, ES15.5)') "Layer: ", lay, &
                      scn%op%aer_ext_tau_edge(1, lay, aer), scn%op%aer_sca_tau_edge(1, lay, aer), &

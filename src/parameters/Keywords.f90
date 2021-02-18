@@ -251,6 +251,7 @@ contains
        valid_options(this_idx,5) = "default_height"
        valid_options(this_idx,6) = "default_aod"
        valid_options(this_idx,7) = "default_width"
+       valid_options(this_idx,8) = "max_moments"
     end do
 
 

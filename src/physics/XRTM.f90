@@ -173,7 +173,7 @@ contains
     do j = 1, SV%num_aerosol_height
 
        dI_dAHeight(:,j,:) = 0.0d0
-       aer_idx = SV%aerosol_aod_idx_lookup(j)
+       aer_idx = SV%aerosol_height_idx_lookup(j)
 
        call calculate_aero_height_factors( &
             scn%atm%p_layers(:), &
@@ -181,17 +181,15 @@ contains
             CS_aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
             aero_fac)
 
-
        do i = 1, num_lay
-
           do q = 1, scn%num_stokes
 
              dI_dAHeight(:,j,q) = dI_dAHeight(:,j,q) + &
-                  wfunctions(:, q, i) * &
+                  wfunctions(:,q,i) * &
                   scn%op%aer_ext_tau(:,i,aer_idx) * aero_fac(i) * scn%atm%psurf
 
              dI_dAHeight(:,j,q) = dI_dAHeight(:,j,q) + &
-                  wfunctions(:, q, num_lay + i) * &
+                  wfunctions(:, q, num_lay+i) * &
                   scn%op%aer_ext_tau(:,i,aer_idx) * aero_fac(i) * scn%atm%psurf * &
                   ( &
                   scn%op%aer_sca_tau(:,i,aer_idx) / scn%op%aer_ext_tau(:,i,aer_idx)  &
@@ -608,13 +606,25 @@ contains
        ! This function "translates" our verbose configuration file options
        ! into proper XRTM language and sets the corresponding options and solvers.
 
+       if (.not. allocated(CS_win%RT_streams)) then
+          xrtm_streams = 1
+       else
+
+          if (mod(CS_win%RT_streams(1), 2) /= 0) then
+             call logger%error(fname, "Numnber of RT streams must be even!")
+             stop 1
+          end if
+
+          xrtm_streams = CS_win%RT_streams(1) / 2
+       end if
+
        call setup_XRTM( &
             CS_win%xrtm_options, &
             CS_win%xrtm_solvers, &
             CS_win%do_polarization, &
             CS_win%constant_coef, &
             max_pfmom, &
-            CS_win%RT_streams(1) / 2, &
+            xrtm_streams, &
             xrtm_options, &
             xrtm_solvers, &
             xrtm_kernels, &
@@ -647,54 +657,6 @@ contains
        ! -------------------------------------------
 
        do i = 1, size(xrtm_solvers)
-
-          ! ----------------------------------------------
-          !
-          ! Derive the number of quadrature points
-          !
-          ! If more than one was supplied by the user,
-          ! simply grab the first value and ignore the
-          ! rest for monochromatic calculations. At least
-          ! one value has to be present. Of course this
-          ! option is only required for RT solvers that
-          ! require some notion of "streams", such as
-          ! BVP.
-          ! ----------------------------------------------
-
-          if ( &
-               (iand(xrtm_solvers(i), XRTM_SOLVER_EIG_BVP) /= 0) .or. &
-               (iand(xrtm_solvers(i), XRTM_SOLVER_TWO_OS) /= 0) &
-               ) then
-
-             ! Is it even allocated?
-             if (.not. allocated(CS_win%RT_streams)) then
-                call logger%fatal(fname, "You MUST supply a -rt_streams- option!")
-                stop 1
-             end if
-
-             ! And if allocated, does it have the right size?
-             if (size(CS_win%RT_streams) < 1) then
-                call logger%fatal(fname, "You need to supply at least one value for -rt_streams-")
-                stop 1
-             end if
-
-             ! And then finally it needs to have the right value
-             if (CS_win%RT_streams(1) < 2) then
-                write(tmp_str, '(A, G0.1)') "Need at least 2 streams, but you said: ", &
-                     CS_win%RT_streams(1)
-                call logger%fatal(fname, trim(tmp_str))
-                stop 1
-             end if
-
-             xrtm_streams = CS_win%RT_streams(1) / 2
-
-          else
-
-             call logger%debug(fname, "Setting RT streams to 1 per hemisphere.")
-             xrtm_streams = 1
-
-          end if
-
 
           ! This is where the XRTM handler is created
 
@@ -811,8 +773,22 @@ contains
        ! PCA-based fast RT
        ! --------------------------------------------------------------------
        !
-       ! Look at Somkuti et al. 2016 for details
+       ! Look at Somkuti et al. 2017 for details
        ! --------------------------------------------------------------------
+
+       if (.not. allocated(CS_win%RT_streams)) then
+          call logger%error(fname, "Sorry - must specify RT streams for PCA method.")
+          stop 1
+       end if
+
+       if (size(CS_win%RT_streams) /= 2) then
+          call logger%error(fname, "Sorry - must specify two different "&
+               // "RT streams for PCA method")
+          stop 1
+       end if
+
+
+
        pca_overhead_time = 0.0d0
 
        cpu_start_pca = get_cpu_time()
@@ -857,18 +833,6 @@ contains
        do j = 1, PCA_handler%N_bin
           if (.not. all(ieee_is_finite(PCA_handler%PCA_bin(j)%pert_opt_states(:,:)))) then
              call logger%error(fname, "Sorry - non-finite value encountered after PCA.")
-
-             !do i = 1, size(PCA_handler%PCA_bin(j)%pert_opt_states, 1)
-             !   write(*,*) i, PCA_handler%PCA_bin(j)%pert_opt_states(i,:)
-             !end do
-
-
-             !do i = 1, size(PCA_handler%PCA_bin(j)%mean_opt)
-             !   write(*,*) i, PCA_handler%PCA_bin(j)%mean_opt(i), PCA_handler%PCA_bin(j)%F(1, i), PCA_handler%PCA_bin(j)%F_centered(1, i)
-             !end do
-
-             !write(*,*) j
-             !read(*,*)
              return
           end if
        end do
@@ -900,7 +864,6 @@ contains
 
        PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
        PCA_xrtm_solvers_hi(1) = "EIG_BVP"
-
 
        call setup_XRTM( &
             CS_win%xrtm_options, &
@@ -1113,27 +1076,6 @@ contains
           return
        end if
 
-
-       !do bin = 1, PCA_handler%N_bin
-          !do eof = -PCA_handler%PCA_bin(bin)%N_EOF, PCA_handler%PCA_bin(bin)%N_EOF
-       !   eof = 0
-
-       !   write(*,*) "layer, tau, ray, aer_sca, omega"
-       !   do j = 1, PCA_scn(bin, eof)%num_active_levels - 1
-       !      write(*,*) j, PCA_scn(bin, eof)%op%layer_tau(1, j), PCA_scn(bin, eof)%op%ray_tau(1, j), PCA_scn(bin, eof)%op%aer_sca_tau(1, j, :), PCA_scn(bin, eof)%op%layer_omega(1, j)
-       !   end do
-
-
-       !   write(*,*) bin, eof, binned_results_hi(bin, eof, 1, :) / binned_results_lo(bin, eof, 1, :) 
-
-          !end do
-       !end do
-       !write(*,*) "TEST"
-       !do bin = 1, PCA_handler%N_bin
-       !   write(*,*) bin, binned_results_hi(bin, 0, 1, :), binned_results_lo(bin, 0, 1, :)
-       !end do
-       !stop 1
-
        ! --------------------------------------------------------------------
        !
        !
@@ -1167,7 +1109,7 @@ contains
        call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
        call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
        call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
-       call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAOD)
+       call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAHeight)
 
 
        deallocate(PCA_handler%PCA_bin)

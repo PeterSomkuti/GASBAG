@@ -203,7 +203,6 @@ contains
 
        ! calculate the median of total SSA within bin "i"
        ssa_median = percentile(pack(ssa_tot, single_assigned_bins == i), 50.0d0)
-       !write(*,*) "SSA median", i, ssa_median
 
        ! Find all scenes with a total SSA <= than median and assign it to bin index "j"
        where ((single_assigned_bins == i) .and. (ssa_tot <= ssa_median))
@@ -260,18 +259,6 @@ contains
     if (count(PCA_handler%assigned_bin(:) == -1) > 0) then
        write(tmp_str, "(A, G0.1)") "Unassigned points: ", count(PCA_handler%assigned_bin(:) == -1)
        call logger%error(fname, trim(tmp_str))
-
-       !do i = 1, nspect
-       !   write(*,*) i, single_assigned_bins(i), PCA_handler%assigned_bin(i), scn%op%total_tau(i) - total_aod, ssa_tot(i)
-
-       !   do j = 1, scn%num_active_levels - 1
-       !      write(*,*) j, scn%op%layer_omega(i, j)
-       !   end do
-
-       !   write(*,*) sum(scn%op%layer_omega(i, :)), sum(scn%op%layer_omega(i:i,:), dim=2)
-
-       !   read(*,*)
-       !end do
     end if
 
 
@@ -319,7 +306,7 @@ contains
        allocate(PCA_handler%PCA_bin(i)%mean_opt(nopt))
 
        PCA_handler%PCA_bin(i)%N_spect = nspect
-       PCA_handler%PCA_bin(i)%N_EOF = 3! nopt
+       PCA_handler%PCA_bin(i)%N_EOF = nopt
 
     end do
   end subroutine allocate_first_PCA
@@ -333,16 +320,11 @@ contains
 
     integer :: n_lay
 
-    integer :: s_tau
-    integer :: e_tau
-    integer :: s_ray
-    integer :: e_ray
-    integer :: s_sur
-    integer :: e_sur
-    integer :: s_aer
-    integer :: e_aer
-    integer :: s_fra
-    integer :: e_fra
+    integer :: s_tau, e_tau
+    integer :: s_ray, e_ray
+    integer :: s_sur, e_sur
+    integer :: s_aer, e_aer
+    integer :: s_fra, e_fra
 
     n_lay = scn%num_active_levels - 1
 
@@ -360,12 +342,6 @@ contains
 
     s_fra = PCA_handler%s_fra
     e_fra = PCA_handler%e_fra
-
-    !write(*,*) "TAU", s_tau, e_tau
-    !write(*,*) "RAY", s_ray, e_ray
-    !write(*,*) "SUR", s_sur, e_sur
-    !write(*,*) "AER", s_aer, e_aer
-    !write(*,*) "FRA", s_fra, e_fra
 
     do j = 1, PCA_handler%N_bin
        k = 1
@@ -415,10 +391,6 @@ contains
                      log(PCA_handler%PCA_bin(bin)%F(:, opt))
              end if
 
-             !if (bin == 1) then
-             !   write(*,*) opt, PCA_handler%PCA_bin(bin)%F(1, opt)
-             !end if
-
           end do
     end do
 
@@ -431,15 +403,12 @@ contains
 
     do bin=1, PCA_handler%N_bin
        do opt=1, PCA_handler%N_opt
+
           ! Compute the mean optical property and subsetted into bins
           PCA_Handler%PCA_bin(bin)%mean_opt(opt) = sum(PCA_handler%PCA_bin(bin)%F(:, opt)) / &
                PCA_handler%PCA_bin(bin)%N_spect
           PCA_Handler%PCA_bin(bin)%F_centered(:, opt) = PCA_Handler%PCA_bin(bin)%F(:, opt) - &
                PCA_Handler%PCA_bin(bin)%mean_opt(opt)
-
-          !if (bin == 1) then
-          !   write(*,*) opt, PCA_Handler%PCA_bin(bin)%mean_opt(opt), PCA_Handler%PCA_bin(bin)%F_centered(1, opt)
-          !end if
 
        end do
     end do
@@ -572,7 +541,7 @@ contains
           if (100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / &
                sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 95.0d0) then
 
-             !PCA_handler%PCA_bin(bin)%N_EOF = opt
+             PCA_handler%PCA_bin(bin)%N_EOF = opt
 
              write(tmp_str, '(A, G0.1, A, G0.1, A), ') "Chosen ", opt, " PCAs for bin # ", bin, "."
              call logger%debug(fname, trim(tmp_str))
@@ -782,19 +751,6 @@ contains
              WHERE(PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay,aer) < 1d-10) &
                   PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay,aer) = 1d-10
 
-             if (.not. all(ieee_is_finite(PCA_scn(bin, eof)%op%aer_sca_tau(:,1:n_lay,:)))) then
-                write(*,*) "WHOOPS - nonfinite aer sca tau", bin, eof
-                !write(*,*) CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
-                write(*,*) PCA_scn(bin, eof)%op%aer_sca_q(1, aer)
-                write(*,*) PCA_handler%PCA_bin(bin)%pert_opt_states(eof, PCA_handler%s_aer:PCA_handler%e_aer)
-                !do j = 1, size(PCA_handler%PCA_bin(bin)%pert_opt_states, 2)
-                !   write(*,*) j, PCA_handler%PCA_bin(bin)%pert_opt_states(eof, j), PCA_handler%PCA_bin(bin)%mean_opt(j), PCA_scn(bin, eof)%op%aer_sca_tau(1,j,1)
-                !end do
-
-                !write(*,*) scn%op%aer_ext_tau_edge(1, :, aer)
-                !read(*,*)
-             end if
-
              PCA_scn(bin, eof)%op%layer_omega(1,1:n_lay) = &
                   PCA_scn(bin, eof)%op%layer_omega(1,1:n_lay) + &
                   PCA_scn(bin, eof)%op%aer_sca_tau(1,1:n_lay,aer) / &
@@ -804,40 +760,7 @@ contains
 
           ! Trim the layer single-scattering albedos back to 0 > ssa > 0.999999
           WHERE(PCA_scn(bin, eof)%op%layer_omega > 0.999999) PCA_scn(bin, eof)%op%layer_omega = 0.999999
-          !WHERE(PCA_scn(bin, eof)%op%layer_omega < 1e-6) PCA_scn(bin, eof)%op%layer_omega = 1e-6
-
-
-          if (bin == 1) then
-
-             idx = minloc(scn%op%total_tau(:), 1)
-             !write(*,*) "EOF: ", eof
-
-             do j = 1, n_lay
-             !   write(*,*) j, scn%op%layer_tau(idx, j), PCA_scn(bin, eof)%op%layer_tau(1, j)
-             end do
-             write(*,*) "total tau:", sum(scn%op%layer_tau(idx, 1:n_lay)), sum(PCA_scn(bin, eof)%op%layer_tau(1, 1:n_lay))
-
-             do j = 1, n_lay
-             !   write(*,*) j, scn%op%ray_tau(idx, j), PCA_scn(bin, eof)%op%ray_tau(1, j)
-             end do
-
-             write(*,*) "#####"
-
-             do j = 1, n_lay
-             !   write(*,*) j, scn%op%aer_sca_tau(idx, j, 1), PCA_scn(bin, eof)%op%aer_sca_tau(1, j, 1)
-             end do
-
-             write(*,*) "#####"
-
-             do j = 1, n_lay
-             !   write(*,*) j, scn%op%layer_omega(idx, j), PCA_scn(bin, eof)%op%layer_omega(1, j)
-             end do
-
-             !read(*,*)
-            
-
-          end if
-
+          WHERE(PCA_scn(bin, eof)%op%layer_omega < 1d-10) PCA_scn(bin, eof)%op%layer_omega = 1d-10
 
        end do
     end do

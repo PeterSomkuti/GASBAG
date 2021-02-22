@@ -539,7 +539,7 @@ contains
           !call logger%debug(fname, trim(tmp_str))
 
           if (100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / &
-               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 95.0d0) then
+               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 99.0d0) then
 
              PCA_handler%PCA_bin(bin)%N_EOF = opt
 
@@ -888,7 +888,7 @@ contains
 
              delta_zero = wfunctions_hi(bin, 0, q, deriv) - wfunctions_lo(bin, 0, q, deriv)
 
-             do eof = 1, PCA_handler%PCA_bin(bin)%N_EOF
+             do eof = 0, 0 !PCA_handler%PCA_bin(bin)%N_EOF
 
                 delta_plus = wfunctions_hi(bin, eof, q, deriv) - wfunctions_lo(bin, eof, q, deriv)
                 delta_minus = wfunctions_hi(bin, -eof, q, deriv) - wfunctions_lo(bin, -eof, q, deriv)
@@ -900,13 +900,15 @@ contains
                 do wl = 1, n_wl
                    if (PCA_handler%PCA_bin_idx_map(bin) == PCA_handler%assigned_bin(wl)) then
 
-                      if (eof == 1) then
+                      if (eof == 0) then
                          corr_wfunctions(wl,q,deriv) = delta_zero
                       end if
 
-                      corr_wfunctions(wl,q,deriv) = corr_wfunctions(wl,q,deriv) + &
-                           delta_o1 * PCA_handler%PCA_bin(bin)%PC(i, eof) + &
-                           delta_o2 * PCA_handler%PCA_bin(bin)%PC(i, eof)**2 
+                      if (eof > 0) then
+                         corr_wfunctions(wl,q,deriv) = corr_wfunctions(wl,q,deriv) + &
+                              delta_o1 * PCA_handler%PCA_bin(bin)%PC(i, eof) + &
+                              delta_o2 * PCA_handler%PCA_bin(bin)%PC(i, eof)**2
+                      end if
 
                       i = i + 1
                    end if

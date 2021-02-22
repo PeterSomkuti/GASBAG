@@ -765,6 +765,7 @@ contains
                    write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
                         ") skipped due to land fraction constraint."
                    call logger%info(fname, trim(tmp_str))
+                   retr_count = retr_count + 1
                    cycle
                 end if
              end if
@@ -1148,6 +1149,11 @@ contains
     ! BLAS
     double precision, external :: ddot
 
+    ! Random number stuff
+    integer :: seed_size
+    integer, allocatable :: seed(:)
+    double precision :: random_psurf
+
     ! ----------
     !
     ! Initialize
@@ -1509,6 +1515,18 @@ contains
     allocate(AK(N_sv, N_sv))
 
 
+    ! REMOVE ME!!!!!!!
+    ! REMOVE ME!!!!!!!
+    call random_seed(size=seed_size)
+    allocate(seed(seed_size))
+    do i = 1, seed_size
+       seed(i) = i*i
+    end do
+    call random_seed(put=seed)
+    call random_number(random_psurf)
+    met_psurf(i_fp, i_fr) = met_psurf(i_fp, i_fr) + (random_psurf - 0.5d0) * 10000.d0
+    ! REMOVE ME!!!!!!!
+    ! REMOVE ME!!!!!!!
 
     ! ------------------------------------------------------------------
     !

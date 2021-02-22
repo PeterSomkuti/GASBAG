@@ -137,7 +137,7 @@ contains
           do q = 1, scn%num_stokes
 
              dI_dAOD(:,j,q) = dI_dAOD(:,j,q) + &
-                  wfunctions(:, q, i) * &
+                  wfunctions(:,q,i) * &
                   scn%op%aer_ext_tau(:,i,aer_idx) / scn%op%reference_aod(aer_idx)
 
              dI_dAOD(:,j,q) = dI_dAOD(:,j,q) + &
@@ -212,24 +212,30 @@ contains
       integer :: i, j, q
       integer :: num_lay
 
-      num_lay = scn%num_active_levels - 1
+      if (SV%num_psurf > 0) then
 
-      dI_dpsurf(:,:) = 0.0d0
+         num_lay = scn%num_active_levels - 1
 
-      do i = 1, num_lay
+         dI_dpsurf(:,:) = 0.0d0
 
-         do q = 1, scn%num_stokes
+         do i = 1, num_lay
 
-            dI_dpsurf(:,q) = dI_dpsurf(:, q) + &
-                 (-sum(scn%op%gas_tau_dpsurf(:, i, :), dim=2))
+            do q = 1, scn%num_stokes
 
-            dI_dpsurf(:,q) = dI_dpsurf(:, q) + &
-                 (-sum(scn%op%gas_tau_dpsurf(:, i, :), dim=2)) * &
-                 (-scn%op%layer_omega(:, i) / scn%op%layer_tau(:, i))
+               dI_dpsurf(:,q) = dI_dpsurf(:, q) + &
+                    wfunctions(:,q,i) * &
+                    (-sum(scn%op%gas_tau_dpsurf(:, i, :), dim=2))
+
+               dI_dpsurf(:,q) = dI_dpsurf(:, q) + &
+                    wfunctions(:,q,num_lay + i) * &
+                    (-sum(scn%op%gas_tau_dpsurf(:, i, :), dim=2)) * &
+                    (-scn%op%layer_omega(:, i) / scn%op%layer_tau(:, i))
+
+            end do
 
          end do
 
-      end do
+      end if
 
     end subroutine calculate_XRTM_psurf_jacobians
 
@@ -639,6 +645,7 @@ contains
        if (SV%num_albedo > 0) xrtm_n_derivs = xrtm_n_derivs + 1
        xrtm_n_derivs = xrtm_n_derivs + SV%num_aerosol_aod
        xrtm_n_derivs = xrtm_n_derivs + SV%num_aerosol_height
+       xrtm_n_derivs = xrtm_n_derivs + SV%num_psurf
 
        ! Allocate the arrays which hold the radiances and weighting functions
        allocate(monochr_radiance(size(scn%op%wl), scn%num_stokes))
@@ -737,6 +744,7 @@ contains
        call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
        call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
        call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAOD)
+       call calculate_XRTM_psurf_jacobians(SV, scn, monochr_weighting_functions, dI_dPsurf)
 
        ! --------------------------------------------------------------------
        ! Aerosol jacobians might need to be converted from logspace
@@ -753,19 +761,9 @@ contains
        ! Store aerosol layer height Jacobians
        do j=1, SV%num_aerosol_height
           if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
-             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) * exp(SV%svsv(SV%idx_aerosol_height(j)))
+             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) !* exp(SV%svsv(SV%idx_aerosol_height(j)))
           end if
        end do
-
-       ! Store surface pressure jacobians
-       if (SV%num_psurf == 1) then
-          dI_dpsurf(:,:) = monochr_weighting_functions(:,:, &
-               SV%num_gas + &
-               SV%num_temp + &
-               SV%num_albedo + &
-               SV%num_aerosol_aod + &
-               SV%num_aerosol_height + 1)
-       end if
 
     else if (CS_win%RT_strategy%lower() == "pca") then
 
@@ -862,7 +860,7 @@ contains
        allocate(PCA_xrtm_solvers_lo(1))
        allocate(PCA_xrtm_solvers_hi(1))
 
-       PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
+       PCA_xrtm_solvers_lo(1) = "SINGLE"
        PCA_xrtm_solvers_hi(1) = "EIG_BVP"
 
        call setup_XRTM( &
@@ -1110,6 +1108,23 @@ contains
        call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
        call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
        call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAHeight)
+       call calculate_XRTM_psurf_jacobians(SV, scn, monochr_weighting_functions, dI_dPsurf)
+
+       do j=1, SV%num_aerosol_aod
+          ! If this AOD retrieval is in log-space, we need to multiply by
+          ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
+          if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
+             dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
+          end if
+       end do
+
+       ! Store aerosol layer height Jacobians
+       do j=1, SV%num_aerosol_height
+          if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
+             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) * exp(SV%svsv(SV%idx_aerosol_height(j)))
+          end if
+       end do
+
 
 
        deallocate(PCA_handler%PCA_bin)

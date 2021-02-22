@@ -344,16 +344,17 @@ contains
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(scene), intent(inout) :: scn
     type(gauss_aerosol), intent(inout) :: scn_aer(:)
-    
+
     double precision :: aod_norm
     integer :: aer
     integer :: wl
+    integer :: n_lay
     integer :: lay, j
 
     character(len=*), parameter :: fname = "aerosol_gauss_shape"
     character(len=999) :: tmp_str
 
-
+    n_lay = scn%num_active_levels - 1
     do aer = 1, scn%num_aerosols
 
        ! First calculate ext/sca for the wavelenghts for which the aerosols are
@@ -364,17 +365,25 @@ contains
        ! Comes in handy when we need to calculate jacobians.
        scn%op%reference_aod(aer) = scn_aer(aer)%AOD
 
-       aod_norm = sum(exp(-((scn%atm%p_layers(:) - scn_aer(aer)%height)**2) &
+       aod_norm = sum(exp(-((scn%atm%p_layers(1:n_lay) - scn_aer(aer)%height)**2) &
                   / (2 * scn_aer(aer)%width * scn_aer(aer)%width)))
 
        do wl = 1, 2
 
-          do lay = 1, scn%num_active_levels - 1
-             scn%op%aer_ext_tau_edge(wl,lay,aer) = exp( &
-                  -((scn%atm%p_layers(lay) - scn_aer(aer)%height)**2) &
+          if (wl == 1) then
+             ! "left-hand" side is always the reference
+             scn%op%aer_ext_tau_edge(1,1:n_lay,aer) = exp( &
+                  -((scn%atm%p_layers(1:n_lay) - scn_aer(aer)%height)**2) &
                   / (2 * scn_aer(aer)%width * scn_aer(aer)%width)) &
                   * scn_aer(aer)%AOD / aod_norm
-          end do
+
+          else if (wl == 2) then
+             ! right hand side is derived from provided "qext"
+             scn%op%aer_ext_tau_edge(2,1:n_lay,aer) = scn%op%aer_ext_tau_edge(1,1:n_lay,aer) * &
+                  CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_r(aer)) /&
+                  CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
+
+          end if
 
           ! We are grabbing the left and right hand side SSAs from the file to compute
           ! the scattering contribution to the extinction.

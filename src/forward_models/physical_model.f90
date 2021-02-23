@@ -1519,9 +1519,11 @@ contains
     ! REMOVE ME!!!!!!!
     call random_seed(size=seed_size)
     allocate(seed(seed_size))
-    do i = 1, seed_size
-       seed(i) = i*i
-    end do
+    seed(:) = 111
+    seed(1) = i_fp
+    seed(2) = i_fr
+
+
     call random_seed(put=seed)
     call random_number(random_psurf)
     met_psurf(i_fp, i_fr) = met_psurf(i_fp, i_fr) + (random_psurf - 0.5d0) * 10000.d0

@@ -539,7 +539,7 @@ contains
           !call logger%debug(fname, trim(tmp_str))
 
           if (100.0 * sum(PCA_handler%PCA_bin(bin)%EigVal(1:opt)) / &
-               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 99.0d0) then
+               sum(PCA_handler%PCA_bin(bin)%EigVal(:)) > 96.0d0) then
 
              PCA_handler%PCA_bin(bin)%N_EOF = opt
 
@@ -766,6 +766,45 @@ contains
     end do
 
   end subroutine create_scenes_from_PCA
+
+  subroutine extract_linputs_for_PCA(PCA_handler, bin, &
+       ltau, lomega, lsurf, &
+       ltau_pca, lomega_pca, lsurf_pca)
+
+    type(PCA_handler_t), intent(in) :: PCA_handler
+    integer, intent(in) :: bin
+    double precision, intent(in) :: ltau(:,:,:)
+    double precision, intent(in) :: lomega(:,:,:)
+    double precision, intent(in) :: lsurf(:,:)
+    double precision, intent(inout) :: ltau_pca(:,:,:)
+    double precision, intent(inout) :: lomega_pca(:,:,:)
+    double precision, intent(inout) :: lsurf_pca(:,:)
+
+    integer :: i
+    integer :: j
+    integer :: wl
+
+    ltau_pca(1,:,:) = 0.0d0
+    lomega_pca(1,:,:) = 0.0d0
+    lsurf_pca(1,:) = 0.0d0
+
+    do wl = 1, size(ltau, 1)
+
+       if (PCA_handler%PCA_bin_idx_map(bin) == PCA_handler%assigned_bin(wl)) then
+          ltau_pca(1,:,:) = ltau_pca(1,:,:) + ltau(wl,:,:)
+          lomega_pca(1,:,:) = lomega_pca(1,:,:) + lomega(wl,:,:)
+          lsurf_pca(1,:) = lsurf_pca(1,:) + lsurf(wl,:)
+       end if
+
+    end do
+
+    ltau_pca(1,:,:) = ltau_pca(1,:,:) / PCA_handler%PCA_bin(bin)%N_spect
+    lomega_pca(1,:,:) = lomega_pca(1,:,:) / PCA_handler%PCA_bin(bin)%N_spect
+    lsurf_pca(1,:) = lsurf_pca(1,:) / PCA_handler%PCA_bin(bin)%N_spect
+
+  end subroutine extract_linputs_for_PCA
+
+
 
 
   subroutine map_PCA_radiances(PCA_handler, binned_lo, binned_hi, monochromatic)

@@ -28,18 +28,18 @@ module statevector_mod
      integer :: num_solar_irrad_scale
 
 
-     integer, dimension(:), allocatable :: idx_albedo
-     integer, dimension(:), allocatable :: idx_sif
-     integer, dimension(:), allocatable :: idx_dispersion
-     integer, dimension(:), allocatable :: idx_psurf
-     integer, dimension(:), allocatable :: idx_solar_shift
-     integer, dimension(:), allocatable :: idx_solar_stretch
-     integer, dimension(:), allocatable :: idx_zlo
-     integer, dimension(:), allocatable :: idx_temp
-     integer, dimension(:), allocatable :: idx_ils_stretch
-     integer, dimension(:), allocatable :: idx_aerosol_aod
-     integer, dimension(:), allocatable :: idx_aerosol_height
-     integer, dimension(:), allocatable :: idx_solar_irrad_scale
+     integer, allocatable :: idx_albedo(:)
+     integer, allocatable :: idx_sif(:)
+     integer, allocatable :: idx_dispersion(:)
+     integer, allocatable :: idx_psurf(:)
+     integer, allocatable :: idx_solar_shift(:)
+     integer, allocatable :: idx_solar_stretch(:)
+     integer, allocatable :: idx_zlo(:)
+     integer, allocatable :: idx_temp(:)
+     integer, allocatable :: idx_ils_stretch(:)
+     integer, allocatable :: idx_aerosol_aod(:)
+     integer, allocatable :: idx_aerosol_height(:)
+     integer, allocatable :: idx_solar_irrad_scale(:)
 
      ! Lookup arrays that tell us which aerosol/gas this statevector
      ! element belongs to.
@@ -66,6 +66,22 @@ module statevector_mod
      ! State vector (current), state vector a priori
      double precision, dimension(:), allocatable :: svsv, svap, sver
      double precision, dimension(:,:), allocatable :: sv_ap_cov, sv_post_cov
+
+     ! Look-up table for e.g. XRTM-related weighting functions and Jacobians;
+     ! e.g. idx_wf_albedo(2) = 4 means that the *second* albedo Jacobian
+     ! (corresponding to idx_albedo(2)) has position *four* (4) in the weighting
+     ! function array. This is only needed for jacobians that are calculated
+     ! using XRTM (no need for e.g. dispersion, zlo or SIF)
+     integer, allocatable :: idx_wf_albedo(:)
+     integer, allocatable :: idx_wf_psurf(:)
+     integer, allocatable :: idx_wf_temp(:)
+     integer, allocatable :: idx_wf_gas(:)
+     integer, allocatable :: idx_wf_aerosol_aod(:)
+     integer, allocatable :: idx_wf_aerosol_height(:)
+
+     ! How many RT-related weighting functions do we have?
+     integer :: num_rt_wf
+
   end type statevector
 
   type former_results_t
@@ -1199,8 +1215,84 @@ contains
 
   end subroutine replace_statevector_with_former
 
+  subroutine assign_RT_jacobian_indices(SV)
+    type(statevector), intent(inout) :: SV
 
+    integer :: i
+    integer :: total
+    integer :: count
+    character(len=*), parameter :: fname = "assign_RT_jacobian_indices"
+    character(len=999) :: tmp_str
 
+    total = SV%num_albedo &
+         + SV%num_gas &
+         + SV%num_psurf &
+         + SV%num_temp &
+         + SV%num_aerosol_aod &
+         + SV%num_aerosol_height
 
+    SV%num_rt_wf = total
+
+    write(tmp_str, '(A, G0.1)') "Number of RT weighting functions: ", SV%num_rt_wf
+    call logger%debug(fname, trim(tmp_str))
+
+    if (allocated(SV%idx_wf_albedo)) deallocate(SV%idx_wf_albedo)
+    if (allocated(SV%idx_wf_psurf)) deallocate(SV%idx_wf_psurf)
+    if (allocated(SV%idx_wf_temp)) deallocate(SV%idx_wf_temp)
+    if (allocated(SV%idx_wf_gas)) deallocate(SV%idx_wf_gas)
+    if (allocated(SV%idx_wf_aerosol_aod)) deallocate(SV%idx_wf_aerosol_aod)
+    if (allocated(SV%idx_wf_aerosol_height)) deallocate(SV%idx_wf_aerosol_height)
+
+    count = 1
+
+    if (SV%num_albedo > 0) allocate(SV%idx_wf_albedo(SV%num_albedo))
+    do i = 1, SV%num_albedo
+       SV%idx_wf_albedo(i) = count
+       write(tmp_str, '(A, G0.1)') "Adding one albedo derivative at position: ", count
+       call logger%debug(fname, trim(tmp_str))
+       count = count + 1
+    end do
+
+    if (SV%num_psurf > 0) allocate(SV%idx_wf_psurf(SV%num_psurf))
+    do i = 1, SV%num_psurf
+       SV%idx_wf_psurf(i) = count
+       write(tmp_str, '(A, G0.1)') "Adding one surface pressure derivative at position: ", count
+       call logger%debug(fname, trim(tmp_str))
+       count = count + 1
+    end do
+
+    if (SV%num_gas > 0) allocate(SV%idx_wf_gas(SV%num_gas))
+    do i = 1, SV%num_gas
+       SV%idx_wf_gas(i) = count
+       write(tmp_str, '(A, G0.1)') "Adding one gas derivative at position: ", count
+       call logger%debug(fname, trim(tmp_str))
+       count = count + 1
+    end do
+
+    if (SV%num_temp > 0) allocate(SV%idx_wf_temp(SV%num_temp))
+    do i = 1, SV%num_temp
+       SV%idx_wf_temp(i) = count
+       write(tmp_str, '(A, G0.1)') "Adding one temperature derivative at position: ", count
+       call logger%debug(fname, trim(tmp_str))
+       count = count + 1
+    end do
+
+    if (SV%num_aerosol_aod > 0) allocate(SV%idx_wf_aerosol_aod(SV%num_aerosol_aod))
+    do i = 1, SV%num_aerosol_aod
+       write(tmp_str, '(A, G0.1)') "Adding one aerosol OD derivative at position: ", count
+       call logger%debug(fname, trim(tmp_str))
+       SV%idx_wf_aerosol_aod(i) = count
+       count = count + 1
+    end do
+
+    if (SV%num_aerosol_height > 0) allocate(SV%idx_wf_aerosol_height(SV%num_aerosol_height))
+    do i = 1, SV%num_aerosol_height
+       write(tmp_str, '(A, G0.1)') "Adding one aerosol height derivative at position: ", count
+       call logger%debug(fname, trim(tmp_str))
+       SV%idx_wf_aerosol_height(i) = count
+       count = count + 1
+    end do
+
+  end subroutine assign_RT_jacobian_indices
 
 end module statevector_mod

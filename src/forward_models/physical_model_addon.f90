@@ -188,12 +188,6 @@ contains
        ! Now that we have beta, we can 'simply' calculate the derivative inputs
        ! needed by the RT model(s).
 
-       ! We start counting the position of aerosol indicies here
-       l_aero_idx = 2 * n_layer
-       if (SV%num_albedo > 0) then
-          l_aero_idx = l_aero_idx + 1
-       end if
-
        ! Aerosol AODs
        do i = 1, SV%num_aerosol_aod
 
@@ -202,7 +196,7 @@ contains
           ! TODO: this is a bit hacky, would be nice to have some global
           ! dictionary where one can look these up
 
-          l_aero_idx = l_aero_idx + i
+          l_aero_idx = SV%idx_wf_aerosol_aod(i)
           ! Which aerosol belongs to SV index 'i'?
           aer_sv_idx = SV%aerosol_aod_idx_lookup(i)
           ! What is the corresponding aerosol in the MCS?
@@ -224,7 +218,7 @@ contains
           ! dictionary where one can look these up
 
           ! Keep using the l_aero_idx
-          l_aero_idx =  l_aero_idx + i
+          l_aero_idx =  SV%idx_wf_aerosol_height(i)
           ! Which aerosol belongs to SV index 'i'?
           aer_sv_idx = SV%aerosol_height_idx_lookup(i)
           ! What is the corresponding aerosol in the MCS?

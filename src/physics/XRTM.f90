@@ -27,152 +27,160 @@ module XRTM_mod
 
   implicit none
 
-  public :: setup_XRTM, create_XRTM, solve_RT_problem_XRTM, calculate_XRTM_radiance
+  public :: solve_RT_problem_XRTM, calculate_XRTM_radiance
 
 contains
 
 
-  subroutine calculate_XRTM_gas_jacobians(SV, scn, wfunctions, dI_dgas)
+  subroutine calculate_XRTM_lgas_inputs(SV, scn, ltau, lomega)
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
-    double precision, intent(in) :: wfunctions(:,:,:) ! (wl, stokes, deriv)
-    double precision, intent(inout) :: dI_dgas(:,:,:) !(wl, SV%num_gas, stokes)
+    double precision, intent(inout) :: ltau(:,:,:)
+    double precision, intent(inout) :: lomega(:,:,:)
 
-    integer :: i, j, q
+    integer :: i
+    integer :: j
+    integer :: l
+    integer :: n_lay
 
     do j = 1, SV%num_gas
-       dI_dgas(:,j,:) = 0.0d0 ! (wavelength, SV%num_gas, stokes)
-       ! "i" is the layer number
        do i = SV%s_start(j), SV%s_stop(j) - 1
-          do q = 1, scn%num_stokes
-             ! d/dtau component
-             dI_dgas(:,j,q) = dI_dgas(:,j,q) + wfunctions(:,q,i) * &
-                  ( &
-                  scn%op%gas_tau(:, i, SV%gas_idx_lookup(j)) / &
-                  SV%svsv(SV%idx_gas(j,1)) &
-                  )
-             ! d/domega component
-             dI_dgas(:,j,q) = dI_dgas(:,j,q) + wfunctions(:,q,scn%num_active_levels - 1 + i) * &
-                  ( &
-                  -scn%op%layer_omega(:,i) &
-                  / scn%op%layer_tau(:,i) &
-                  * scn%op%gas_tau(:, i, SV%gas_idx_lookup(j)) / &
-                  SV%svsv(SV%idx_gas(j,1)) &
-                  )
+          do l = 1, size(scn%op%wl)
+
+             ltau(l, SV%idx_wf_gas(j), 1:n_lay) = &
+                  scn%op%gas_tau(l, 1:n_lay,SV%gas_idx_lookup(j)) / &
+                  SV%svsv(SV%idx_gas(j, 1))
+
+             lomega(l, SV%idx_wf_gas(j), 1:n_lay) = &
+                  (-scn%op%layer_omega(l, 1:n_lay)) &
+                  / scn%op%layer_tau(l, 1:n_lay) &
+                  * ltau(l, SV%idx_wf_gas(j), 1:n_lay)
+
           end do
        end do
     end do
 
-  end subroutine calculate_XRTM_gas_jacobians
+  end subroutine calculate_XRTM_lgas_inputs
 
-
-  subroutine calculate_XRTM_temp_jacobians(SV, scn, wfunctions, dI_dTemp)
+  subroutine calculate_XRTM_ltemp_inputs(SV, scn, ltau, lomega)
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
-    double precision, intent(in) :: wfunctions(:,:,:) ! (wl, stokes, deriv)
-    double precision, intent(inout) :: dI_dTemp(:,:) ! (wl, stokes)
+    double precision, intent(inout) :: ltau(:,:,:)
+    double precision, intent(inout) :: lomega(:,:,:)
 
-    integer :: i, q
+    integer :: l
+    integer :: n_lay
 
-    if (SV%num_temp == 1) then
+    if (SV%num_temp > 0) then
 
-       dI_dTemp(:,:) = 0.0d0
+       n_lay = scn%num_active_levels - 1
+       do l = 1, size(scn%op%wl)
 
-       do i = 1, scn%num_active_levels - 1
-          do q = 1, scn%num_stokes
-             ! d/dtau component
-             dI_dTemp(:,q) = dI_dTemp(:,q) + wfunctions(:,q,i) * &
-                  sum(scn%op%gas_tau_dtemp(:,i,:), dim=2)
-             ! d/domega component
-             dI_dTemp(:,q) = dI_dTemp(:,q) + wfunctions(:,q,scn%num_active_levels - 1 + i) * &
-                  (-scn%op%layer_omega(:,i)) / scn%op%layer_tau(:,i) * &
-                  sum(scn%op%gas_tau_dtemp(:,i,:), dim=2)
-          end do
+          ltau(l, SV%idx_wf_temp(1), 1:n_lay) = &
+               sum(scn%op%gas_tau_dtemp(l,1:n_lay,:), dim=2)
+
+          lomega(l, SV%idx_wf_temp(1), 1:n_lay) = &
+               (-scn%op%layer_omega(l, 1:n_lay)) / scn%op%layer_tau(l, 1:n_lay) * &
+               ltau(l, SV%idx_wf_temp(1), 1:n_lay)
+
        end do
-
     end if
 
-  end subroutine calculate_XRTM_temp_jacobians
+  end subroutine calculate_XRTM_ltemp_inputs
 
-
-  subroutine calculate_XRTM_albedo_jacobians(SV, scn, wfunctions, dI_dsurf)
+  subroutine calculate_XRTM_lpsurf_inputs(SV, scn, ltau, lomega)
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
-    double precision, intent(in) :: wfunctions(:,:,:) ! (wl, stokes, deriv)
-    double precision, intent(inout) :: dI_dsurf(:,:,:) ! (wl, SV%num_albedo, stokes)
+    double precision, intent(inout) :: ltau(:,:,:)
+    double precision, intent(inout) :: lomega(:,:,:)
 
-    integer :: i, j, q
-    integer :: num_lay
-    num_lay = scn%num_active_levels - 1
+    integer :: l
+    integer :: n_lay
+
+    if (SV%num_psurf > 0) then
+
+       n_lay = scn%num_active_levels - 1
+
+       do l = 1, size(scn%op%wl)
+
+          ltau(l, SV%idx_wf_psurf(1), 1:n_lay) = &
+               (-sum(scn%op%gas_tau_dpsurf(l, 1:n_lay, :), dim=2))
+
+          lomega(l, SV%idx_wf_psurf(1), 1:n_lay) = &
+               (-scn%op%layer_omega(l, 1:n_lay)) / scn%op%layer_tau(l, 1:n_lay) * &
+               ltau(l, SV%idx_wf_psurf(1), 1:n_lay)
+
+       end do
+    end if
+
+  end subroutine calculate_XRTM_lpsurf_inputs
+
+  subroutine calculate_XRTM_lalbedo_inputs(SV, scn, lsurf)
+    type(statevector), intent(in) :: SV
+    type(scene), intent(in) :: scn
+    double precision, intent(inout) :: lsurf(:,:)
+
+    integer :: j
 
     do j = 1, SV%num_albedo
-       do q = 1, scn%num_stokes
-          dI_dsurf(:,j,q) = wfunctions(:, q, 2 * num_lay + 1) * &
-               (scn%op%wl(:) - scn%op%wl(int(size(scn%op%wl) / 2)))**(dble(j-1))
-       end do
+       lsurf(:, SV%idx_wf_albedo(j)) = &
+            (scn%op%wl(:) - scn%op%wl(int(size(scn%op%wl) / 2)))**(dble(j-1))
     end do
 
-  end subroutine calculate_XRTM_albedo_jacobians
+  end subroutine calculate_XRTM_lalbedo_inputs
 
-
-  subroutine calculate_XRTM_aerosol_aod_jacobians(SV, scn, wfunctions, dI_dAOD)
+  subroutine calculate_XRTM_laerosol_aod_inputs(SV, scn, ltau, lomega)
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
-    double precision, intent(in) :: wfunctions(:,:,:) ! (wl, stokes, deriv)
-    double precision, intent(inout) :: dI_dAOD(:,:,:) ! (wl, SV%num_aerosol_aod, stokes)
+    double precision, intent(inout) :: ltau(:,:,:)
+    double precision, intent(inout) :: lomega(:,:,:)
 
-    integer :: i, j, q, aer_idx
-    integer :: num_lay
+    integer :: l
+    integer :: j
+    integer :: n_lay
+    integer :: aer_idx
 
-    num_lay = scn%num_active_levels - 1
-
+    n_lay = scn%num_active_levels - 1
 
     do j = 1, SV%num_aerosol_aod
 
-       dI_dAOD(:,j,:) = 0.0d0
        aer_idx = SV%aerosol_aod_idx_lookup(j)
 
-       do i = 1, num_lay
+       do l = 1, size(scn%op%wl)
 
-          do q = 1, scn%num_stokes
+          ltau(l, SV%idx_wf_aerosol_aod(j), 1:n_lay) = &
+               scn%op%aer_ext_tau(l, 1:n_lay, aer_idx) / scn%op%reference_aod(aer_idx)
 
-             dI_dAOD(:,j,q) = dI_dAOD(:,j,q) + &
-                  wfunctions(:,q,i) * &
-                  scn%op%aer_ext_tau(:,i,aer_idx) / scn%op%reference_aod(aer_idx)
+          lomega(l, SV%idx_wf_aerosol_aod(j), 1:n_lay) = &
+               ( scn%op%aer_sca_tau(l, 1:n_lay, aer_idx) / scn%op%aer_ext_tau(l, 1:n_lay, aer_idx) &
+               - scn%op%layer_omega(l, 1:n_lay) &
+               ) / scn%op%layer_tau(l, 1:n_lay) &
+               * ltau(l, SV%idx_wf_aerosol_aod(j), 1:n_lay)
 
-             dI_dAOD(:,j,q) = dI_dAOD(:,j,q) + &
-                  wfunctions(:, q, num_lay + i) * &
-                  scn%op%aer_ext_tau(:,i,aer_idx) / scn%op%reference_aod(aer_idx) * &
-                  ( &
-                  scn%op%aer_sca_tau(:,i,aer_idx) / scn%op%aer_ext_tau(:,i,aer_idx) &
-                  - scn%op%layer_omega(:,i) &
-                  ) / scn%op%layer_tau(:,i)
-
-          end do
        end do
     end do
 
+  end subroutine calculate_XRTM_laerosol_aod_inputs
 
-  end subroutine calculate_XRTM_aerosol_aod_jacobians
-
-
-  subroutine calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, wfunctions, dI_dAHeight)
+  subroutine calculate_XRTM_laerosol_height_inputs(SV, scn, CS_aerosol, ltau, lomega)
     type(statevector), intent(in) :: SV
-    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
     type(scene), intent(in) :: scn
-    double precision, intent(in) :: wfunctions(:,:,:) ! (wl, stokes, deriv)
-    double precision, intent(inout) :: dI_dAHeight(:,:,:) ! (wl, SV%num_aerosol_height, stokes)
+    type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
+    double precision, intent(inout) :: ltau(:,:,:)
+    double precision, intent(inout) :: lomega(:,:,:)
 
     double precision, allocatable :: aero_fac(:)
-    integer :: i, j, q, aer_idx
-    integer :: num_lay
+    integer :: l
+    integer :: j
+    integer :: n_lay
+    integer :: aer_idx
 
-    num_lay = scn%num_active_levels - 1
-    allocate(aero_fac(num_lay))
+    n_lay = scn%num_active_levels - 1
+    allocate(aero_fac(n_lay))
+
 
     do j = 1, SV%num_aerosol_height
 
-       dI_dAHeight(:,j,:) = 0.0d0
        aer_idx = SV%aerosol_height_idx_lookup(j)
 
        call calculate_aero_height_factors( &
@@ -181,63 +189,22 @@ contains
             CS_aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
             aero_fac)
 
-       do i = 1, num_lay
-          do q = 1, scn%num_stokes
+       do l = 1, size(scn%op%wl)
 
-             dI_dAHeight(:,j,q) = dI_dAHeight(:,j,q) + &
-                  wfunctions(:,q,i) * &
-                  scn%op%aer_ext_tau(:,i,aer_idx) * aero_fac(i) * scn%atm%psurf
+          ltau(l, SV%idx_wf_aerosol_height(j), 1:n_lay) = &
+               scn%op%aer_ext_tau(l, 1:n_lay, aer_idx) * aero_fac(:) * scn%atm%psurf
 
-             dI_dAHeight(:,j,q) = dI_dAHeight(:,j,q) + &
-                  wfunctions(:, q, num_lay+i) * &
-                  scn%op%aer_ext_tau(:,i,aer_idx) * aero_fac(i) * scn%atm%psurf * &
-                  ( &
-                  scn%op%aer_sca_tau(:,i,aer_idx) / scn%op%aer_ext_tau(:,i,aer_idx)  &
-                  - scn%op%layer_omega(:,i) &
-                  ) / scn%op%layer_tau(:,i)
+          lomega(l, SV%idx_wf_aerosol_height(j), 1:n_lay) = &
+               ( &
+               scn%op%aer_sca_tau(l, 1:n_lay, aer_idx) / scn%op%aer_ext_tau(l, 1:n_lay, aer_idx)  &
+               - scn%op%layer_omega(l, 1:n_lay) &
+               ) / scn%op%layer_tau(l, 1:n_lay) &
+               * ltau(l, SV%idx_wf_aerosol_height(j), 1:n_lay)
 
-          end do
        end do
     end do
 
-  end subroutine calculate_XRTM_aerosol_height_jacobians
-
-
-  subroutine calculate_XRTM_psurf_jacobians(SV, scn, wfunctions, dI_dpsurf)
-      type(statevector), intent(in) :: SV
-      type(scene), intent(in) :: scn
-      double precision, intent(in) :: wfunctions(:,:,:) ! (wl, stokes, deriv)
-      double precision, intent(inout) :: dI_dpsurf(:,:) ! (wl, stokes)
-
-      integer :: i, j, q
-      integer :: num_lay
-
-      if (SV%num_psurf > 0) then
-
-         num_lay = scn%num_active_levels - 1
-
-         dI_dpsurf(:,:) = 0.0d0
-
-         do i = 1, num_lay
-
-            do q = 1, scn%num_stokes
-
-               dI_dpsurf(:,q) = dI_dpsurf(:, q) + &
-                    wfunctions(:,q,i) * &
-                    (-sum(scn%op%gas_tau_dpsurf(:, i, :), dim=2))
-
-               dI_dpsurf(:,q) = dI_dpsurf(:, q) + &
-                    wfunctions(:,q,num_lay + i) * &
-                    (-sum(scn%op%gas_tau_dpsurf(:, i, :), dim=2)) * &
-                    (-scn%op%layer_omega(:, i) / scn%op%layer_tau(:, i))
-
-            end do
-
-         end do
-
-      end if
-
-    end subroutine calculate_XRTM_psurf_jacobians
+  end subroutine calculate_XRTM_laerosol_height_inputs
 
 
   !> @brief "Translates" configuration values into XRTM settings
@@ -495,7 +462,7 @@ contains
     type(CS_window_t), intent(in) :: CS_win
     type(CS_general_t), intent(in) :: CS_general
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
-    type(statevector), intent(in) :: SV
+    type(statevector), intent(inout) :: SV
     type(scene), intent(in) :: scn
     integer, intent(in) :: n_stokes
 
@@ -514,6 +481,14 @@ contains
     ! Function name for logger
     character(len=*), parameter :: fname = "solve_RT_problem_XRTM"
     character(len=999) :: tmp_str
+
+    double precision, allocatable :: ltau(:,:,:)
+    double precision, allocatable :: lomega(:,:,:)
+    double precision, allocatable :: lsurf(:,:)
+
+    double precision, allocatable :: ltau_pca(:,:,:)
+    double precision, allocatable :: lomega_pca(:,:,:)
+    double precision, allocatable :: lsurf_pca(:,:)
 
     double precision, allocatable :: monochr_radiance(:,:)
     double precision, allocatable :: monochr_weighting_functions(:,:,:)
@@ -576,6 +551,9 @@ contains
        call logger%fatal(fname, "N_Stokes is neither 1 or 3 - not sure what to do!")
        stop 1
     end if
+
+    ! Assign RT weighting function <-> SV Jacobian mapping
+    call assign_RT_jacobian_indices(SV)
 
 
     ! -----------------------------------------------------------------------
@@ -641,18 +619,29 @@ contains
           return
        end if
 
-       xrtm_n_derivs = 2 * (scn%num_active_levels - 1)
-       if (SV%num_albedo > 0) xrtm_n_derivs = xrtm_n_derivs + 1
-       xrtm_n_derivs = xrtm_n_derivs + SV%num_aerosol_aod
-       xrtm_n_derivs = xrtm_n_derivs + SV%num_aerosol_height
-       xrtm_n_derivs = xrtm_n_derivs + SV%num_psurf
+       xrtm_n_derivs = SV%num_rt_wf
 
        ! Allocate the arrays which hold the radiances and weighting functions
-       allocate(monochr_radiance(size(scn%op%wl), scn%num_stokes))
-       allocate(monochr_weighting_functions(size(scn%op%wl), scn%num_stokes, xrtm_n_derivs))
+       allocate(monochr_radiance(num_wl, scn%num_stokes))
+       allocate(monochr_weighting_functions(num_wl, scn%num_stokes, xrtm_n_derivs))
 
        monochr_radiance(:,:) = 0.0d0
        monochr_weighting_functions(:,:,:) = 0.0d0
+
+       allocate(ltau(num_wl, xrtm_n_derivs, num_lay))
+       allocate(lomega(num_wl, xrtm_n_derivs, num_lay))
+       allocate(lsurf(num_wl, xrtm_n_derivs))
+
+       ltau(:,:,:) = 0.0d0
+       lomega(:,:,:) = 0.0d0
+       lsurf(:,:) = 0.0d0
+
+       call calculate_XRTM_lgas_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_ltemp_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_lpsurf_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_laerosol_aod_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_laerosol_height_inputs(SV, scn, CS_aerosol, ltau, lomega)
+       call calculate_XRTM_lalbedo_inputs(SV, scn, lsurf)
 
        ! -------------------------------------------
        !
@@ -701,9 +690,13 @@ contains
                CS_win, &
                CS_general, &
                CS_aerosol, &
+               ltau, &
+               lomega, &
+               lsurf, &
                monochr_radiance, &
                monochr_weighting_functions, &
-               xrtm_success)
+               xrtm_success &
+               )
 
           if (.not. xrtm_success) then
              call logger%error(fname, "Call to XRTM_monochromatic unsuccessful.")
@@ -731,39 +724,9 @@ contains
           return
        end if
 
+       deallocate(ltau, lomega, lsurf)
+
        call logger%debug(fname, "Mapping weighting functions back to Jacobians.")
-
-       ! --------------------------------------------------------------------
-       ! Atmospheric and surface RT weighting functions are now
-       ! converted into proper SV-related Jacobians
-       ! (checks are performed within the function)
-       ! --------------------------------------------------------------------
-
-       call calculate_XRTM_gas_jacobians(SV, scn, monochr_weighting_functions, dI_dgas)
-       call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
-       call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
-       call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
-       call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAOD)
-       call calculate_XRTM_psurf_jacobians(SV, scn, monochr_weighting_functions, dI_dPsurf)
-
-       ! --------------------------------------------------------------------
-       ! Aerosol jacobians might need to be converted from logspace
-       ! --------------------------------------------------------------------
-
-       do j=1, SV%num_aerosol_aod
-          ! If this AOD retrieval is in log-space, we need to multiply by
-          ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
-          if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
-             dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
-          end if
-       end do
-
-       ! Store aerosol layer height Jacobians
-       do j=1, SV%num_aerosol_height
-          if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
-             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) !* exp(SV%svsv(SV%idx_aerosol_height(j)))
-          end if
-       end do
 
     else if (CS_win%RT_strategy%lower() == "pca") then
 
@@ -850,8 +813,8 @@ contains
        pca_overhead_time = pca_overhead_time + cpu_stop_pca - cpu_start_pca
 
        ! For the time being, we want to keep the PCA method as:
-       ! Low accuracy: SS + 2S
-       ! High accuracy: SS + EIG_BVP
+       ! Low accuracy: 2S
+       ! High accuracy: EIG_BVP
        ! (maybe change later on..)
        ! NOTE
        ! In XRTM, TWO_STREAM computes both single scattering AND diffuse 2S contributions.
@@ -860,7 +823,7 @@ contains
        allocate(PCA_xrtm_solvers_lo(1))
        allocate(PCA_xrtm_solvers_hi(1))
 
-       PCA_xrtm_solvers_lo(1) = "SINGLE"
+       PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
        PCA_xrtm_solvers_hi(1) = "EIG_BVP"
 
        call setup_XRTM( &
@@ -881,12 +844,7 @@ contains
        end if
 
        ! Set up number of derivatives needed by XRTM
-       xrtm_n_derivs = ( &
-            2 * (scn%num_active_levels - 1 ) & ! 2 * N_lay
-            + 1 & ! Surface albedo
-            + SV%num_aerosol_aod &
-            + SV%num_aerosol_height &
-            )
+       xrtm_n_derivs = SV%num_rt_wf
 
        ! --------------------------------------------------------------------
        ! Perform low-accuracy line-by-line run for TWO_STREAM
@@ -918,6 +876,29 @@ contains
        monochr_radiance(:,:) = 0.0d0
        monochr_weighting_functions(:,:,:) = 0.0d0
 
+       allocate(ltau(num_wl, xrtm_n_derivs, num_lay))
+       allocate(lomega(num_wl, xrtm_n_derivs, num_lay))
+       allocate(lsurf(num_wl, xrtm_n_derivs))
+
+       allocate(ltau_pca(1, xrtm_n_derivs, num_lay))
+       allocate(lomega_pca(1, xrtm_n_derivs, num_lay))
+       allocate(lsurf_pca(1, xrtm_n_derivs))
+
+       ltau(:,:,:) = 0.0d0
+       lomega(:,:,:) = 0.0d0
+       lsurf(:,:) = 0.0d0
+
+       ltau_pca(:,:,:) = 0.0d0
+       lomega_pca(:,:,:) = 0.0d0
+       lsurf_pca(:,:) = 0.0d0
+
+       call calculate_XRTM_lgas_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_ltemp_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_lpsurf_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_laerosol_aod_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_laerosol_height_inputs(SV, scn, CS_aerosol, ltau, lomega)
+       call calculate_XRTM_lalbedo_inputs(SV, scn, lsurf)
+
 
        call XRTM_monochromatic( &
             xrtm, &
@@ -927,6 +908,9 @@ contains
             CS_win, &
             CS_general, &
             CS_aerosol, &
+            ltau, &
+            lomega, &
+            lsurf, &
             monochr_radiance, &
             monochr_weighting_functions, &
             xrtm_success)
@@ -954,6 +938,11 @@ contains
             1, scn%num_stokes, xrtm_n_derivs))
 
        do bin = 1, PCA_handler%N_bin
+
+          call extract_linputs_for_PCA(PCA_handler, bin, &
+               ltau, lomega, lsurf, &
+               ltau_pca, lomega_pca, lsurf_pca)
+
           do eof = -PCA_handler%PCA_bin(bin)%N_EOF, PCA_handler%PCA_bin(bin)%N_EOF
 
              binned_results_lo(bin, eof, :, :) = 0.0d0
@@ -967,6 +956,9 @@ contains
                   CS_win, &
                   CS_general, &
                   CS_aerosol, &
+                  ltau_pca, &
+                  lomega_pca, &
+                  lsurf_pca, &
                   binned_results_lo(bin, eof, :, :), &
                   binned_weighting_functions_lo(bin, eof, :, :, :), &
                   xrtm_success)
@@ -1041,6 +1033,11 @@ contains
             xrtm_success) ! Call successful?
 
        do bin = 1, PCA_handler%N_bin
+
+          call extract_linputs_for_PCA(PCA_handler, bin, &
+               ltau, lomega, lsurf, &
+               ltau_pca, lomega_pca, lsurf_pca)
+
           do eof = -PCA_handler%PCA_bin(bin)%N_EOF, PCA_handler%PCA_bin(bin)%N_EOF
 
              binned_results_hi(bin, eof, :, :) = 0.0d0
@@ -1054,6 +1051,9 @@ contains
                   CS_win, &
                   CS_general, &
                   CS_aerosol, &
+                  ltau_pca, &
+                  lomega_pca, &
+                  lsurf_pca, &
                   binned_results_hi(bin, eof, :, :), &
                   binned_weighting_functions_hi(bin, eof, :, :, :), &
                   xrtm_success)
@@ -1073,6 +1073,9 @@ contains
           call logger%error(fname, "Call to destroy XRTM unsuccessful.")
           return
        end if
+
+       deallocate(ltau, lomega, lsurf)
+       deallocate(ltau_pca, lomega_pca, lsurf_pca)
 
        ! --------------------------------------------------------------------
        !
@@ -1103,12 +1106,12 @@ contains
        call logger%debug(fname, trim(tmp_str))
 
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
-       call calculate_XRTM_gas_jacobians(SV, scn, monochr_weighting_functions, dI_dgas)
-       call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
-       call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
-       call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
-       call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAHeight)
-       call calculate_XRTM_psurf_jacobians(SV, scn, monochr_weighting_functions, dI_dPsurf)
+       !call calculate_XRTM_gas_jacobians(SV, scn, monochr_weighting_functions, dI_dgas)
+       !call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
+       !call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
+       !call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
+       !call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAHeight)
+       !call calculate_XRTM_psurf_jacobians(SV, scn, monochr_weighting_functions, dI_dPsurf)
 
        do j=1, SV%num_aerosol_aod
           ! If this AOD retrieval is in log-space, we need to multiply by
@@ -1141,6 +1144,57 @@ contains
 
     end if
 
+    ! --------------------------------------------------------------------
+    ! Atmospheric and surface RT weighting functions are now
+    ! converted into proper SV-related Jacobians
+    ! --------------------------------------------------------------------
+
+    do i = 1, SV%num_gas
+       dI_dgas(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_gas(i))
+    end do
+
+    do i = 1, SV%num_albedo
+       dI_dsurf(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_albedo(i))
+    end do
+
+    if (SV%num_temp > 0) then
+       dI_dtemp(:,:) = monochr_weighting_functions(:,:,SV%idx_wf_temp(1))
+    end if
+
+    if (SV%num_psurf > 0) then
+       dI_dpsurf(:,:) = monochr_weighting_functions(:,:,SV%idx_wf_psurf(1))
+    end if
+
+    do i = 1, SV%num_aerosol_aod
+       dI_dAOD(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_aerosol_aod(i))
+    end do
+
+    do i = 1, SV%num_aerosol_height
+       dI_dAHeight(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_aerosol_height(i))
+    end do
+
+       
+
+       ! --------------------------------------------------------------------
+       ! Aerosol jacobians might need to be converted from logspace
+       ! --------------------------------------------------------------------
+
+       do j=1, SV%num_aerosol_aod
+          ! If this AOD retrieval is in log-space, we need to multiply by
+          ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
+          if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
+             dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
+          end if
+       end do
+
+       ! Store aerosol layer height Jacobians
+       do j=1, SV%num_aerosol_height
+          if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
+             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) !* exp(SV%svsv(SV%idx_aerosol_height(j)))
+          end if
+       end do
+
+
 
   end subroutine solve_RT_problem_XRTM
 
@@ -1156,9 +1210,12 @@ contains
        CS_win, &
        CS_general, &
        CS_aerosol, &
+       ltau, &
+       lomega, &
+       lsurf, &
        radiance, &
        weighting_functions, &
-       success)
+       success )
 
     type(xrtm_type), intent(inout) :: xrtm
     integer, intent(in) :: n_derivs
@@ -1167,12 +1224,19 @@ contains
     type(CS_window_t), intent(in) :: CS_win
     type(CS_general_t), intent(in) :: CS_general
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
+    ! Linearized optical depth input (spectral, n_derivs, n_layers)
+    double precision, allocatable, intent(in) :: ltau(:,:,:)
+    ! Linearized single scatter alebdos (spectral, n_derivs, n_layers)
+    double precision, allocatable, intent(in) :: lomega(:,:,:)
+    ! Linearized surface parameters (spectral, n_derivs)
+    double precision, allocatable, intent(in) :: lsurf(:,:)
     ! Container for radiance result (specetral, n_stokes)
     double precision, intent(inout) :: radiance(:,:)
     ! Container for weighting function results (spectral, n_stokes, n_derivs)
     double precision, intent(inout) :: weighting_functions(:,:,:)
     logical, intent(inout) :: success
-
+    !double precision, optional :: ltau_input(:,:,:) ! (spectral, n_derivs, n_layers)
+    !double precision, optional :: lomega_input(:,:,:) ! (spectral, n_derivs, n_layers)
 
     character(len=*), parameter :: fname = "XRTM_monochromatic"
     character(len=999) :: tmp_str
@@ -1194,12 +1258,8 @@ contains
     integer :: n_mom
     ! Number of used phasefunction expansion coefficients, per layer
     integer, allocatable :: n_coef(:)
-    ! Linearized optical depth input (n_derivs, n_layers)
-    double precision, allocatable :: ltau(:,:)
-    ! Linearized single scatter alebdos (n_derivs, n_layers)
-    double precision, allocatable :: lomega(:,:)
-    ! Linearized surface inputs (specetral, n_derivs)
-    double precision, allocatable :: lsurf(:)
+    ! Linearized surface inputs (spectral, n_derivs)
+    !double precision, allocatable :: lsurf(:,:)
     ! Aerosol shape factor required for Jacobians (n_layers)
     double precision, allocatable :: aero_fac(:)
     ! Phase function coefficients for left hand side (lower-wavelength edge of band)
@@ -1230,13 +1290,13 @@ contains
     n_wl = size(scn%op%wl)
 
     ! Allocate the RT inputs, and zero them
-    allocate(ltau(n_derivs, n_layers))
-    allocate(lomega(n_derivs, n_layers))
-    allocate(lsurf(n_derivs))
+    !allocate(ltau(n_wl, n_derivs, n_layers))
+    !allocate(lomega(n_wl, n_derivs, n_layers))
+    !allocate(lsurf(n_wl, n_derivs))
 
-    ltau(:,:) = 0.0d0
-    lomega(:,:) = 0.0d0
-    lsurf(:) = 0.0d0
+    !ltau(:,:,:) = 0.0d0
+    !lomega(:,:,:) = 0.0d0
+    !lsurf(:,:) = 0.0d0
 
     if (scn%num_stokes == 1) then
        n_mom = 1
@@ -1247,32 +1307,12 @@ contains
        stop 1
     end if
 
-
     ! -------------------------------------------------------------------------------
     ! Calculate all required linearized inputs, and do some bookkeeping and debugging
     ! to keep track of the weighting function positions.
     ! -------------------------------------------------------------------------------
 
     call logger%debug(fname, "Calculating linearized inputs for RT.")
-
-    ! -------------------------------------------------------------------------------
-    ! New arrangement for RT linearized inputs:
-    !               1 : N_layers     is (d/dtau)
-    !    N_layers + 1 : 2 * N_layers is (d/domega) 
-    !    ....
-    !    Surface properties / albedo (1)
-    !    Aerosol OD jacobians (1 each)
-    !    Aerosol height jacobians (1 each)
-
-    do j = 1, n_layers
-       ltau(j, j) = 1.0d0
-       lomega(n_layers + j, j) = 1.0d0
-    end do
-
-    if (SV%num_albedo > 0) then
-       lsurf(2 * n_layers + 1) = 1.0d0
-    end if
-
 
     call compute_coef_at_wl(scn, CS_aerosol, SV, scn%op%wl(1), n_mom, n_derivs, &
          scn%op%ray_tau(1,:), scn%op%aer_sca_tau(1,:,:), &
@@ -1420,9 +1460,9 @@ contains
     double precision, intent(in) :: altitude_levels(:)
     double precision, intent(in) :: layer_tau(:,:)
     double precision, intent(in) :: layer_omega(:,:)
-    double precision, intent(in) :: ltau(:,:)
-    double precision, intent(in) :: lomega(:,:)
-    double precision, intent(in) :: lsurf(:)
+    double precision, intent(in) :: ltau(:,:,:)
+    double precision, intent(in) :: lomega(:,:,:)
+    double precision, intent(in) :: lsurf(:,:)
 
     integer, intent(in) :: n_stokes
     integer, intent(in) :: n_derivs
@@ -1718,11 +1758,9 @@ contains
        tau(:) = layer_tau(i, 1:n_layers)
        omega(:) = layer_omega(i, 1:n_layers)
 
-       single_ltau(:,:) = ltau(:,:)
-       single_lomega(:,:) = lomega(:,:)
-       single_lsurf(:) = lsurf(:)
-
-
+       single_ltau(:,:) = ltau(i,:,1:n_layers)
+       single_lomega(:,:) = lomega(i,:,1:n_layers)
+       single_lsurf(:) = lsurf(i,:)
 
 #ifdef DEBUG
        if (any(ieee_is_nan(tau))) then

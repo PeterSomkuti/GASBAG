@@ -96,7 +96,7 @@ if(CMAKE_Fortran_COMPILER_ID MATCHES "GNU")
 
 elseif(CMAKE_Fortran_COMPILER_ID MATCHES "Intel")
 
-  set(dialect "-assume realloc_lhs -standard-semantics -std18 -debug all -warn all")
+  set(dialect "-std18 -debug all -warn all")
   if(USE_OPENMP)
     set(dialect "${dialect}")
     message(STATUS "Compiling with OpenMP")

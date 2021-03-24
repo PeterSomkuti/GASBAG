@@ -246,7 +246,7 @@ contains
        else if ((i > 1) .and. (i < N - 1)) then
           pwgts(i) = f * hp(i-1) + (1.0d0 - f) * hp(i)
        end if
-       
+
     end do
 
     if (abs(sum(pwgts(:)) - 1.0d0) > 1.0d-5) then

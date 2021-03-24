@@ -727,7 +727,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       frame_start = 555
+       !frame_start = 3225
        !frame_stop = 50
 
        ! For OpenMP, we set some private and shared variables, as well as set the
@@ -742,7 +742,7 @@ contains
        total_number_todo = num_frames * num_fp
 
        !$OMP PARALLEL DO SHARED(retr_count, total_number_todo) &
-       !$OMP SCHEDULE(dynamic, num_fp) &
+       !$OMP SCHEDULE(dynamic) &
        !$OMP PRIVATE(i_fp, i_fr, &
        !$OMP         cpu_time_start, cpu_time_stop, &
        !$OMP         this_thread, this_converged, this_iterations)
@@ -1052,6 +1052,7 @@ contains
 
     ! Temperature
     double precision :: this_temp_offset
+    double precision, allocatable :: this_temp_profile(:)
 
     ! Gases
     ! ----------------
@@ -2178,9 +2179,13 @@ contains
              ! be calculated within the calculate_gas_tau function, rather than
              ! having to do it via finite differencing.
 
+             allocate(this_temp_profile(scn%num_active_levels))
+
              if (SV%num_temp == 1) then
                 ! First, we calculate gas OD's with a 1K temperature perturbation, but we only need
                 ! to do this if we retrieve the T offset.
+
+                this_temp_profile(:) = scn%atm%T(1:num_active_levels) + this_temp_offset + 1.0d0
 
                 call calculate_gas_tau( &
                      .true., & ! We are using pre-gridded spectroscopy!
@@ -2192,7 +2197,7 @@ contains
                      this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                      scn%atm%psurf, & ! Surface pressure
                      scn%atm%p(:), & ! Atmospheric profile pressures
-                     scn%atm%T(:) + this_temp_offset + 1.0d0, & ! Atmospheric T profile plus 1K perturbation
+                     this_temp_profile(:), & ! Atmospheric T profile plus 1K perturbation
                      scn%atm%sh(:), & ! Atmospheric profile humidity
                      scn%atm%grav(:), & ! Gravity per level
                      CS%gas(CS_win%gas_index(j)), & ! CS_gas object for this given gas
@@ -2205,6 +2210,8 @@ contains
 
              end if
 
+             this_temp_profile(:) = scn%atm%T(1:num_active_levels) + this_temp_offset
+
              ! Call the function that calculates the gas optical depths
              call calculate_gas_tau( &
                   .true., & ! We are using pre-gridded spectroscopy!
@@ -2216,7 +2223,7 @@ contains
                   this_vmr_profile(:,j), & ! The gas VMR profile for this gas with index j
                   scn%atm%psurf, & ! Surface pressure
                   scn%atm%p(:), & ! Atmospheric profile pressures
-                  scn%atm%T(:) + this_temp_offset, & ! Atmospheric T profile
+                  this_temp_profile(:), & ! Atmospheric T profile
                   scn%atm%sh(:), & ! Atmospheric profile humidity
                   scn%atm%grav(:), & ! Gravity per level
                   CS%gas(CS_win%gas_index(j)), & ! CS_gas object for this given gas
@@ -2226,6 +2233,8 @@ contains
                   scn%op%gas_tau_dpsurf(:,:,j), & ! Output: dTau/dPsurf
                   scn%op%gas_tau_dvmr(:,:,:,j), & ! Output: dTau/dVMR
                   success_gas) ! Output: Was the calculation successful?
+
+             deallocate(this_temp_profile)
 
              ! -----------------------------------------
              !
@@ -2727,6 +2736,15 @@ contains
                    end if
                 end do
              end if
+
+             if (allocated(bad_sample_list)) then
+                do i = 1, N_spec
+                   if (bad_sample_list(i + l1b_wl_idx_min - 1, i_fp, band) /= 0) then
+                      noise_work(i) = 10.0d0 * MaxMS(band)
+                   end if
+                end do
+             end if
+
 
           end if
 

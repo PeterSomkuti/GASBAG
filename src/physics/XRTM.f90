@@ -823,7 +823,7 @@ contains
        allocate(PCA_xrtm_solvers_lo(1))
        allocate(PCA_xrtm_solvers_hi(1))
 
-       PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
+       PCA_xrtm_solvers_lo(1) = "SINGLE"
        PCA_xrtm_solvers_hi(1) = "EIG_BVP"
 
        call setup_XRTM( &

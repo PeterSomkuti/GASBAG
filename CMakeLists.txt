@@ -123,7 +123,7 @@ set(CMAKE_CXX_FLAGS "-O2 -ffree-line-length-0")
 
 find_package(BLAS REQUIRED)
 find_package(LAPACK REQUIRED)
-find_package(NETCDF REQUIRED COMPONTENTS Fortran)
+find_package(NETCDF REQUIRED COMPONENTS Fortran)
 find_package(HDF5 REQUIRED COMPONENTS Fortran)
 
 # This is where we put compiled modules

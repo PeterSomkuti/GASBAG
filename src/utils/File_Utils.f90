@@ -39,6 +39,7 @@ module file_utils_mod
 
   ! Interface for reading integer arrays from an HDF file
   interface read_INT_hdf_dataset
+     module procedure read_2D_INT_hdf_dataset
      module procedure read_3D_INT_hdf_dataset
   end interface read_INT_hdf_dataset
 
@@ -162,7 +163,7 @@ contains
 
     integer, dimension(:,:), allocatable :: conv_array
     integer :: conv_fill_value
-    character(len=*), parameter :: fname = "write_2D_DP_hdf_dataset"
+    character(len=*), parameter :: fname = "write_2D_INT_hdf_dataset"
     integer :: hdferr
     integer(hid_t) :: dspace_id, dset_id, dcpl
 
@@ -176,6 +177,30 @@ contains
 
   end subroutine write_2D_INT_hdf_dataset
 
+
+  subroutine read_2D_INT_hdf_dataset(file_id, dset_name, array, dset_dims)
+
+    integer(hid_t), intent(in) :: file_id
+    character(len=*), intent(in) :: dset_name
+    integer, dimension(:,:), allocatable, intent(inout) :: array
+    integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
+
+    integer :: hdferr
+    integer(hid_t) :: dset_id
+    character(len=*), parameter :: fname = "read_2D_INT_dataset"
+
+    if (allocated(array)) deallocate(array)
+
+    call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+    allocate(array(dset_dims(1), dset_dims(2)))
+
+    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
+
+    call h5dread_f(dset_id, H5T_NATIVE_INTEGER, array, dset_dims, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
+  end subroutine read_2D_INT_hdf_dataset
 
   subroutine read_3D_INT_hdf_dataset(file_id, dset_name, array, dset_dims)
 

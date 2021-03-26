@@ -35,6 +35,7 @@ module oco2_mod
      procedure, nopass :: convert_time_string_to_date
 
      procedure, nopass :: read_sounding_ids
+     procedure, nopass :: read_sounding_qual_flag
      procedure, nopass :: read_time_strings
      procedure, nopass :: read_l1b_dispersion
      procedure, nopass :: read_l1b_snr_coef
@@ -437,6 +438,21 @@ contains
 
   end subroutine read_sounding_ids
 
+  subroutine read_sounding_qual_flag(l1b_file_id, sounding_qual_flag)
+
+    implicit none
+
+    integer(hid_t), intent(in) :: l1b_file_id
+    integer, dimension(:,:), allocatable, intent(out) :: sounding_qual_flag
+
+    character(len=*), parameter :: fname = "read_sounding_qual_flag(oco2)"
+    integer(hsize_t), dimension(:), allocatable :: dset_dims
+
+    call read_INT_hdf_dataset(l1b_file_id, "SoundingGeometry/sounding_qual_flag", &
+         sounding_qual_flag, dset_dims)
+
+  end subroutine read_sounding_qual_flag
+
 
   subroutine read_time_strings(l1b_file_id, time_strings)
 
@@ -451,7 +467,6 @@ contains
 
     call h5dopen_f(l1b_file_id, "/FrameHeader/frame_time_string", dset_id, hdferr)
     call check_hdf_error(hdferr, fname, "Error opening: /FrameHeader/frame_time_string")
-
     call get_HDF5_dset_dims(l1b_file_id, "/FrameHeader/frame_time_string", dset_dims)
 
     ! Difficult to figure out which kind of character-type we have in the HDF
@@ -460,6 +475,7 @@ contains
 
     allocate(time_strings(dset_dims(1)))
     call h5dread_f(dset_id, filetype, time_strings, dset_dims, hdferr)
+    !call h5dread_f(dset_id, H5T_NATIVE_CHARACTER, time_strings, dset_dims, hdferr)
     call check_hdf_error(hdferr, fname, "Error reading in: /FrameHeader/frame_time_string")
 
   end subroutine read_time_strings

@@ -67,6 +67,8 @@ module physical_model_mod
   double precision, allocatable :: dispersion(:,:,:)
   !> Sounding IDs (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
   integer(8), allocatable :: sounding_ids(:,:)
+  !> Sounding quality flag
+  integer, allocatable :: sounding_qual_flag(:,:)
   !> Sounding IDs from MET file (integer type 8 to accomodate OCO-2 for now), (footprint, frame)
   integer(8), allocatable :: sounding_ids_met(:,:)
   !> Sounding time strings
@@ -345,6 +347,9 @@ contains
 
        ! Read dispersion coefficients and create dispersion array
        call my_instrument%read_l1b_dispersion(l1b_file_id, dispersion_coefs)
+
+       ! Read sounding quality flags
+       call my_instrument%read_sounding_qual_flag(l1b_file_id, sounding_qual_flag)
 
        ! Grab the number of spectral pixels in this band - we need to grab the largest value
        ! of all bands here. TODO: This will cause problems if we have different number of
@@ -768,6 +773,13 @@ contains
                    retr_count = retr_count + 1
                    cycle
                 end if
+             end if
+
+             if (sounding_qual_flag(i_fp, i_fr) /= 0) then
+                write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
+                     ") skipped due to bad quality flag."
+                call logger%info(fname, trim(tmp_str))
+                cycle
              end if
 
 
@@ -1527,7 +1539,7 @@ contains
 
     call random_seed(put=seed)
     call random_number(random_psurf)
-    met_psurf(i_fp, i_fr) = met_psurf(i_fp, i_fr) + (random_psurf - 0.5d0) * 10000.d0
+    !met_psurf(i_fp, i_fr) = met_psurf(i_fp, i_fr) + (random_psurf - 0.5d0) * 10000.d0
     ! REMOVE ME!!!!!!!
     ! REMOVE ME!!!!!!!
 

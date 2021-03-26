@@ -44,11 +44,15 @@ contains
     integer :: n_lay
 
     do j = 1, SV%num_gas
+
+       n_lay = scn%num_active_levels - 1
+
        do i = SV%s_start(j), SV%s_stop(j) - 1
+
           do l = 1, size(scn%op%wl)
 
              ltau(l, SV%idx_wf_gas(j), 1:n_lay) = &
-                  scn%op%gas_tau(l, 1:n_lay,SV%gas_idx_lookup(j)) / &
+                  scn%op%gas_tau(l, 1:n_lay, SV%gas_idx_lookup(j)) / &
                   SV%svsv(SV%idx_gas(j, 1))
 
              lomega(l, SV%idx_wf_gas(j), 1:n_lay) = &
@@ -823,7 +827,7 @@ contains
        allocate(PCA_xrtm_solvers_lo(1))
        allocate(PCA_xrtm_solvers_hi(1))
 
-       PCA_xrtm_solvers_lo(1) = "SINGLE"
+       PCA_xrtm_solvers_lo(1) = "TWO_STREAM"
        PCA_xrtm_solvers_hi(1) = "EIG_BVP"
 
        call setup_XRTM( &
@@ -898,7 +902,6 @@ contains
        call calculate_XRTM_laerosol_aod_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_laerosol_height_inputs(SV, scn, CS_aerosol, ltau, lomega)
        call calculate_XRTM_lalbedo_inputs(SV, scn, lsurf)
-
 
        call XRTM_monochromatic( &
             xrtm, &
@@ -1153,6 +1156,7 @@ contains
        dI_dgas(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_gas(i))
     end do
 
+
     do i = 1, SV%num_albedo
        dI_dsurf(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_albedo(i))
     end do
@@ -1173,26 +1177,24 @@ contains
        dI_dAHeight(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_aerosol_height(i))
     end do
 
-       
+    ! --------------------------------------------------------------------
+    ! Aerosol jacobians might need to be converted from logspace
+    ! --------------------------------------------------------------------
 
-       ! --------------------------------------------------------------------
-       ! Aerosol jacobians might need to be converted from logspace
-       ! --------------------------------------------------------------------
+    do j=1, SV%num_aerosol_aod
+       ! If this AOD retrieval is in log-space, we need to multiply by
+       ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
+       if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
+          dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
+       end if
+    end do
 
-       do j=1, SV%num_aerosol_aod
-          ! If this AOD retrieval is in log-space, we need to multiply by
-          ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
-          if (CS_win%aerosol_retrieve_aod_log(SV%aerosol_aod_idx_lookup(j))) then
-             dI_dAOD(:,j,:) = dI_dAOD(:,j,:) * exp(SV%svsv(SV%idx_aerosol_aod(j)))
-          end if
-       end do
-
-       ! Store aerosol layer height Jacobians
-       do j=1, SV%num_aerosol_height
-          if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
-             dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) !* exp(SV%svsv(SV%idx_aerosol_height(j)))
-          end if
-       end do
+    ! Store aerosol layer height Jacobians
+    do j=1, SV%num_aerosol_height
+       if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
+          dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) !* exp(SV%svsv(SV%idx_aerosol_height(j)))
+       end if
+    end do
 
 
 

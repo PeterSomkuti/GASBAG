@@ -686,7 +686,7 @@ contains
        lon, lat, altitude, rel_vel, rel_solar_vel)
 
     implicit none
-    
+
     integer(hid_t), intent(in) :: l1b_file_id
     integer, intent(in) :: band
     integer, intent(in) :: N_fp

@@ -226,10 +226,14 @@ module control_mod
      type(string) :: l1b_filename
      !> Path to MET file
      type(string) :: met_filename
+     !> Path to Prior file
+     type(string) :: prior_filename
      !> L1B HDF file ID
      integer(hid_t) :: l1b_file_id
      !> MET HDF file ID
      integer(hid_t) :: met_file_id
+     !> Prior HDF file ID
+     integer(hid_t) :: prior_file_id
      !> Name of the instrument
      type(string) :: instrument_name
      !> Whether to preload spectra or not
@@ -421,7 +425,7 @@ contains
     else
        CS%general%loglevel = 10
     end if
-    
+
     ! ----------------------------------------------------------------------
     ! Check which algoirthms the user wants
     ! First make sure that the config file does not have more than the
@@ -581,6 +585,9 @@ contains
 
     end if
 
+    call fini_extract(fini, 'input', 'prior_file', .false., fini_char)
+    fini_string = fini_char
+    CS%input%prior_filename = trim(fini_char)
 
     ! ----------------------------------------------------------------------
 
@@ -1038,7 +1045,7 @@ contains
 
              deallocate(fini_string_array)
           end if
-          
+
 
           call fini_extract(fini, win_str, 'atmosphere', .false., fini_char)
           CS%window(window_nr)%atmosphere_file = trim(fini_char)

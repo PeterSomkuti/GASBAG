@@ -118,6 +118,8 @@ module physical_model_mod
   double precision, allocatable :: met_SH_profiles(:,:,:)
   !> MET data surface pressure (footprint, frame)
   double precision, allocatable :: met_psurf(:,:)
+  !> PRIOR gas profiles (level, gas, footprint, frame)
+  double precision, allocatable :: prior_gas_profiles(:,:,:,:)
 
   ! The initial atmosphere provided by the config file, this is the basis
   ! for all scene-dependent atmospheres. The pressure levels of initial_atm
@@ -216,7 +218,7 @@ contains
     type(CS_t), intent(inout) :: CS
 
     ! HDF5 file handlers for the L1b file and the MET file
-    integer(hid_t) :: l1b_file_id, met_file_id, output_file_id
+    integer(hid_t) :: l1b_file_id, met_file_id, prior_file_id, output_file_id
     ! Variable to hold group ID
     integer(hid_t) :: result_gid
     ! Does a spike/bad_sample data field exist?
@@ -263,6 +265,16 @@ contains
        met_file_id = CS%input%met_file_id
     else
        call logger%debug(fname, "Not loading MET data.")
+    end if
+
+    ! If a profile file is supplied, open it up
+    if (CS%input%prior_filename /= "") then
+       call h5fopen_f(CS%input%prior_filename%chars(), &
+            H5F_ACC_RDONLY_F, CS%input%prior_file_id, hdferr)
+       call check_hdf_error(hdferr, fname, "Error opening prior file: " &
+            // trim(CS%input%prior_filename%chars()))
+       ! Store HDF file handler for more convenient access
+       prior_file_id = CS%input%prior_file_id
     end if
 
     ! Store HDF file handler for more convenient access
@@ -365,8 +377,8 @@ contains
 
        do band=1, num_band
           do i_fp=1, num_fp
-             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp,&
-                  & band), dispersion(:, i_fp, band), band, i_fp)
+             call my_instrument%calculate_dispersion(dispersion_coefs(:, i_fp, &
+                  band), dispersion(:, i_fp, band), band, i_fp)
           end do
        end do
 
@@ -421,7 +433,7 @@ contains
        call MCS_find_aerosols(CS%window, CS%aerosol, i_win)
 
        ! We also check what type of gas priors the user wants to have
-       call MCS_find_gas_priors(CS%window, CS%gas, i_win)
+       !call MCS_find_gas_priors(CS%window, CS%gas, i_win)
 
        ! If available, we can try to open up a GASBAG prior file
        if (CS%window(i_win)%GASBAG_prior_file /= "") then
@@ -429,7 +441,7 @@ contains
 
           call h5fopen_f(CS%window(i_win)%GASBAG_prior_file%chars(), H5F_ACC_RDONLY_F, &
                CS%window(i_win)%GASBAG_prior_id, hdferr)
-          call check_hdf_error(hdferr, fname, "Error opening GASBAG prior  HDF file: " &
+          call check_hdf_error(hdferr, fname, "Error opening GASBAG prior HDF file: " &
                // trim(CS%window(i_win)%GASBAG_prior_file%chars()))
        end if
 
@@ -464,16 +476,38 @@ contains
           ! generate a new pressure grid, based on e.g. tropopause, topography, or
           ! something else physically sensible.
 
-          call logger%debug(fname, "Looking into atmosphere file.")
-          call read_atmosphere_file(&
-               CS%window(i_win)%atmosphere_file%chars(), &
-               CS%window(i_win)%gases, &
-               initial_atm)
-
           ! TODO
           ! Add in an option that would read the atmosphere
           ! from an OCO-type prior file from J. Laughner's TCCON
           ! tools.
+
+
+          ! If a prior file is supplied, the "read_atmosphere portion should be overridden.
+          if (CS%input%prior_filename == "") then
+
+             call logger%debug(fname, "Looking into atmosphere file.")
+             call read_atmosphere_file(&
+                  CS%window(i_win)%atmosphere_file%chars(), &
+                  CS%window(i_win)%gases, &
+                  initial_atm)
+
+          else
+
+             call logger%debug(fname, "Reading L2Cpr prior atmosphere")
+
+             ! Here, the "atm" object is being allocated, and gas prior profiles are
+             ! loaded into memory (prior_gas_profiles). Since pressure profiles are
+             ! different for ALL scenes, we do not actually put gas profile values
+             ! into the atmosphere object, but that will be done inside the
+             ! forward model subroutine.
+
+             call read_L2CPr_file(&
+                  CS%input%prior_file_id, &
+                  prior_gas_profiles, &
+                  CS%window(i_win)%gases, &
+                  initial_atm)
+
+          end if
 
        end if
 
@@ -732,7 +766,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       frame_start = 3225
+       !frame_start = 1
        !frame_stop = 50
 
        ! For OpenMP, we set some private and shared variables, as well as set the
@@ -746,7 +780,7 @@ contains
        retr_count = 0
        total_number_todo = num_frames * num_fp
 
-       !$OMP PARALLEL DO SHARED(retr_count, total_number_todo) &
+       !$OMP PARALLEL DO COLLAPSE(2) SHARED(retr_count, total_number_todo) &
        !$OMP SCHEDULE(dynamic) &
        !$OMP PRIVATE(i_fp, i_fr, &
        !$OMP         cpu_time_start, cpu_time_stop, &
@@ -767,18 +801,19 @@ contains
                      (land_fraction(i_fp, i_fr) < &
                      CS%window(i_win)%minimum_land_fraction) &
                      ) then
-                   write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
-                        ") skipped due to land fraction constraint."
-                   call logger%info(fname, trim(tmp_str))
+                   !write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
+                   !     ") skipped due to land fraction constraint."
+                   !call logger%info(fname, trim(tmp_str))
                    retr_count = retr_count + 1
                    cycle
                 end if
              end if
 
              if (sounding_qual_flag(i_fp, i_fr) /= 0) then
-                write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
-                     ") skipped due to bad quality flag."
-                call logger%info(fname, trim(tmp_str))
+                !write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
+                !     ") skipped due to bad quality flag."
+                !call logger%info(fname, trim(tmp_str))
+                retr_count = retr_count + 1
                 cycle
              end if
 
@@ -867,6 +902,9 @@ contains
        if (allocated(bad_sample_list)) deallocate(bad_sample_list)
        if (allocated(spike_list)) deallocate(spike_list)
        if (allocated(stokes_coef)) deallocate(stokes_coef)
+
+       ! If prior gas profiles were loaded, deallocate them here
+       if (allocated(prior_gas_profiles)) deallocate(prior_gas_profiles)
 
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
@@ -1801,6 +1839,24 @@ contains
        if (CS_win%num_gases > 0) then
 
           scn%atm = initial_atm
+
+          ! An atmosphere is only required if there are gases present in the
+          ! microwindow.
+          scn%atm%psurf = met_psurf(i_fp, i_fr)
+
+          if (CS%input%prior_filename /= "") then
+
+             ! We have to re-sample the full L2CPr atmosphere structure
+             ! in order to use a different pressure grid. Due to the way
+             ! how GASBAG is set up, we can really only do it here when
+             ! the actual values of tropopause pressure and surface
+             ! pressure are available.
+
+             call rearrange_atmosphere_with_scheme(scn%atm, ptropo, &
+                  met_P_levels(:, i_fp, i_fr), prior_gas_profiles(:, :, i_fp, i_fr))
+
+          end if
+
           scn%atm%ndry(:) = 0.0d0
 
           ! Keep some useful values in the scene object, so we don't
@@ -1823,9 +1879,6 @@ contains
        scn%num_active_levels = -1
 
        if (CS_win%num_gases > 0) then
-          ! An atmosphere is only required if there are gases present in the
-          ! microwindow.
-          scn%atm%psurf = met_psurf(i_fp, i_fr)
 
           ! After we've taken a copy of the initial atmosphere,
           ! we might want to replace some of the prior gases with
@@ -1846,25 +1899,64 @@ contains
              return
           end if
 
-          ! And get the T and SH MET profiles onto our new atmosphere grid. We are
-          ! sampling it on a log(p) grid.
-          call logger%debug(fname, "Resampling MET profiles.")
+          if (CS%input%prior_filename == "") then
+             ! And get the T and SH MET profiles onto our new atmosphere grid. We are
+             ! sampling it on a log(p) grid.
+             call logger%debug(fname, "Resampling MET profiles.")
 
-          call pwl_value_1d_v2( &
-               size(met_P_levels, 1), &
-               log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
-               size(scn%atm%p), &
-               log(scn%atm%p), scn%atm%T)
+             call pwl_value_1d_v2( &
+                  size(met_P_levels, 1), &
+                  log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
+                  size(scn%atm%p), &
+                  log(scn%atm%p), scn%atm%T)
 
-          call pwl_value_1d_v2( &
-               size(met_P_levels, 1), &
-               log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
-               size(scn%atm%p), &
-               log(scn%atm%p), scn%atm%sh)
+             call pwl_value_1d_v2( &
+                  size(met_P_levels, 1), &
+                  log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
+                  size(scn%atm%p), &
+                  log(scn%atm%p), scn%atm%sh)
+
+          else
+
+             call pwl_value_1d_v2( &
+                  size(met_P_levels, 1), &
+                  log(met_P_levels(:,i_fp,i_fr)), met_T_profiles(:,i_fp,i_fr), &
+                  size(scn%atm%p), &
+                  log(scn%atm%p), scn%atm%T)
+
+             call pwl_value_1d_v2( &
+                  size(met_P_levels, 1), &
+                  log(met_P_levels(:,i_fp,i_fr)), met_SH_profiles(:,i_fp,i_fr), &
+                  size(scn%atm%p), &
+                  log(scn%atm%p), scn%atm%sh)
+
+             ! For now - take the full MET profile
+             !scn%atm%p(:) = met_P_levels(:,i_fp,i_fr)
+             !scn%atm%T(:) = met_T_profiles(:,i_fp,i_fr)
+             !scn%atm%sh(:) = met_SH_profiles(:,i_fp,i_fr)
+             scn%atm%psurf = met_psurf(i_fp,i_fr)
+
+             do i = 1, scn%atm%num_gases
+
+                scn%atm%gas_index(i) = i
+                scn%atm%gas_names(i) = CS%window(i_win)%gases(i)
+
+                !if (CS%window(i_win)%gases(i)%lower() == "h2o") then
+                !   ! Pass
+                !else
+                !   scn%atm%gas_vmr(:, i) = prior_gas_profiles(:,i,i_fp,i_fr)
+                !end if
+
+             end do
+
+             scn%atm%p(num_levels) = scn%atm%psurf + 10.0d0
+
+          end if
 
           ! Obtain the number of active levels.
           call calculate_active_levels(scn)
           num_active_levels = scn%num_active_levels
+
 
           ! Should SH drop below 0 for whatever reason, shift it back
           ! some tiny value.
@@ -1880,7 +1972,7 @@ contains
 
           do i=1, CS_win%num_gases
 
-             if (CS_win%gases(i) == "H2O") then
+             if (CS_win%gases(i)%lower() == "h2o") then
                 ! If H2O needs to be retrieved, take it from the MET atmosphere
                 ! specific humidty directly, rather than the H2O column of the
                 ! atmosphere text file.
@@ -2973,14 +3065,11 @@ contains
              return
           end if
 
-          ! This here updates the AP essentially, so the next step launches from the
-          ! last iteration's result. This is contrary as CF's IMAP, which has the
-          ! difference between this SV and the first guess / prior
           tmp_v2 = matmul(matmul(matmul(tmp_m2, transpose(K)), Se_inv), &
-               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - old_sv))
+               radiance_meas_work - radiance_calc_work + matmul(K, SV%svsv - SV%svap))
 
           ! Update state vector
-          SV%svsv = old_sv + tmp_v2
+          SV%svsv = SV%svap + tmp_v2
 
        else if (CS_win%inverse_method%lower() == "lm") then
           ! Levenberg-Marquardt extension to Gauss-Newton
@@ -3462,6 +3551,13 @@ contains
              call logger%debug(fname, trim(tmp_str))
           end do
 
+          do i=1, CS_win%num_gases
+
+             write(tmp_str, '(A,A,A,ES15.6)') "X", CS%gas(CS_win%gas_index(i))%name%chars(), ": ", results%xgas(i_fp,i_fr,i)
+             call logger%debug(fname, trim(tmp_str))
+
+          end do
+
           call logger%debug(fname, "---------------------------------")
 
           write(tmp_str, '(A, ES15.5)') "Residual RMS: ", sqrt(mean((radiance_meas_work - radiance_calc_work)**2))
@@ -3502,6 +3598,7 @@ contains
           ! Halt the execution here and wait for user keypress
           call logger%debug(fname, "-----------------------------------")
           call logger%debug(fname, "Press ENTER to continue")
+
           read(*,*)
 
        end if

@@ -334,6 +334,236 @@ contains
   end subroutine calculate_active_levels
 
 
+  subroutine calculate_UoL_pressure_grid(ptropo, psurf,  Ntotal, p)
+
+    double precision, intent(in) :: ptropo
+    double precision, intent(in) :: psurf
+    integer, intent(in) :: Ntotal
+    double precision, allocatable, intent(inout) :: p(:)
+
+    character(len=*), parameter :: fname = "calculate_UoL_pressure_grid"
+
+    integer :: i
+
+    if (Ntotal < 8) then
+       call logger%error(fname, "Need at least 8 levels in this scheme!")
+       stop 1
+    end if
+
+    ! Allocate the pressure grid
+    allocate(p(Ntotal))
+    p(:) = 0.0d0
+
+    p(1) = 10.0d0
+    p(2) = 100.0d0
+    p(3) = 1000.0d0
+    p(4) = 5000.0d0
+    p(5) = 8000.0d0
+
+
+    ! Set level 6 between 8000 Pa and tropopause,
+    ! but only if the tropopause pressure is > 8000.0.
+    if (ptropo <= 8000.0) then
+       p(6) = 11500.0d0
+       p(7) = 15000.0d0
+    else
+       p(6) = (ptropo - 8000.0) / 2.0 + 8000.0
+       p(7) = ptropo
+    end if
+
+
+    ! Scale linearly down from tropopause to surface
+    do i = 1, Ntotal - 7
+
+       p(7+i) = p(7) + (psurf - p(7)) / (Ntotal - 7) * i
+
+    end do
+
+
+  end subroutine calculate_UoL_pressure_grid
+
+
+  subroutine read_L2CPr_file(file_id, prior_gas_profiles, gas_strings, atm)
+
+    implicit none
+    integer(hid_t), intent(in) :: file_id
+    double precision, allocatable, intent(inout) :: prior_gas_profiles(:,:,:,:)
+    type(string), intent(in) :: gas_strings(:)
+    type(atmosphere), intent(inout) :: atm
+
+    ! Function name
+    character(len=*), parameter :: fname = "read_L2CPr_file"
+    character(len=99) :: gas_lower
+    type(string) :: tmp_gas
+    character(len=99) :: tmp_str
+    integer :: num_gases
+    integer :: num_levels
+    logical :: result_exists
+    integer(8), allocatable :: dset_dims(:)
+    double precision, allocatable :: tmp_array(:,:,:)
+    integer :: hdferr
+    integer :: i
+
+    ! If the atmosphere structure was already allocated, deallocate it first
+    if (allocated(atm%p)) deallocate(atm%p)
+    if (allocated(atm%T)) deallocate(atm%T)
+    if (allocated(atm%sh)) deallocate(atm%sh)
+    if (allocated(atm%sh_layers)) deallocate(atm%sh_layers)
+    if (allocated(atm%gas_names)) deallocate(atm%gas_names)
+    if (allocated(atm%gas_index)) deallocate(atm%gas_index)
+    if (allocated(atm%gas_vmr)) deallocate(atm%gas_vmr)
+    if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
+    if (allocated(atm%altitude_layers)) deallocate(atm%altitude_layers)
+    if (allocated(atm%grav)) deallocate(atm%grav)
+    if (allocated(atm%grav_layers)) deallocate(atm%grav_layers)
+    if (allocated(atm%ndry)) deallocate(atm%ndry)
+
+
+    num_gases = size(gas_strings)
+    num_levels = 0
+
+    do i = 1, size(gas_strings)
+       if (gas_strings(i)%lower() == "h2o") then
+          cycle
+       else
+          tmp_gas = gas_strings(i)%lower()
+          write(tmp_str, '(A,A,A,A,A)') "/", gas_strings(i)%chars(), "Prior/", tmp_gas%chars(), "_prior_profile_cpr"
+          call get_HDF5_dset_dims(file_id, trim(tmp_str), dset_dims)
+          num_levels = dset_dims(1) ! Store number of levels
+          exit
+       end if
+    end do
+
+    allocate(atm%T(num_levels))
+    allocate(atm%p(num_levels))
+    allocate(atm%sh(num_levels))
+    allocate(atm%sh_layers(num_levels - 1))
+    allocate(atm%gas_names(num_gases))
+    allocate(atm%gas_vmr(num_levels, num_gases))
+    allocate(atm%gas_index(num_gases))
+    allocate(atm%altitude_levels(num_levels))
+    allocate(atm%altitude_layers(num_levels - 1))
+    allocate(atm%grav(num_levels))
+    allocate(atm%grav_layers(num_levels - 1))
+    allocate(atm%ndry(num_levels))
+
+    ! levels, gas, footprint, frame
+    allocate(prior_gas_profiles(dset_dims(1), num_gases, dset_dims(2), dset_dims(3)))
+    deallocate(dset_dims)
+
+    do i = 1, size(gas_strings)
+
+       atm%gas_names(i) = gas_strings(i)
+
+       ! "gas_index" matches the column of the gas_vmr array to the gas/spectroscopy
+       ! number in the config file. Here, the matching is easy (compared to the
+       ! atmopshere text file), since we are looping over "gas_strings" which is
+       ! already the order of gas objects.
+       ! atm%gas_index(1) = 2 would mean that the gas corresponding to [gas-1] is
+       ! stored in column 2 of the prior_gas_profiles(:,2,:,:) array, or
+       ! gas_vmr(:,2) etc.
+       ! The way we are reading this in, however,  means that it will always be
+       ! matching exactly to the order of [gas-X] sections in the config..
+       atm%gas_index(i) = i
+
+       if (gas_strings(i)%lower() == "h2o") then
+          call logger%debug(fname, "Skipping water vapor (will be taken from MET).")
+          cycle
+       end if
+
+       call logger%debug(fname, "Loading prior profiles for gas: " // gas_strings(i)%chars())
+
+       tmp_gas = gas_strings(i)%lower()
+       write(tmp_str, '(A,A,A,A,A)') "/", gas_strings(i)%chars(), "Prior/", tmp_gas%chars(), "_prior_profile_cpr"
+       call h5lexists_f(file_id, trim(tmp_str), result_exists, hdferr)
+
+       call read_DP_hdf_dataset(file_id, trim(tmp_str), tmp_array, dset_dims)
+       prior_gas_profiles(:, i, :, :) = tmp_array(:,:,:)
+       deallocate(tmp_array)
+       deallocate(dset_dims)
+
+    end do
+
+    atm%num_levels = num_levels
+    atm%num_gases = num_gases
+
+  end subroutine read_L2CPr_file
+
+
+  subroutine rearrange_atmosphere_with_scheme(atm, ptropo, plevels, vmr_profiles)
+    type(atmosphere), intent(inout) :: atm
+    double precision, intent(in) :: ptropo
+    double precision, intent(in) :: plevels(:)
+    double precision, intent(in) :: vmr_profiles(:,:)
+
+    integer :: num_levels, num_gases
+    double precision, allocatable :: tmp_vmr(:,:)
+    double precision, allocatable :: old_p(:)
+    integer :: i, j
+
+    num_gases = size(atm%gas_names)
+    num_levels = 20
+    atm%num_levels = num_levels
+
+    allocate(tmp_vmr(num_levels, num_gases))
+    tmp_vmr(:,:) = 0.0d0
+
+    ! Step #2
+    ! Create a new pressure grid according to some scheme
+    deallocate(atm%p)
+    call calculate_UoL_pressure_grid( &
+         ptropo, &
+         atm%psurf, &
+         num_levels, &
+         atm%p &
+         )
+
+    ! Step #3
+    ! Deallocate all the non gas-vmr objects (those are filled in later)
+    if (allocated(atm%T)) deallocate(atm%T)
+    if (allocated(atm%sh)) deallocate(atm%sh)
+    if (allocated(atm%sh_layers)) deallocate(atm%sh_layers)
+    if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
+    if (allocated(atm%altitude_layers)) deallocate(atm%altitude_layers)
+    if (allocated(atm%grav)) deallocate(atm%grav)
+    if (allocated(atm%grav_layers)) deallocate(atm%grav_layers)
+    if (allocated(atm%ndry)) deallocate(atm%ndry)
+
+    ! Step #4
+    ! Re-allocate with the new number of levels
+    allocate(atm%T(num_levels))
+    allocate(atm%sh(num_levels))
+    allocate(atm%sh_layers(num_levels - 1))
+    allocate(atm%altitude_levels(num_levels))
+    allocate(atm%altitude_layers(num_levels - 1))
+    allocate(atm%grav(num_levels))
+    allocate(atm%grav_layers(num_levels - 1))
+    allocate(atm%ndry(num_levels))
+
+    ! Step #5
+    ! Resample all gas VMRs to new pressure grid
+    do i = 1, num_gases
+
+       if (atm%gas_names(i)%lower() == "h2o") cycle
+
+       call pwl_value_1d_v2( &
+            size(plevels), &
+            log(plevels), vmr_profiles(:, i), &
+            size(atm%p), &
+            log(atm%p), tmp_vmr(:, i))
+
+    end do
+
+    ! Step #6
+    ! Get rid of old vmr array and supply new one
+
+    deallocate(atm%gas_vmr)
+    allocate(atm%gas_vmr(num_levels, num_gases))
+    atm%gas_vmr(:,:) = tmp_vmr(:,:)
+
+
+  end subroutine rearrange_atmosphere_with_scheme
+
 
   !> @brief Reads in the atmosphere file, which contains column-based profiles.
   !>

@@ -354,6 +354,11 @@ contains
           return
        end if
 
+       if (m == 0) then
+          idx = 1
+          return
+       end if
+
        if ((x(m) <= val) .and. (x(m+1) >= val)) then
           ! Found!
           idx = m

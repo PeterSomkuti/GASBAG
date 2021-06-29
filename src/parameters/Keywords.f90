@@ -96,6 +96,8 @@ contains
     valid_options(4,2) = "met_file"
     ! Preload L1B spectra?
     valid_options(4,3) = "preload_spectra"
+    ! L2 Prior file (L2CPr type format)
+    valid_options(4,4) = "prior_file"
 
     ! Output file options
     valid_sections(5)  = "output"

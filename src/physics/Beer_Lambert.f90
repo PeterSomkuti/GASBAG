@@ -189,6 +189,8 @@ contains
       double precision, allocatable :: AK_profile(:,:), AK_profile_total(:)
       double precision, allocatable :: tmp_v1(:), tmp_v2(:)
 
+      integer :: idx1, idx2
+
       N_gas = size(scn%op%gas_tau, 3)
 
       allocate(dI_dVMR(size(TOA_radiance)))
@@ -248,9 +250,12 @@ contains
          do i_SV=1, SV%num_gas
             if (i_gas /= SV%gas_idx_lookup(i_SV)) cycle
 
-            prior_VMR(idx_start(i_SV):idx_stop(i_SV)) = prior_VMR(idx_start(i_SV):idx_stop(i_SV)) &
+            idx1 = max(idx_start(i_SV), 1)
+            idx2 = min(idx_stop(i_SV), num_active_levels)
+
+            prior_VMR(idx1:idx2) = prior_VMR(idx1:idx2) &
                  * SV%svap(SV%idx_gas(i_SV, 1))
-            this_VMR(idx_start(i_SV):idx_stop(i_SV)) = this_VMR(idx_start(i_SV):idx_stop(i_SV)) &
+            this_VMR(idx1:idx2) = this_VMR(idx1:idx2) &
                  * SV%svsv(SV%idx_gas(i_SV, 1))
          end do
 
@@ -258,8 +263,11 @@ contains
          do i_SV=1, SV%num_gas
             if (i_gas /= SV%gas_idx_lookup(i_SV)) cycle
 
+            idx1 = max(idx_start(i_SV), 1)
+            idx2 = min(idx_stop(i_SV), num_active_levels)
+
             s_bar(:) = 0.0d0
-            s_bar(idx_start(i_SV):idx_stop(i_SV)) = 1.0d0
+            s_bar(idx1:idx2) = 1.0d0
 
             tmp_v2(:) = 0.0d0
             do i=1, num_active_levels

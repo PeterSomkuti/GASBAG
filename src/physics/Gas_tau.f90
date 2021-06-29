@@ -616,9 +616,6 @@ contains
           ! Non-pre-gridded spectroscopy has to be sampled at the requested
           ! wavelengths first.
 
-          wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
-               (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
-
           if (wl_left_idx(i) == -1) then
              CS_value(i) = 0.0d0
              cycle
@@ -626,6 +623,10 @@ contains
 
           idx_l_wl = wl_left_idx(i)
           idx_r_wl = idx_l_wl + 1
+
+
+          wl_d = (wl(i) - gas%wavelength(idx_l_wl)) / &
+               (gas%wavelength(idx_r_wl) - gas%wavelength(idx_l_wl))
 
           ! Start interpolating along wavelength, meaning that C3 = C3(h2o, temperature, pressure)
           C3(0,0,0) = gas%cross_section(idx_l_wl, idx_l_H2O, idx_ll_T, idx_l_p) * (1.0d0 - wl_d) &

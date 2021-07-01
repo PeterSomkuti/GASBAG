@@ -8,7 +8,7 @@ module oco2_mod
   ! Modules
   use instruments_mod, only: generic_instrument
   use file_utils_mod, only: get_HDF5_dset_dims, check_hdf_error, &
-       read_DP_hdf_dataset, read_INT_hdf_dataset
+       read_DP_hdf_dataset, read_SP_hdf_dataset, read_INT_hdf_dataset
   use control_mod, only: CS_general_t
 
   ! Third-party modules
@@ -667,15 +667,16 @@ contains
     implicit none
 
     integer(hid_t), intent(in) :: l1b_file_id
-    double precision, allocatable, intent(inout) :: ils_delta_lambda(:,:,:,:)
-    double precision, allocatable, intent(inout) :: ils_relative_response(:,:,:,:)
+    real, allocatable, intent(inout) :: ils_delta_lambda(:,:,:,:)
+    real, allocatable, intent(inout) :: ils_relative_response(:,:,:,:)
 
     character(len=*), parameter :: fname = "read_ils_data(oco2)"
     integer(hsize_t), dimension(:), allocatable :: dset_dims
 
-    call read_DP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_delta_lambda", &
+    call read_SP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_delta_lambda", &
          ils_delta_lambda, dset_dims)
-    call read_DP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_relative_response", &
+
+    call read_SP_hdf_dataset(l1b_file_id, "InstrumentHeader/ils_relative_response", &
          ils_relative_response, dset_dims)
 
   end subroutine read_ils_data

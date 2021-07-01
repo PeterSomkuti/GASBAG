@@ -112,8 +112,8 @@ contains
     integer, intent(in) :: i_win
     integer, intent(in) :: i_fp
     integer, intent(in) :: N_spec
-    double precision, intent(in) :: ILS_delta_lambda(:,:)
-    double precision, intent(in) :: ILS_relative_response(:,:,:,:)
+    real, intent(in) :: ILS_delta_lambda(:,:)
+    real, intent(in) :: ILS_relative_response(:,:,:,:)
     integer, intent(in) :: l1b_wl_idx_min
     integer, intent(in) :: l1b_wl_idx_max
     double precision, intent(in) :: instrument_doppler
@@ -192,8 +192,8 @@ contains
     integer, intent(in) :: i_win
     integer, intent(in) :: i_fp
     integer, intent(in) :: N_spec
-    double precision, intent(in) :: ILS_delta_lambda(:,:)
-    double precision, intent(in) :: ILS_relative_response(:,:)
+    real, intent(in) :: ILS_delta_lambda(:,:)
+    real, intent(in) :: ILS_relative_response(:,:)
     double precision, intent(in) :: ILS_stretch(:)
     double precision, intent(in) :: this_dispersion(:)
     integer, intent(in) :: l1b_wl_idx_min
@@ -206,15 +206,15 @@ contains
 
     ! Function name for logging
     character(len=99), parameter :: fname = "calculate_ILS_stretch_jacobian"
-    double precision, allocatable :: ILS_delta_lambda_pert(:,:)
-    double precision, allocatable :: ILS_stretch_pert(:)
+    real, allocatable :: ILS_delta_lambda_pert(:,:)
+    real, allocatable :: ILS_stretch_pert(:)
     double precision, allocatable :: radiance_tmp_work(:)
     logical :: ILS_success
 
     integer :: i, l
 
     allocate(ILS_delta_lambda_pert, mold=ILS_delta_lambda)
-    allocate(ILS_stretch_pert, mold=ILS_stretch)
+    allocate(ILS_stretch_pert(size(ILS_stretch, 1)))
     allocate(radiance_tmp_work, mold=radiance_calc_work)
 
     ILS_stretch_pert(:) = 0.0d0

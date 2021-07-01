@@ -120,6 +120,8 @@ module physical_model_mod
   double precision, allocatable :: met_psurf(:,:)
   !> PRIOR gas profiles (level, gas, footprint, frame)
   double precision, allocatable :: prior_gas_profiles(:,:,:,:)
+  !> PRIOR gas profile pressure levels (level, footprint, frame)
+  double precision, allocatable :: prior_gas_profiles_pressures(:,:,:)
 
   ! The initial atmosphere provided by the config file, this is the basis
   ! for all scene-dependent atmospheres. The pressure levels of initial_atm
@@ -504,6 +506,7 @@ contains
              call read_L2CPr_file(&
                   CS%input%prior_file_id, &
                   prior_gas_profiles, &
+                  prior_gas_profiles_pressures, &
                   CS%window(i_win)%gases, &
                   initial_atm)
 
@@ -905,6 +908,7 @@ contains
 
        ! If prior gas profiles were loaded, deallocate them here
        if (allocated(prior_gas_profiles)) deallocate(prior_gas_profiles)
+       if (allocated(prior_gas_profiles_pressures)) deallocate(prior_gas_profiles_pressures)
 
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
@@ -1852,8 +1856,12 @@ contains
              ! the actual values of tropopause pressure and surface
              ! pressure are available.
 
-             call rearrange_atmosphere_with_scheme(scn%atm, ptropo, &
-                  met_P_levels(:, i_fp, i_fr), prior_gas_profiles(:, :, i_fp, i_fr))
+             call rearrange_atmosphere_with_scheme( &
+                  scn%atm, &
+                  ptropo, &
+                  prior_gas_profiles_pressures(:, i_fp, i_fr), &
+                  prior_gas_profiles(:, :, i_fp, i_fr) &
+                  )
 
           end if
 

@@ -383,11 +383,12 @@ contains
   end subroutine calculate_UoL_pressure_grid
 
 
-  subroutine read_L2CPr_file(file_id, prior_gas_profiles, gas_strings, atm)
+  subroutine read_L2CPr_file(file_id, prior_gas_profiles, prior_gas_profiles_pressures, gas_strings, atm)
 
     implicit none
     integer(hid_t), intent(in) :: file_id
     double precision, allocatable, intent(inout) :: prior_gas_profiles(:,:,:,:)
+    double precision, allocatable, intent(inout) :: prior_gas_profiles_pressures(:,:,:)
     type(string), intent(in) :: gas_strings(:)
     type(atmosphere), intent(inout) :: atm
 
@@ -449,6 +450,11 @@ contains
 
     ! levels, gas, footprint, frame
     allocate(prior_gas_profiles(dset_dims(1), num_gases, dset_dims(2), dset_dims(3)))
+    allocate(prior_gas_profiles_pressures(dset_dims(1), dset_dims(2), dset_dims(3)))
+
+    ! Read in the L2CPr pressure levels (can be different from MET data?)
+    call read_DP_hdf_dataset(file_id, "/Meteorology/vector_pressure_levels_met", &
+         prior_gas_profiles_pressures, dset_dims)
     deallocate(dset_dims)
 
     do i = 1, size(gas_strings)

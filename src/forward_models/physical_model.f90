@@ -93,9 +93,9 @@ module physical_model_mod
   double precision, allocatable :: relative_solar_velocity(:,:)
 
   !> ILS spectral dimension (delta wavelength, um), shape: (wl, pixel, footprint, band)
-  double precision, allocatable :: ils_delta_lambda(:,:,:,:)
+  real, allocatable :: ils_delta_lambda(:,:,:,:)
   !> ILS amplitude, shape: (wl, pixel, footprint, band)
-  double precision, allocatable :: ils_relative_response(:,:,:,:)
+  real, allocatable :: ils_relative_response(:,:,:,:)
 
   !> L1B dispersion coefficients (pixel, footprint, band)
   double precision, allocatable :: dispersion_coefs(:,:,:)
@@ -770,6 +770,7 @@ contains
 
 
        !frame_start = 1359
+       !frame_start = 3225
        !frame_stop = 50
 
        ! For OpenMP, we set some private and shared variables, as well as set the
@@ -1155,7 +1156,7 @@ contains
 
     ! ILS stuff
     double precision, allocatable :: this_ILS_stretch(:)
-    double precision, allocatable :: this_ILS_delta_lambda(:,:)
+    real, allocatable :: this_ILS_delta_lambda(:,:)
 
     ! The SV from last iteration, as well as last successful (non-divergent) iteration
     ! shape (N_sv)

@@ -115,7 +115,7 @@ contains
 
       scale_jacobian(:) = solar_radiance_unscaled(:) * &
            ((scn%op%wl(:) - scn%op%wl(center_pixel)) ** dble(scale_coeff-1))
-      
+
     end subroutine calculate_BL_solar_irrad_scale_jacobian
 
     !> @brief Gas sub-column Jacobian for BL-type RT
@@ -164,8 +164,8 @@ contains
       type(scene), intent(in) :: scn
       type(statevector), intent(in) :: SV
       double precision, intent(in) :: gain_matrix(:,:)
-      double precision, intent(in) :: ILS_delta_lambda(:,:)
-      double precision, intent(in) :: ILS_relative_response(:,:)
+      real, intent(in) :: ILS_delta_lambda(:,:)
+      real, intent(in) :: ILS_relative_response(:,:)
       double precision, intent(in) :: dispersion(:)
       double precision, intent(in) :: psurf
       integer, intent(in) :: num_active_levels

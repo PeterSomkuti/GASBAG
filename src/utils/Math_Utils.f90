@@ -409,9 +409,13 @@ contains
     ! ILS. wl_output is the DESIRED output wavelength grid
 
     ! High-resolution bits
-    double precision, contiguous, intent(in) :: wl_input(:), input(:)
+    double precision, contiguous, intent(in) :: wl_input(:)
+    double precision, contiguous, intent(in) :: input(:)
+
     ! "Convolution" wavelengths and kernels
-    double precision, contiguous, intent(in) :: wl_kernels(:,:), kernels(:,:)
+    real, contiguous, intent(in) :: wl_kernels(:,:)
+    real, contiguous, intent(in) :: kernels(:,:)
+
     double precision, contiguous, intent(in) :: wl_output(:)
     double precision, contiguous, intent(inout) :: output(:)
     logical, intent(out) :: success
@@ -428,7 +432,9 @@ contains
     integer :: idx_hires_ILS_min
     integer :: idx_hires_ILS_max
 
-    double precision, allocatable :: wl_kernels_absolute(:,:)
+    double precision, allocatable :: tmp1(:), tmp2(:)
+
+    real, allocatable :: wl_kernels_absolute(:,:)
     double precision, allocatable :: ILS_upsampled(:)
 
     double precision :: cpu_start, cpu_stop
@@ -483,14 +489,17 @@ contains
     ! make sure that you only pass arrays here that in wavelength (detector pixel)
     ! space are at the same positions as the output wavelengths wl_output.
 
+    allocate(tmp1(size(wl_kernels_absolute, 1)))
+    allocate(tmp2(size(kernels, 1)))
+
     allocate(ILS_upsampled(N_wl))
     do idx_pix=1, N_pix
 
-       idx_hires_ILS_min = searchsorted_dp(wl_input, wl_kernels_absolute(1, idx_pix))
+       idx_hires_ILS_min = searchsorted_dp(wl_input, dble(wl_kernels_absolute(1, idx_pix)))
        ! When doing the binary search for the upper WL index, we can safely
        ! set the "left" search limit to the other index.
        idx_hires_ILS_max = searchsorted_dp(wl_input, &
-            wl_kernels_absolute(N_ils_pix, idx_pix), &
+            dble(wl_kernels_absolute(N_ils_pix, idx_pix)), &
             user_L=idx_hires_ILS_min)
 
        if ((idx_hires_ILS_min < 1) .or. (idx_hires_ILS_min > size(wl_input))) then
@@ -505,10 +514,16 @@ contains
 
        N_this_wl = idx_hires_ILS_max - idx_hires_ILS_min + 1
 
+
+       ! We need this crutch, because ILS tables are now in real(4), but the
+       ! function itself requires real(8)
+       tmp1(:) = wl_kernels_absolute(:, idx_pix)
+       tmp2(:) = kernels(:, idx_pix)
+
        ! Interpolate the ILS at the actual hi-res grid
        call pwl_value_1d_v2( &
             N_ils_pix, &
-            wl_kernels_absolute(:, idx_pix), kernels(:, idx_pix), &
+            tmp1, tmp2, &
             N_this_wl, &
             wl_input(idx_hires_ILS_min:idx_hires_ILS_max), ILS_upsampled(1:N_this_wl))
 

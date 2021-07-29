@@ -32,6 +32,12 @@ module file_utils_mod
      module procedure read_5D_DP_hdf_dataset
   end interface read_DP_hdf_dataset
 
+  ! Interface for reading single precision (real) arrays from an HDF file
+  interface read_SP_hdf_dataset
+     module procedure read_2D_SP_hdf_dataset
+     module procedure read_4D_SP_hdf_dataset
+  end interface read_SP_hdf_dataset
+
   ! Interface for writing integer arrays into an HDF file
   interface write_INT_hdf_dataset
      module procedure write_2D_INT_hdf_dataset
@@ -259,6 +265,40 @@ contains
 
   end subroutine read_5D_DP_hdf_dataset
 
+
+  subroutine read_4D_SP_hdf_dataset(file_id, dset_name, array, dset_dims)
+
+    integer(hid_t), intent(in) :: file_id
+    character(len=*), intent(in) :: dset_name
+    real, allocatable, intent(inout) :: array(:,:,:,:)
+    integer(hsize_t), allocatable, intent(inout) :: dset_dims(:)
+
+    integer :: hdferr
+    integer(hid_t) :: dset_id
+    character(len=999) :: tmp_str
+    character(len=*), parameter :: fname = "read_4D_DP_dataset"
+
+    if (allocated(array)) deallocate(array)
+
+    call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+
+    if (size(dset_dims) /= 4) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 4 dimensions, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
+    allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4)))
+
+    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
+
+    call h5dread_f(dset_id, H5T_NATIVE_REAL, array, dset_dims, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
+  end subroutine read_4D_SP_hdf_dataset
+
   subroutine read_4D_DP_hdf_dataset(file_id, dset_name, array, dset_dims)
 
     integer(hid_t), intent(in) :: file_id
@@ -324,6 +364,39 @@ contains
     call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
 
   end subroutine read_3D_DP_hdf_dataset
+
+
+  subroutine read_2D_SP_hdf_dataset(file_id, dset_name, array, dset_dims)
+
+    integer(hid_t), intent(in) :: file_id
+    character(len=*), intent(in) :: dset_name
+    real, dimension(:,:), allocatable, intent(inout) :: array
+    integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
+
+    integer :: hdferr
+    integer(hid_t) :: dset_id
+    character(len=*), parameter :: fname = "read_2D_SP_dataset"
+    character(len=999) :: tmp_str
+
+    if (allocated(array)) deallocate(array)
+
+    call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
+    if (size(dset_dims) /= 2) then
+       write(tmp_str, '(A, G0.1)') "Error reading " // trim(dset_name) &
+            // ". Expected 2 dimensions, but got: ", size(dset_dims)
+       call logger%fatal(fname, trim(tmp_str))
+       stop 1
+    end if
+
+    allocate(array(dset_dims(1), dset_dims(2)))
+
+    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
+
+    call h5dread_f(dset_id, H5T_NATIVE_REAL, array, dset_dims, hdferr)
+    call check_hdf_error(hdferr, fname, "Error. Could not read " // trim(dset_name))
+
+  end subroutine read_2D_SP_hdf_dataset
 
   subroutine read_2D_DP_hdf_dataset(file_id, dset_name, array, dset_dims)
 

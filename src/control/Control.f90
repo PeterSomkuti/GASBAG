@@ -837,15 +837,25 @@ contains
           end if
 
           ! Now we need to check if they are the same size
-          if ((size(CS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
-               size(CS%window(window_nr)%smart_scale_first_guess_wl_out)) .or. &
-               (size(CS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
-               size(CS%window(window_nr)%smart_scale_first_guess_delta_tau))) then
+          if ( &
+               allocated(CS%window(window_nr)%smart_scale_first_guess_wl_in) .and. &
+               allocated(CS%window(window_nr)%smart_scale_first_guess_wl_out) .and. &
+               allocated(CS%window(window_nr)%smart_scale_first_guess_delta_tau) &
+               ) then
 
-             call logger%error(fname, "Error parsing smart gas scalar first guess!")
-             call logger%error(fname, "I need to have the same number of values for each " &
-                  // "of the three inputs!")
-             stop 1
+             ! Need to check for allocation first, otherwise this next comparison
+             ! won't actually be valid..
+             if ((size(CS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
+                  size(CS%window(window_nr)%smart_scale_first_guess_wl_out)) .or. &
+                  (size(CS%window(window_nr)%smart_scale_first_guess_wl_in) /= &
+                  size(CS%window(window_nr)%smart_scale_first_guess_delta_tau))) then
+
+                call logger%error(fname, "Error parsing smart gas scalar first guess!")
+                call logger%error(fname, "I need to have the same number of values for each " &
+                     // "of the three inputs!")
+                stop 1
+             end if
+
           end if
 
           call fini_extract(fini, win_str, 'allow_divergences', .false., fini_char)

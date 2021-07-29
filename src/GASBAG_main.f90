@@ -20,6 +20,7 @@ program GASBAG
   use file_utils_mod, only: check_hdf_error, write_string_hdf_dataset, &
        write_config_into_groups
   use oco2_mod
+  use perform_retrievals_mod, only: perform_retrievals
 
   ! Third party modules
   use logger_mod, only: logger => master_logger

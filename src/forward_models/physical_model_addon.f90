@@ -404,17 +404,24 @@ contains
     num_gases = size(gas_strings)
     num_levels = 0
 
-    do i = 1, size(gas_strings)
-       if (gas_strings(i)%lower() == "h2o") then
-          cycle
-       else
-          tmp_gas = gas_strings(i)%lower()
-          write(tmp_str, '(A,A,A,A,A)') "/", gas_strings(i)%chars(), "Prior/", tmp_gas%chars(), "_prior_profile_cpr"
-          call get_HDF5_dset_dims(file_id, trim(tmp_str), dset_dims)
-          num_levels = dset_dims(1) ! Store number of levels
-          exit
-       end if
-    end do
+    !do i = 1, size(gas_strings)
+    !   if (gas_strings(i)%lower() == "h2o") then
+    !      cycle
+    !   elseif (gas_strings(i)%lower() == "o2") then
+    !      cycle
+    !   else
+    !      tmp_gas = gas_strings(i)%lower()
+    !      write(tmp_str, '(A,A,A,A,A)') "/", gas_strings(i)%chars(), "Prior/", tmp_gas%chars(), "_prior_profile_cpr"
+    !      call get_HDF5_dset_dims(file_id, trim(tmp_str), dset_dims)
+    !      num_levels = dset_dims(1) ! Store number of levels
+    !      exit
+    !   end if
+    !end do
+
+    tmp_str = "/CO2Prior/co2_prior_profile_cpr"
+    call get_HDF5_dset_dims(file_id, trim(tmp_str), dset_dims)
+    num_levels = dset_dims(1) ! Store number of levels
+
 
     allocate(atm%T(num_levels))
     allocate(atm%p(num_levels))
@@ -457,6 +464,13 @@ contains
           call logger%debug(fname, "Skipping water vapor (will be taken from MET).")
           cycle
        end if
+
+       if (gas_strings(i)%lower() == "o2") then
+          call logger%debug(fname, "Skipping oxygen (will be set to 0.2095).")
+          prior_gas_profiles(:, i, :, :) = 0.2095
+          cycle
+       end if
+
 
        call logger%debug(fname, "Loading prior profiles for gas: " // gas_strings(i)%chars())
 

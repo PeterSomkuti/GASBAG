@@ -223,6 +223,10 @@ contains
        valid_options(this_idx,48) = "minimum_land_fraction"
        ! Maximum land fraction to process sounding
        valid_options(this_idx,49) = "maximum_land_fraction"
+       ! Externally supplemented surface albedo
+       valid_options(this_idx,50) = "external_surface_albedo"
+       ! Surface albedo covariance
+       valid_options(this_idx,51) = "albedo_covariance"
 
     end do
 

@@ -1,3 +1,13 @@
+!> @brief ABSCO-related spectroscopy functions
+!> @file ABSCO.f90
+!> @author Peter Somkuti
+!>
+!> @details
+!> This module contains functions to handle ABSCO-type spectroscopy data
+
+
+
+
 module absco_mod
 
   use file_utils_mod, only: read_DP_hdf_dataset, get_HDF5_dset_dims, check_hdf_error
@@ -10,13 +20,26 @@ module absco_mod
 
 contains
 
-  subroutine read_absco_HDF(filename, gas, absco_dims, hitran_index)
+  !> @brief Loads ABSCO spectroscopy into memory
+  !> @param filename Filename of the ABSCO file
+  !> @param gas Gas object entity
+  !> @param hitran_index Read this specific gas
+  !> @param absco_dims The dimensions of the full ABSCO array
+  !> @detail
+  !> This function first inspects an ABSCO file to see whether it has
+  !> three or four dimensions, and then reads the full contents accordingly.
+  !> The coefficients are rearranged to be in increasing wavelength order,
+  !> however are not re-sampled at all in this function.
+  !> If a HITRAN index other than -1 is supplied to the function, the
+  !> corresponding gas will be read, and produces an error if that gas
+  !> is not present in the file.
+  subroutine read_absco_HDF(filename, gas, hitran_index, absco_dims)
 
     implicit none
     character(len=*), intent(in) :: filename
     type(CS_gas_t), intent(inout) :: gas
-    integer, intent(inout) :: absco_dims
     integer, intent(in) :: hitran_index
+    integer, intent(inout) :: absco_dims
 
     character(len=*), parameter :: fname = "read_absco_HDF"
     integer(hid_t) :: absco_file_id, dset_id, filetype

@@ -187,7 +187,7 @@ contains
 
        aer_idx = SV%aerosol_height_idx_lookup(j)
 
-       call calculate_aero_height_factors( &
+       call calculate_aero_height_factors_Gauss( &
             scn%atm%p_layers(:), &
             exp(SV%svsv(SV%idx_aerosol_height(j))) * scn%atm%psurf, &
             CS_aerosol(scn%op%aer_mcs_map(aer_idx))%default_width, &
@@ -1109,6 +1109,7 @@ contains
        call logger%debug(fname, trim(tmp_str))
 
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
+
        !call calculate_XRTM_gas_jacobians(SV, scn, monochr_weighting_functions, dI_dgas)
        !call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
        !call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
@@ -1192,7 +1193,7 @@ contains
     ! Store aerosol layer height Jacobians
     do j=1, SV%num_aerosol_height
        if (CS_win%aerosol_retrieve_height_log(SV%aerosol_height_idx_lookup(j))) then
-          dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) !* exp(SV%svsv(SV%idx_aerosol_height(j)))
+          dI_dAHeight(:,j,:) = dI_dAHeight(:,j,:) * exp(SV%svsv(SV%idx_aerosol_height(j)))
        end if
     end do
 

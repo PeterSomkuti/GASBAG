@@ -46,6 +46,10 @@ module scene_mod
      double precision, allocatable :: pwgts(:)
      !> Layer pressure weighting function for this scene
      double precision, allocatable :: pwgts_layers(:)
+     !> Layer pseudo spherical factors for solar angles
+     double precision, allocatable :: ps_factors_solar(:)
+     !> Layer pseudo spherical factors for viewing angles
+     double precision, allocatable :: ps_factors_viewing(:)
 
   end type atmosphere
 
@@ -387,6 +391,7 @@ contains
     ! Local stuff
     double precision :: SH_layer, g_layer, p_layer, T_layer, Tv, dP
     double precision :: logratio, dz, constant
+    double precision :: alt_tmp
     ! Loop variable
     integer :: i
 
@@ -437,6 +442,28 @@ contains
        scn%atm%altitude_layers(i) = 0.5d0 * (scn%atm%altitude_levels(i) + scn%atm%altitude_levels(i+1))
        scn%atm%grav_layers(i) = jpl_gravity(scn%lat, scn%atm%altitude_layers(i))
     end do
+
+    ! Pre-calculate the factors needed to scale up optical depth
+    ! to account for pseudo-spherical geometry. So any layer-tau
+    ! should be multiplied by these factors to account for the in- and
+    ! outcoming beams
+
+    if (allocated(scn%atm%ps_factors_solar)) deallocate(scn%atm%ps_factors_solar)
+    if (allocated(scn%atm%ps_factors_viewing)) deallocate(scn%atm%ps_factors_viewing)
+
+    allocate(scn%atm%ps_factors_solar(scn%num_levels - 1))
+    allocate(scn%atm%ps_factors_viewing(scn%num_levels - 1))
+
+    do i = 1, scn%num_levels - 1
+
+       ! Maybe replace this by geoid radius..
+       alt_tmp = EARTH_EQUATORIAL_RADIUS / (EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(i))
+
+       scn%atm%ps_factors_solar(i) = cos(scn%SZA * DEG2RAD) / sqrt(1.0d0 - sin(scn%SZA * DEG2RAD)**2 * alt_tmp * alt_tmp)
+       scn%atm%ps_factors_viewing(i) = cos(scn%VZA * DEG2RAD) / sqrt(1.0d0 - sin(scn%VZA * DEG2RAD)**2 * alt_tmp * alt_tmp)
+
+    end do
+
 
   end subroutine scene_altitude
 

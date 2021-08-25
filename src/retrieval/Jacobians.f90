@@ -173,6 +173,24 @@ contains
   end subroutine calculate_dispersion_jacobian
 
 
+  !> @brief Calculates the ILS stretch Jacobian
+  !> @param my_instrument Instrument instance
+  !> @param CS_win Control-window object
+  !> @param coeff_idx What polynomial order are we stretching?
+  !> @param SV Statevector object
+  !> @param band Instrument band index
+  !> @param i_win Retrieval window index
+  !> @param i_fp Footprint index
+  !> @param N_spec Number of spectral points in this retrieval window
+  !> @param ILS_delta_lambda ILS wavelength array
+  !> @param ILS_relative_response ILS values
+  !> @param l1b_wl_idx_min Lower WL index in total detector pixels
+  !> @param l1b_wl_idx_max Higher WL index in total detector pixels
+  !> @param hires_grid Hires WL grid
+  !> @param center_pixel Index of the center pixel (usually Nspec/2)
+  !> @param radiance_calc_work Modelled detector-resolution radiances
+  !> @param radiance_calc_work_hi Modelled high-resolution radiances
+  !> @param ILS_stretch_jacobian Output dIntensity/dDispersionCoefficient
   subroutine calculate_ILS_stretch_jacobian(my_instrument, &
        CS_win, &
        coeff_idx, SV, &

@@ -14,6 +14,7 @@ module PCART_mod
 
   implicit none
 
+  !> Contains all the relevant data for a bin
   type PCA_bin_t
      !> Number of spectral points in this bin
      integer :: N_spect
@@ -39,7 +40,7 @@ module PCART_mod
      double precision, allocatable :: pert_opt_states(:,:)
   end type PCA_bin_t
 
-  !> @brief User-type that contains data for PCA-based fast RT
+  !> User-type that contains data for PCA-based fast RT
   type PCA_handler_t
      !> Assignment of spectral index to PCA bin
      integer, allocatable :: assigned_bin(:)
@@ -63,6 +64,9 @@ module PCART_mod
 contains
 
 
+  !> @brief Initilizes the full PCA routine
+  !> @param scn Scene object
+  !> @param PCA_handler PCA_handler object
   subroutine initialize_PCA(scn, PCA_handler)
     type(scene), intent(in) :: scn
     type(PCA_handler_t), intent(inout) :: PCA_handler
@@ -70,7 +74,6 @@ contains
     ! Initialize with the total number of spectral points
     allocate(PCA_handler%assigned_bin(size(scn%op%wl)))
     PCA_handler%assigned_bin(:) = -1
-
     ! Calculate the number of optical properties that enter
     ! the calculations.
     ! At the moment:
@@ -127,6 +130,8 @@ contains
   end subroutine initialize_PCA
 
   !> @brief Binning method according to Kopparla et al.
+  !> @param scn Scene object
+  !> @param PCA_handler PCA handler object
   subroutine assign_pushkar_bins(scn, PCA_handler)
     type(scene), intent(in) :: scn
     type(PCA_handler_t), intent(inout) :: PCA_handler
@@ -147,9 +152,11 @@ contains
 
     integer, allocatable :: single_assigned_bins(:)
 
+    double precision, allocatable :: gas_tot(:)
     double precision, allocatable :: ssa_tot(:)
     double precision :: ssa_median
     double precision :: total_aod
+
 
     character(len=*), parameter :: fname = "assign_pushkar_bins"
     character(len=99) :: tmp_str
@@ -157,6 +164,7 @@ contains
     nspect = size(PCA_handler%assigned_bin)
 
     allocate(ssa_tot(nspect))
+    allocate(gas_tot(nspect))
 
     allocate(single_assigned_bins(nspect))
     single_assigned_bins(:) = 0
@@ -164,6 +172,7 @@ contains
     ! Sum up the gas opds to get the total taug
     ! taug_tot(:) = sum(taug, 1)
     ssa_tot(:) = sum(scn%op%layer_omega(:, 1:scn%num_active_levels - 1), 2)
+    gas_tot(:) = sum(sum(scn%op%gas_tau(:,:,:), 2), 2)
 
     if (scn%num_aerosols > 0) then
        total_aod = sum(scn%op%reference_aod(:))
@@ -173,19 +182,11 @@ contains
 
     ! Assign each spectral point to a bin according to taug
     ! is there a neat way to do an equivalent to np.searchsorted
-
-    ! NOTE
-    ! Pushkar's binning scheme is adjusted here to take into account
-    ! the total AOD, which changes the optical depth distribution
-    ! significantly. In order to get more bins, we thus take out
-    ! the total AOD value from the total tau for the purposes of
-    ! binning, which spreads out the points significantly into more
-    ! bins - especially at larger AOD > 0.1.
     do i = 1, nspect
        do j = 1, size(bounds) - 1
           if ( &
-               (max(scn%op%total_tau(i) - total_aod, 0.0d0) .ge. bounds(j)) .and. &
-               (max(scn%op%total_tau(i) - total_aod, 0.0d0) .lt. bounds(j+1))) then
+               (max(gas_tot(i), 0.0d0) .ge. bounds(j)) .and. &
+               (max(gas_tot(i), 0.0d0) .lt. bounds(j+1))) then
              single_assigned_bins(i) = j
           endif
        enddo
@@ -278,6 +279,11 @@ contains
 
   end subroutine assign_pushkar_bins
 
+
+  
+  !> @brief Allocates bin-related quantities (needs to be done
+  !> AFTER assignment into bins using some scheme)
+  !> @param PCA_handler PCA handler object
   subroutine allocate_first_PCA(PCA_handler)
     type(PCA_handler_t), intent(inout) :: PCA_handler
 
@@ -311,7 +317,9 @@ contains
     end do
   end subroutine allocate_first_PCA
 
-  !> @brief Fills F-matrix with values
+  !> @brief Fills F-matrix (optical states/properties) with values
+  !> @param scn Scene object
+  !> @param PCA_handler PCA handler object
   subroutine create_F_matrix(scn, PCA_handler)
     type(scene), intent(in) :: scn
     type(PCA_handler_t), intent(inout) :: PCA_handler
@@ -376,6 +384,7 @@ contains
 
 
   !> @brief Peform forward transform of optical property matrix
+  !> @param PCA_handler PCA handler object
   subroutine forward_transform_F_matrix(PCA_handler)
     type(PCA_handler_t), intent(inout) :: PCA_handler
     integer :: wl, bin, opt
@@ -397,6 +406,8 @@ contains
   end subroutine forward_transform_F_matrix
 
 
+  !> @brief Performs mean-removal of optical property matrix
+  !> @param PCA_handler PCA handler object
   subroutine F_matrix_mean_removal(PCA_handler)
     type(PCA_handler_t) :: PCA_handler
     integer :: bin, opt
@@ -416,6 +427,9 @@ contains
   end subroutine F_matrix_mean_removal
 
 
+  !> @brief Peforms the eigenproblem calculations for each bin
+  !> @param PCA_handler PCA handler object
+  !> @param success Was the calculation successful?
   subroutine perform_PCA(PCA_handler, success)
     type(PCA_handler_t), intent(inout) :: PCA_handler
     logical, intent(inout) :: success
@@ -595,6 +609,18 @@ contains
 
   end subroutine perform_PCA
 
+  !> @brief Creates new scene objects for each PCA bin
+  !> @param PCA_handler PCA handler object
+  !> @param CS_aerosol Control-aerosol object (array)
+  !> @param scn Scene object (main scene)
+  !> @param PCA_scn Array of new scenes for every bin (bin, eof)
+  !>
+  !> @detail
+  !> This step here is required so that we end up with a scene object
+  !> for every bin and eof combination. As the PCA process produces
+  !> new optical property profiles for each bin/eof combination, we need
+  !> to drive RT calculations with these new profiles. Creating new scene
+  !> objects makes this process somewhat managable.
   subroutine create_scenes_from_PCA(PCA_handler, CS_aerosol, scn, PCA_scn)
     type(PCA_handler_t), intent(in) :: PCA_handler
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
@@ -676,7 +702,7 @@ contains
 
           ! Copy over the needed bookkeeping variables
 
-          if (scn%num_aerosols > 0) then 
+          if (scn%num_aerosols > 0) then
              PCA_scn(bin, eof)%op%reference_aod = scn%op%reference_aod
              PCA_scn(bin, eof)%op%aer_mcs_map = scn%op%aer_mcs_map
              PCA_scn(bin, eof)%op%aer_wl_idx_l = scn%op%aer_wl_idx_l
@@ -767,6 +793,15 @@ contains
 
   end subroutine create_scenes_from_PCA
 
+  !> @brief Calculates linearized inputs for the RT models
+  !> @param PCA_handler PCA handler object
+  !> @param bin Current bin
+  !> @param ltau Linearized total optical depth for main scene
+  !> @param lomega Linearized total single scattering albedo for main scene
+  !> @param lsurf Linearized surface parameter(s) for main scene
+  !> @param ltau_pca Linearized total optical depth for PCA
+  !> @param lomega_pca Linearized total single scattering albedo for PCA
+  !> @param lsurf_pca Linearized surface parameter(s) for PCA
   subroutine extract_linputs_for_PCA(PCA_handler, bin, &
        ltau, lomega, lsurf, &
        ltau_pca, lomega_pca, lsurf_pca)
@@ -783,6 +818,13 @@ contains
     integer :: i
     integer :: j
     integer :: wl
+
+    ! NOTE
+    ! Keep in mind, these *_pca arrays have to conform to the general
+    ! structure of linearized inputs, where the first array dimension
+    ! corresponds to wavelength. In our PCA-related scene objects, we
+    ! do *not* have wavelengths explicitly, hence there will always be
+    ! one element to that dimension.
 
     ltau_pca(1,:,:) = 0.0d0
     lomega_pca(1,:,:) = 0.0d0
@@ -805,13 +847,16 @@ contains
   end subroutine extract_linputs_for_PCA
 
 
-
-
+  !> @brief Maps radiances obtained through PCA back to the monochromatic grid
+  !> @param PCA_handler PCA handler object
+  !> @param binned_lo Results from the binned low-accuracy calculations
+  !> @param binned_hi Results from the binned high-accuracy calculations
+  !> @param monochromatic Monochromatic array with radiance results
   subroutine map_PCA_radiances(PCA_handler, binned_lo, binned_hi, monochromatic)
 
     type(PCA_handler_t), intent(in) :: PCA_handler
-    double precision, intent(in) :: binned_lo(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
-    double precision, intent(in) :: binned_hi(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
+    double precision, intent(inout) :: binned_lo(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
+    double precision, intent(inout) :: binned_hi(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:)
     double precision, intent(inout) :: monochromatic(:,:)
 
     integer :: bin, eof, wl, q, i
@@ -819,6 +864,7 @@ contains
 
     double precision, allocatable :: delta_minus(:), delta_plus(:), delta_zero(:)
     double precision, allocatable :: monochromatic_tmp(:,:)
+    double precision :: zero_ratio, plus_ratio, minus_ratio
 
 
     n_stokes = size(monochromatic, 2)
@@ -833,7 +879,10 @@ contains
        allocate(monochromatic_tmp(PCA_handler%PCA_bin(bin)%N_spect, n_stokes))
        monochromatic_tmp(:,:) = 0.0d0
 
-       delta_zero(1) = log(binned_hi(bin, 0, 1) / binned_lo(bin, 0, 1))
+       zero_ratio = binned_hi(bin, 0, 1) / binned_lo(bin, 0, 1)
+       delta_zero(1) = log(zero_ratio)
+
+       if (ieee_is_nan(delta_zero(1))) delta_zero(1) = 0.0d0
        monochromatic_tmp(:,1) = delta_zero(1)
 
        do q = 2, n_stokes
@@ -842,10 +891,11 @@ contains
 
        do eof = 1, PCA_handler%PCA_bin(bin)%N_EOF
 
-          delta_plus(1) = log(binned_hi(bin, eof, 1) / binned_lo(bin, eof, 1))
-          delta_minus(1) = log(binned_hi(bin, -eof, 1) / binned_lo(bin, -eof, 1))
+          plus_ratio = binned_hi(bin, eof, 1) / binned_lo(bin, eof, 1)
+          delta_plus(1) = log(plus_ratio)
 
-          !write(*,*) bin, eof, delta_zero(1), delta_plus(1), delta_minus(1)
+          minus_ratio = binned_hi(bin, -eof, 1) / binned_lo(bin, -eof, 1)
+          delta_minus(1) = log(minus_ratio)
 
           do q = 2, n_stokes
              delta_plus(q) = binned_hi(bin, eof, q) - binned_lo(bin, eof, q)
@@ -853,6 +903,13 @@ contains
           end do
 
           do q = 1, n_stokes
+
+             if (ieee_is_nan(delta_zero(q)) .or. ieee_is_nan(delta_plus(q)) .or. ieee_is_nan(delta_minus(q))) then
+                delta_plus(q) = 0.0
+                delta_minus(q) = 0.0
+                delta_zero(q) = 0.0
+             end if
+
              do wl = 1, PCA_handler%PCA_bin(bin)%N_spect
 
                 monochromatic_tmp(wl, q) = monochromatic_tmp(wl, q) + &
@@ -868,8 +925,9 @@ contains
 
        end do
 
-       ! Exponentiate radiance correction factors
+       ! Exponentiate radiance (intensity only) correction factors
        monochromatic_tmp(:, 1) = exp(monochromatic_tmp(:, 1))
+
 
        ! Back-assign and add to low-accuracy result
        i = 1
@@ -888,6 +946,8 @@ contains
           end if
        end do
 
+
+
        deallocate(monochromatic_tmp)
 
     end do
@@ -895,6 +955,12 @@ contains
 
   end subroutine map_PCA_radiances
 
+
+  !> @brief Maps Jacobians obtained through PCA back to the monochromatic grid
+  !> @param PCA_handler PCA handler object
+  !> @param wfunctions_lo Results from the binned low-accuracy calculations
+  !> @param wfunctions_hi Results from the binned high-accuracy calculations
+  !> @param wfunctions_mono Monochromatic array with Jacobian results
   subroutine map_PCA_jacobians(PCA_handler, wfunctions_lo, wfunctions_hi, wfunctions_mono)
     type(PCA_handler_t), intent(in) :: PCA_handler
     double precision, intent(in) :: wfunctions_lo(:,-maxval(PCA_handler%PCA_bin(:)%N_EOF):,:,:)
@@ -951,14 +1017,14 @@ contains
 
                       i = i + 1
                    end if
-                end do
+                end do ! wavelength loop
 
-             end do
+             end do ! EOF loop
 
 
-          end do
-       end do
-    end do
+          end do ! Stokes component loop
+       end do ! derivative loop
+    end do ! bin loop
 
     wfunctions_mono(:,:,:) = wfunctions_mono(:,:,:) + corr_wfunctions(:,:,:)
 

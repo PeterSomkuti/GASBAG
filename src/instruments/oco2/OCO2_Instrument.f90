@@ -55,6 +55,7 @@ contains
 
   !> @brief Scans the L1B file and extracts some global information
   !> @param l1b_file Path to L1B file
+  !> @param CS_general Control-general object
   subroutine scan_l1b_file(l1b_file, CS_general)
     !! Checks whether this is indeed a valid OCO-2 l1b file that has all
     !! the required fields and variables..
@@ -215,6 +216,10 @@ contains
   end subroutine calculate_dispersion
 
 
+  !> @brief Reads all spectra in an L1B file
+  !> @param l1b_file_id HDF file handler ID
+  !> @param Instrument band index
+  !> @param spectra Allocatable array to hold all spectra
   subroutine read_all_spectra(l1b_file_id, band, spectra)
 
     implicit none
@@ -438,6 +443,9 @@ contains
 
   end subroutine read_sounding_ids
 
+  !> @brief Reads all sounding quality flags in the L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param sounding_qual_flag Sounding Quality flag array (fp, frame)
   subroutine read_sounding_qual_flag(l1b_file_id, sounding_qual_flag)
 
     implicit none
@@ -454,6 +462,9 @@ contains
   end subroutine read_sounding_qual_flag
 
 
+  !> @brief Reads all sounding time strings flags in the L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param time_strings Sounding time string array (fp, frame)
   subroutine read_time_strings(l1b_file_id, time_strings)
 
     implicit none
@@ -481,6 +492,10 @@ contains
   end subroutine read_time_strings
 
 
+  !> @brief Converts a time string to a date object
+  !> @param time_string Sounding time string
+  !> @param date Date object
+  !> @param success Conversion successful?
   subroutine convert_time_string_to_date(time_string, date, success)
 
     ! Turn a OCO-2 time string into a datetype object
@@ -607,6 +622,13 @@ contains
 
   end subroutine read_sounding_geometry
 
+  !> @brief Reads Stokes coefficients for the entire L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param band Instrument band index
+  !> @param N_fp Number of footprints
+  !> @param N_fr Number of frames
+  !> @param observation_mode Observation mode (string)
+  !> @param stokes_coefs Stokes coefficient array (coeff, footprint, frame)
   subroutine read_stokes_coef(l1b_file_id, band, N_fp, N_fr, &
        observation_mode, stokes_coefs)
 
@@ -627,41 +649,45 @@ contains
     call logger%debug(fname, "Trying to allocate stokes coef. array.")
     allocate(stokes_coefs(4, N_fp, N_fr))
 
-
-    if (observation_mode == "downlooking") then
-
-
     ! Hack - GeoCarb files have an extra dimension here. So let's check for that first
     call get_HDF5_dset_dims(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
          dset_dims)
 
-    if (size(dset_dims) == 4) then
+    if (observation_mode == "downlooking") then
 
-       deallocate(dset_dims)
-       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
-            tmp_array4d, dset_dims)
-       stokes_coefs(:,:,:) = tmp_array4d(:,band,:,:)
-       deallocate(tmp_array4d)
+       if (size(dset_dims) == 4) then
 
-    else if (size(dset_dims) == 5) then
+          deallocate(dset_dims)
+          call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+               tmp_array4d, dset_dims)
+          stokes_coefs(:,:,:) = tmp_array4d(:,band,:,:)
+          deallocate(tmp_array4d)
 
-       deallocate(dset_dims)
-       call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
-            tmp_array5d, dset_dims)
-       stokes_coefs(:,:,:) = tmp_array5d(1,:,band,:,:)
-       deallocate(tmp_array5d)
+       else if (size(dset_dims) == 5) then
+
+          deallocate(dset_dims)
+          call read_DP_hdf_dataset(l1b_file_id, "FootprintGeometry/footprint_stokes_coefficients", &
+               tmp_array5d, dset_dims)
+          stokes_coefs(:,:,:) = tmp_array5d(1,:,band,:,:)
+          deallocate(tmp_array5d)
+
+       end if
+
+    else if (observation_mode == "space_solar") then
+
+       stokes_coefs(:,:,:) = 0.0d0
+       stokes_coefs(1,:,:) = 0.5d0
 
     end if
 
- else if (observation_mode == "space_solar") then
-
-    stokes_coefs(:,:,:) = 0.0d0
-    stokes_coefs(1,:,:) = 0.5d0
-
- end if
 
   end subroutine read_stokes_coef
 
+
+  !> @brief Reads ILS tables for the entire L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param ils_delta_lambda ILS delta lambda array
+  !> @param ils_relative_response ILS relative response array
   subroutine read_ils_data(l1b_file_id, ils_delta_lambda, ils_relative_response)
 
     implicit none
@@ -681,7 +707,17 @@ contains
 
   end subroutine read_ils_data
 
-
+  !> @brief Reads sounding location data (lon, lat, alt, etc.) for the entire L1B file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param band Instrument band index
+  !> @param N_fp Number of footprints
+  !> @param N_fr Number of frames
+  !> @param observation_mode Observation mode
+  !> @param lon Longitude
+  !> @param lat Latitude
+  !> @param altitude Altitude
+  !> @param rel_vel Relative velocity (scene - spacecraft)
+  !> @param rel_solar_vel Relative velocity (sun - scene)
   subroutine read_sounding_location(l1b_file_id, band, N_fp, N_fr, &
        observation_mode, &
        lon, lat, altitude, rel_vel, rel_solar_vel)
@@ -762,6 +798,10 @@ contains
 
   end subroutine read_sounding_location
 
+
+  !> @brief Read the whole bad sample list
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param bad_sample_list Bad sample list array (sample, fp, frame)
   subroutine read_bad_sample_list(l1b_file_id, bad_sample_list)
     implicit none
     integer(hid_t), intent(in) :: l1b_file_id
@@ -773,6 +813,11 @@ contains
 
   end subroutine read_bad_sample_list
 
+
+  !> @brief Read the spike list for a given spectrometer
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param spike_list Spike list array (fp, frame)
+  !> @param band Band index
   subroutine read_spike_filter(l1b_file_id, spike_list, band)
     implicit none
     integer(hid_t), intent(in) :: l1b_file_id
@@ -801,6 +846,14 @@ contains
   end subroutine read_spike_filter
 
 
+  !> @brief Read the basic meteorological data from the MET file
+  !> @param met_file_id HDF File ID of the MET file
+  !> @param l1b_file_id HDF File ID of the L1B file
+  !> @param observation_mode Observation mode
+  !> @param met_P_levels Pressure levels from MET file (level, footprint, frame)
+  !> @param met_T_profiles Temperature profiles (on p levels) from MET file (level, footprint, frame)
+  !> @param met_SH_profiles Humidity profiles (on p levels) from MET file (level, footprint, frame)
+  !> @param met_psurf Meteorological surface pressure (footprint, frame)
   subroutine read_MET_data(met_file_id, l1b_file_id, observation_mode, &
        met_P_levels, met_T_profiles, met_SH_profiles, met_psurf)
 

@@ -15,15 +15,13 @@ module file_utils_mod
   implicit none
 
 
-  ! Interface for writing double precision arrays into HDF files, subroutines
-  ! exist for several dimensionalities. The output is still always single
-  ! precision, and the conversion is done within the subroutines.
+  !> Interface for writing double precision arrays into HDF files
   interface write_DP_hdf_dataset
      module procedure write_2D_DP_hdf_dataset
      module procedure write_3D_DP_hdf_dataset
   end interface write_DP_hdf_dataset
 
-  ! Interface for reading double precision arrays from an HDF file
+  !> Interface for reading double precision arrays from an HDF file
   interface read_DP_hdf_dataset
      module procedure read_1D_DP_hdf_dataset
      module procedure read_2D_DP_hdf_dataset
@@ -32,24 +30,24 @@ module file_utils_mod
      module procedure read_5D_DP_hdf_dataset
   end interface read_DP_hdf_dataset
 
-  ! Interface for reading single precision (real) arrays from an HDF file
+  !> Interface for reading single precision (real) arrays from an HDF file
   interface read_SP_hdf_dataset
      module procedure read_2D_SP_hdf_dataset
      module procedure read_4D_SP_hdf_dataset
   end interface read_SP_hdf_dataset
 
-  ! Interface for writing integer arrays into an HDF file
+  !> Interface for writing integer arrays into an HDF file
   interface write_INT_hdf_dataset
      module procedure write_2D_INT_hdf_dataset
   end interface write_INT_hdf_dataset
 
-  ! Interface for reading integer arrays from an HDF file
+  !> Interface for reading integer arrays from an HDF file
   interface read_INT_hdf_dataset
      module procedure read_2D_INT_hdf_dataset
      module procedure read_3D_INT_hdf_dataset
   end interface read_INT_hdf_dataset
 
-  ! Interface to extract value(s) out of the config file
+  !> Interface to extract value(s) out of the config file
   interface fini_extract
      module procedure fini_extract_DP
      module procedure fini_extract_DP_array
@@ -668,6 +666,7 @@ contains
     ! Now allocate a double precision object according to the number of
     ! splitted strings
     allocate(value_array(size(split_strings)))
+
     ! And cast the objects into double precision values
     do i=1, size(split_strings)
        tmp_str = trim(split_strings(i)%chars())

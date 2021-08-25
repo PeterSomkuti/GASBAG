@@ -1,6 +1,10 @@
-  !> @brief Aerosol module
-  !> @file Aerosols.f90
-  !> @author Peter Somkuti
+!> @brief Aerosol module
+!> @file Aerosols.f90
+!> @author Peter Somkuti
+!>
+!> @details
+!> This module contains function related to aerosol retrieval, such as definition
+!> of vertical distribution shapes, the loading of MIE/MOM aerosol data etc.
 
 
 module aerosols_mod
@@ -123,14 +127,26 @@ contains
 
 
   !> @brief Initialize the required aerosol data
+  !>
   !> @param scn Scene object
   !> @param i_win Retrieval window index
+  !> @param CS_win Control-Window object
+  !> @param CS_aerosol Control-Aerosol object
+  !>
+  !> @details
+  !> In here, all the scene/optical_properties related to aerosols
+  !> will be allocated to the right size, given the aerosool object.
+  !> Furthermore, the aerosol scattering and extinction optical depths
+  !> are calculated for every wavelength of the retrieval window,
+  !> using a straightforward Anstrom-exponent Ansatz given the values
+  !> at the wavelengths in the MIE/MOM files.
   subroutine aerosol_init(scn, i_win, CS_win, CS_aerosol)
 
     type(scene), intent(inout) :: scn
     integer, intent(in) :: i_win
     type(CS_window_t), intent(in) :: CS_win
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
+
     ! Local
     character(len=*), parameter :: fname = "aerosol_init"
     character(len=999) :: tmp_str
@@ -138,9 +154,9 @@ contains
     integer :: count_aer
     integer :: idx_l, idx_r
 
-    !> Exctinction Angstrom coefficient
+    ! Exctinction Angstrom coefficient
     double precision :: alpha_ext
-    !> Scattering Angstrom coefficient
+    ! Scattering Angstrom coefficient
     double precision :: alpha_sca
 
 
@@ -234,6 +250,10 @@ contains
 
   end subroutine aerosol_init
 
+
+  !> @brief Deallocates aerosol-related arrays in scene object
+  !>
+  !> @param scn Scene object
   subroutine destroy_aerosol(scn)
 
     type(scene), intent(inout) :: scn
@@ -256,6 +276,20 @@ contains
   end subroutine destroy_aerosol
 
 
+  !> @brief Adds aerosols into a scene
+  !>
+  !> @param SV Statevector object
+  !> @param CS_win Control-Window object
+  !> @param CS_aerosol Control-Aerosol object
+  !> @param scn Scene object
+  !> @param scn_aer Scene aerosol (generic aerosol type)
+  !>
+  !> @detail
+  !> Given an aerosol object CS_aerosol, the scene_aerosol object
+  !> (scn_aer) is filled with corresponding values to handle various
+  !> data movements between state vector and scene. Inside this function
+  !> is a check for the type of "scn_aer", with specific implementations
+  !> for (potentially) different aerosol shapes.
   subroutine insert_aerosols_in_scene(SV, CS_win, CS_aerosol, scn, scn_aer)
 
     type(statevector), intent(in) :: SV
@@ -339,6 +373,15 @@ contains
   end subroutine insert_aerosols_in_scene
 
 
+  !> @brief Calculate Gaussian distribution of aerosols
+  !> @param CS_aerosols Control-Aerosol object
+  !> @scn Scene object
+  !> @scn_aer Scene aerosol
+  !>
+  !> @detail
+  !> Calculates the the per-layer aerosol optical depths
+  !> given a Gaussian distribution whose parameters are
+  !> found in the CS_aerosol and scn_aer objects.
   subroutine aerosol_gauss_shape(CS_aerosol, scn, scn_aer)
 
     type(CS_aerosol_t), intent(in) :: CS_aerosol(:)
@@ -426,12 +469,6 @@ contains
              scn%op%aer_ext_tau(wl,lay,aer) = &
                   scn%op%aer_ext_tau_edge(1, lay, aer) * scn%op%aer_ext_q(wl, aer) / &
                   CS_aerosol(scn%op%aer_mcs_map(aer))%qext(scn%op%aer_wl_idx_l(aer))
-
-             ! This is not the correct way to do it...
-             !scn%op%aer_ext_tau(wl,lay,aer) = exp( &
-             !     -((scn%atm%p_layers(lay) - scn_aer(aer)%height)**2) &
-             !     / (2 * scn_aer(aer)%width * scn_aer(aer)%width)) &
-             !     * scn_aer(aer)%AOD / aod_norm
           end do
 
           scn%op%aer_sca_tau(wl,:,aer) = scn%op%aer_ext_tau(wl,:,aer) * scn%op%aer_ssa(wl, aer)
@@ -448,9 +485,16 @@ contains
 
   end subroutine aerosol_gauss_shape
 
-
-  subroutine calculate_aero_height_factors(layer_p, aero_height, aero_width, &
-       factor)
+  !> @brief Factor needed for dI/dAerosolHeight calculation
+  !> @param layer_p Mid-layer pressure
+  !> @param aero_height Aerosol layer central height (same unit as pressure)
+  !> @param aero_width Aerosol layer width (same unit as pressure)
+  !> @param factor
+  !>
+  !> @detail These factors are needed to calculate the partial derivative
+  !> with respect to the layer height for Gaussian-distributed aerosols
+  subroutine calculate_aero_height_factors_Gauss( &
+       layer_p, aero_height, aero_width, factor)
 
     double precision, intent(in) :: layer_p(:)
     double precision, intent(in) :: aero_height
@@ -472,7 +516,7 @@ contains
        factor(i) = factor(i) - sum(aero_shape(:) * (layer_p(:) - aero_height) / (aero_width**2)) / sum(aero_shape)
     end do
 
-  end subroutine calculate_aero_height_factors
+  end subroutine calculate_aero_height_factors_Gauss
 
 
 end module aerosols_mod

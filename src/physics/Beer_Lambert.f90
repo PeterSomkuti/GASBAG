@@ -1,7 +1,8 @@
 !> @brief Module to house the Beer-Lambert RT model
 !> @file Beer_Lambert.f90
 !> @author Peter Somkuti
-
+!> @detail
+!> Contains all needed functions for an absorption-only atmosphere
 
 
 module Beer_Lambert_mod
@@ -12,6 +13,8 @@ module Beer_Lambert_mod
   use statevector_mod
 
   implicit none
+
+  logical :: BL_SPHERICAL = .true.
 
   public :: calculate_BL_radiance, calculate_BL_psurf_jacobian, &
        calculate_BL_temp_jacobian, calculate_BL_albedo_jacobian, &
@@ -29,7 +32,10 @@ contains
         implicit none
         type(scene), intent(in) :: scn
         double precision, intent(inout) :: radiance(:)
+        integer :: nlay
+        integer :: j
 
+        nlay = scn%num_active_levels-1
         ! First, calculate the radiance reflected JUST above the surface
         radiance(:) = scn%op%albedo(:) / PI * scn%mu0
 
@@ -37,8 +43,22 @@ contains
         ! radiance by the optical depths, which pass through the atmosphere twice.
         if (allocated(scn%op%total_tau)) then
            ! Have gas absorbers in the atmosphere?
-           radiance(:) = radiance(:) * exp(-1.0d0/scn%mu0 * scn%op%total_tau(:)) &
-                * exp(-1.0d0/scn%mu * scn%op%total_tau(:))
+
+           if (BL_SPHERICAL) then
+              do j = 1, size(radiance)
+                 radiance(j) = radiance(j) * exp(-1.0d0/scn%mu0 * &
+                      sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_solar(1:nlay))) &
+                      * exp(-1.0d0/scn%mu * &
+                      sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_viewing(1:nlay)))
+              end do
+           else
+              do j = 1, size(radiance)
+                 radiance(j) = radiance(j) * exp(-1.0d0/scn%mu0 * &
+                      sum(scn%op%layer_tau(j,1:scn%num_active_levels-1))) &
+                      * exp(-1.0d0/scn%mu * &
+                      sum(scn%op%layer_tau(j,1:scn%num_active_levels-1)))
+              end do
+           end if
         endif
 
     end subroutine
@@ -54,9 +74,25 @@ contains
       type(scene), intent(in) :: scn
       double precision, intent(inout) :: psurf_jacobian(:)
 
+      integer :: j, nlay
 
-      psurf_jacobian(:) = TOA_radiance(:) * (1.0d0 / scn%mu0 + 1.0d0 / scn%mu) &
-           * (sum(sum(scn%op%gas_tau_dpsurf, dim=2), dim=2))
+      nlay = scn%num_active_levels - 1
+
+      if (BL_SPHERICAL) then
+         do j = 1, size(psurf_jacobian)
+            psurf_jacobian(j) = TOA_radiance(j) * sum( &
+                 ( &
+                 scn%atm%ps_factors_solar(1:nlay) / scn%mu0 + &
+                 scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
+                 ) * sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=1) &
+                 )
+         end do
+      else
+         do j = 1, size(psurf_jacobian)
+            psurf_jacobian(j) = TOA_radiance(j) * (1.0d0 / scn%mu0 + 1.0d0 / scn%mu) &
+                 * (sum(sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=1), dim=1))
+         end do
+      end if
 
     end subroutine calculate_BL_psurf_jacobian
 
@@ -71,8 +107,26 @@ contains
       type(scene), intent(in) :: scn
       double precision, intent(inout) :: temp_jacobian(:)
 
-      temp_jacobian(:) =  -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-           * (sum(sum(scn%op%gas_tau_dtemp, dim=2), dim=2))
+      integer :: j, nlay
+
+      nlay = scn%num_active_levels - 1
+
+      if (BL_SPHERICAL) then
+         do j = 1, size(temp_jacobian)
+            temp_jacobian(j) = -TOA_radiance(j) * sum( &
+                 ( &
+                 scn%atm%ps_factors_solar(1:nlay) / scn%mu0 + &
+                 scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
+                 ) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
+                 )
+         end do
+      else
+         do j = 1, size(temp_jacobian)
+            temp_jacobian(j) =  -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                 * (sum(sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=1), dim=1))
+         end do
+      end if
+
 
     end subroutine calculate_BL_temp_jacobian
 
@@ -138,12 +192,44 @@ contains
       double precision, intent(in) :: scale_factor
       double precision, intent(inout) :: gas_jacobian(:)
 
-      gas_jacobian(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-           * sum(scn%op%gas_tau(:,idx_start:idx_stop,idx_gas), dim=2) / scale_factor
+      integer :: j, nlay
+      nlay = scn%num_active_levels - 1
+
+
+      if (BL_SPHERICAL) then
+         do j = 1, size(gas_jacobian)
+            gas_jacobian(j) = -TOA_radiance(j) * sum( &
+                 ( &
+                 scn%atm%ps_factors_solar(idx_start:idx_stop) / scn%mu0 + &
+                 scn%atm%ps_factors_viewing(idx_start:idx_stop) / scn%mu &
+                 ) * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas) &
+                 ) / scale_factor
+         end do
+      else
+         do j = 1, size(gas_jacobian)
+            gas_jacobian(j) = -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                 * sum(scn%op%gas_tau(j,idx_start:idx_stop,idx_gas), dim=1) / scale_factor
+         end do
+      end if
+
 
     end subroutine calculate_BL_gas_subcolumn_jacobian
 
 
+    !> @brief Column averaging kernel for scale retrieval
+    !> @param TOA_radiance top-of-atmosphere radiance (sans SIF and ZLO)
+    !> @param scn Scene object
+    !> @param SV Statevector object
+    !> @param gain_matrix Gain matrix (see Rodgers)
+    !> @param ILS_delta_lambda ILS delta lambda array (sample, delta lambda)
+    !> @param ILS_relative_response ILS relative response array (sample, delta_lambda)
+    !> @param dispersion Dispersion coefficients
+    !> @param psurf Current surface pressure
+    !> @param num_active_levels Number of active levels in the retrieval
+    !> @param N_spec Number of spectral points
+    !> @param idx_start Array of start indices for retrieved gas scale coefficients
+    !> @param idx_stop Array of stop indices for retrieved gas scale coefficients
+    !> @param col_AK Result - column averaging kernel for each gas
     subroutine calculate_BL_scale_AK_corr( &
          TOA_radiance, &
          scn, &
@@ -174,9 +260,9 @@ contains
       integer, intent(in) :: idx_stop(:)
       double precision, intent(inout) :: col_AK(:,:)
 
-      integer :: N_gas
+      integer :: N_gas, nlay
       integer :: i_gas, i_SV
-      integer :: i
+      integer :: i, j
 
       logical :: ILS_success
 
@@ -192,6 +278,7 @@ contains
       integer :: idx1, idx2
 
       N_gas = size(scn%op%gas_tau, 3)
+      nlay = scn%num_active_levels - 1
 
       allocate(dI_dVMR(size(TOA_radiance)))
       allocate(tmp_v1(size(SV%svap)))
@@ -217,19 +304,60 @@ contains
          ! those values are independent of the sub-column setup
 
          do i=1, num_active_levels
-            if (i == 1) then
-               ! TOA layer
-               dI_dVMR(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                    * scn%op%gas_tau_dvmr(1,:,i,i_gas)
-            else if (i == num_active_levels) then
-               ! BOA layer
-               dI_dVMR(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                    * scn%op%gas_tau_dvmr(1,:,i-1,i_gas)
+
+
+            if (BL_SPHERICAL) then
+
+               if (i == 1) then
+                  ! TOA layer
+                  do j = 1, size(dI_dVMR) ! Loop over spectral indices
+                     dI_dVMR(j) = -TOA_radiance(j) * ( &
+                          (scn%atm%ps_factors_solar(i) / scn%mu0) + &
+                          (scn%atm%ps_factors_viewing(i) / scn%mu)) &
+                          * scn%op%gas_tau_dvmr(1,j,i,i_gas)
+                  end do
+               else if (i == num_active_levels) then
+                  ! BOA layer
+                  do j = 1, size(dI_dVMR) ! Loop over spectral indices
+                     dI_dVMR(j) = -TOA_radiance(j) * ( &
+                          (scn%atm%ps_factors_solar(i) / scn%mu0) + &
+                          (scn%atm%ps_factors_viewing(i) / scn%mu)) &
+                          * scn%op%gas_tau_dvmr(1,j,i-1,i_gas)
+                  end do
+               else
+                  ! everything in between
+                  do j = 1, size(dI_dVMR) ! Loop over spectral indices
+                     dI_dVMR(j) = -TOA_radiance(j) * ( &
+                          (scn%atm%ps_factors_solar(i) / scn%mu0) + &
+                          (scn%atm%ps_factors_viewing(i) / scn%mu)) * &
+                          (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
+                          scn%op%gas_tau_dvmr(1,j,i,i_gas))
+                  end do
+               end if
+
             else
-               ! everything in between
-               dI_dVMR(:) = -TOA_radiance(:) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
-                    (scn%op%gas_tau_dvmr(2,:,i-1,i_gas) + &
-                    scn%op%gas_tau_dvmr(1,:,i,i_gas))
+
+               if (i == 1) then
+                  ! TOA layer
+                  do j = 1, size(dI_dVMR)
+                     dI_dVMR(j) = -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                          * scn%op%gas_tau_dvmr(1,j,i,i_gas)
+                  end do
+               else if (i == num_active_levels) then
+                  ! BOA layer
+                  do j = 1, size(dI_dVMR)
+                     dI_dVMR(j) = -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
+                          * scn%op%gas_tau_dvmr(1,j,i-1,i_gas)
+                  end do
+               else
+                  ! everything in between
+                  do j = 1, size(dI_dVMR)
+                     dI_dVMR(j) = -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) * &
+                          (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
+                          scn%op%gas_tau_dvmr(1,j,i,i_gas))
+                  end do
+               end if
+
             end if
 
             call oco_type_convolution(scn%op%wl, &
@@ -239,6 +367,7 @@ contains
                  dispersion(:), &
                  dI_dVMR_conv(:,i), &
                  ILS_success)
+
          end do
 
 
@@ -280,6 +409,7 @@ contains
             end do
 
          end do
+
          col_AK(i_gas, 1:num_active_levels) = AK_profile_total(:)
 
       end do

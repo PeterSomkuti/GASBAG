@@ -2,6 +2,7 @@
 !> @file Control.f90
 !> @author Peter Somkuti
 !>
+!> @detail
 !> This module is for easy access of important quantities throughout the
 !> program, such as instrument name and retrieval settings, algorithm modes, ..
 !> the whole shebang. A lot of other modules and subroutines access variables
@@ -42,6 +43,7 @@ module control_mod
   !> Number of aerosols
   integer, parameter :: MAX_AEROSOLS = 10
 
+  !> General GASBAG information (for all retrieval windows)
   type :: CS_general_t
      character(len=3) :: code_name = "gbg"
      !> Number of soundings to be processed
@@ -56,6 +58,7 @@ module control_mod
      integer :: loglevel
   end type CS_general_t
 
+  !> Algorithm set up (for all retrieval windows)
   type :: CS_algorithm_t
      !> Name of the algorithm(s) used?
      type(string) :: name(MAX_ALGORITHMS)
@@ -80,6 +83,7 @@ module control_mod
      logical :: step_through
   end type CS_algorithm_t
 
+  !> Retrieval window detail setup
   type :: CS_window_t
      !> Is this CS_window structure used?
      logical :: used
@@ -100,6 +104,8 @@ module control_mod
      type(string) :: basisfunction_file
      !> Order of albedo-polynomial to be retrieved (number + 1)
      integer :: albedo_order
+     !> Surface albedo covariance (per order)
+     double precision, allocatable :: albedo_cov(:)
      !> Number of solar irradiance scaling coefficients to be retrieved
      integer :: solar_irrad_scale_order
      !> Surface pressure prior covariance (in Pa)
@@ -175,6 +181,8 @@ module control_mod
      double precision, allocatable :: aerosol_prior_height(:)
      !> Prior covariance from SV string
      double precision, allocatable :: aerosol_height_cov(:)
+     !> Extenrally supplemented surface albedo values
+     type(string) :: external_surface_albedo
      !> Do we keep the scattering coefficients constant throughout the band? Speedup!
      logical :: constant_coef
      !> What is the number of sublayers to be used for gas OD calculations
@@ -221,6 +229,7 @@ module control_mod
      integer(hid_t) :: GASBAG_prior_id
   end type CS_window_t
 
+  !> Input data
   type :: CS_input_t
      !> Path to L1B file
      type(string) :: l1b_filename
@@ -240,6 +249,7 @@ module control_mod
      logical :: preload_spectra = .false.
   end type CS_input_t
 
+  !> Output file options
   type :: CS_output_t
      !> Where does the ouptut HDF file go?
      type(string) :: output_filename
@@ -257,6 +267,7 @@ module control_mod
      logical :: gas_averaging_kernels
   end type CS_output_t
 
+  !> Gas absorber control structure
   type :: CS_gas_t
      !> Is this CS_gas used?
      logical :: used
@@ -293,6 +304,7 @@ module control_mod
      double precision, allocatable :: H2O(:)
   end type CS_gas_t
 
+  !> Aerosol control structure
   type :: CS_aerosol_t
      !> Is this aerosol used?
      logical :: used
@@ -329,7 +341,7 @@ module control_mod
   end type CS_aerosol_t
 
 
-  ! Main control_mod structure type
+  !> Main (umbrella) control_mod structure type
   type :: CS_t
      !> Algorithm/forwared model - related settings
      type(CS_algorithm_t) :: algorithm
@@ -346,9 +358,6 @@ module control_mod
      !> General retrieval settings/info
      type(CS_general_t) :: general
   end type CS_t
-
-  !> Main control structure
-  !type(CS_t), public :: MCS
 
   public populate_MCS
 
@@ -994,6 +1003,24 @@ contains
              deallocate(fini_val_array)
           end if
 
+          call fini_extract(fini, win_str, 'albedo_covariance', .false., fini_val_array)
+
+          ! Albedo covariances must match the imposed albedo polynomial order
+          if (allocated(fini_val_array)) then
+             if (size(fini_val_array) == CS%window(window_nr)%albedo_order + 1) then
+                allocate(CS%window(window_nr)%albedo_cov(size(fini_val_array)))
+                do i=1, size(fini_val_array)
+                   CS%window(window_nr)%albedo_cov(i) = fini_val_array(i)
+                end do
+                deallocate(fini_val_array)
+             else
+                write(tmp_str, '(A,G0.1,A,A,G0.1)') "You supplied ", size(fini_val_array), " albedo covariances", &
+                     ", but the albedo retrieval order is: ", CS%window(window_nr)%albedo_order
+                call logger%fatal(fname, trim(tmp_str))
+                stop 1
+             end if
+          end if
+
           CS%window(window_nr)%num_gases = 0
           call fini_extract(fini, win_str, 'gases', .false., fini_string_array)
 
@@ -1056,6 +1083,8 @@ contains
              deallocate(fini_string_array)
           end if
 
+          call fini_extract(fini, win_str, 'external_surface_albedo', .false., fini_char)
+          CS%window(window_nr)%external_surface_albedo = trim(fini_char)
 
           call fini_extract(fini, win_str, 'atmosphere', .false., fini_char)
           CS%window(window_nr)%atmosphere_file = trim(fini_char)

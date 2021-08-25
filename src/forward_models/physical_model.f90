@@ -123,6 +123,9 @@ module physical_model_mod
   !> PRIOR gas profile pressure levels (level, footprint, frame)
   double precision, allocatable :: prior_gas_profiles_pressures(:,:,:)
 
+  !> Externally used surface albedo values (footprint, frame)
+  double precision, allocatable :: external_surface_albedo(:,:)
+
   ! The initial atmosphere provided by the config file, this is the basis
   ! for all scene-dependent atmospheres. The pressure levels of initial_atm
   ! will be used for all retrievals, but the T and SH profiles are taken from
@@ -221,6 +224,7 @@ contains
 
     ! HDF5 file handlers for the L1b file and the MET file
     integer(hid_t) :: l1b_file_id, met_file_id, prior_file_id, output_file_id
+    integer(hid_t) :: tmp_file_id
     ! Variable to hold group ID
     integer(hid_t) :: result_gid
     ! Does a spike/bad_sample data field exist?
@@ -471,18 +475,6 @@ contains
           ! with the contents of said file. It is cross-referenced against the gases in the
           ! list of gases in this window. This is non-optional obviously, so the program is
           ! going to stop if it cannot find the specified file.
-          !
-          ! TODO
-          ! I think this way of setting up the atmosphere is bad design at this point.
-          ! We should REALLY either: grab the pressure levels from the MET file, or
-          ! generate a new pressure grid, based on e.g. tropopause, topography, or
-          ! something else physically sensible.
-
-          ! TODO
-          ! Add in an option that would read the atmosphere
-          ! from an OCO-type prior file from J. Laughner's TCCON
-          ! tools.
-
 
           ! If a prior file is supplied, the "read_atmosphere portion should be overridden.
           if (CS%input%prior_filename == "") then
@@ -511,6 +503,20 @@ contains
                   initial_atm)
 
           end if
+
+
+          ! If externally supplemented surface albedos are used, read them in
+          ! here.
+
+          if (CS%window(i_win)%external_surface_albedo /= "") then
+
+             call h5fopen_f(CS%window(i_win)%external_surface_albedo%chars(), &
+                  H5F_ACC_RDONLY_F, tmp_file_id, hdferr)
+             call read_DP_hdf_dataset(tmp_file_id, "albedo_order_0", &
+                  external_surface_albedo, dset_dims)
+
+          end if
+
 
        end if
 
@@ -550,8 +556,8 @@ contains
                lon, lat, altitude, relative_velocity, relative_solar_velocity)
           ! Grab the L1B stokes coefficients
           call my_instrument%read_stokes_coef(l1b_file_id, band, &
-               CS%general%N_fp, CS%general%N_frame, CS%algorithm%observation_mode, &
-               stokes_coef)
+               CS%general%N_fp, CS%general%N_frame, &
+               CS%algorithm%observation_mode, stokes_coef)
 
           ! Read in Spike filter data, if it exists in this file
           call h5lexists_f(l1b_file_id, "/SpikeEOF", spike_exists, hdferr)
@@ -805,18 +811,19 @@ contains
                      (land_fraction(i_fp, i_fr) < &
                      CS%window(i_win)%minimum_land_fraction) &
                      ) then
-                   !write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
-                   !     ") skipped due to land fraction constraint."
-                   !call logger%info(fname, trim(tmp_str))
+
+                   write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
+                        ") skipped due to land fraction constraint."
+                   call logger%info(fname, trim(tmp_str))
                    retr_count = retr_count + 1
                    cycle
                 end if
              end if
 
              if (sounding_qual_flag(i_fp, i_fr) /= 0) then
-                !write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
-                !     ") skipped due to bad quality flag."
-                !call logger%info(fname, trim(tmp_str))
+                write(tmp_str, '(A, G0.1, A, G0.1, A)') "Scene (", i_fr, "/", i_fp, &
+                     ") skipped due to bad quality flag."
+                call logger%info(fname, trim(tmp_str))
                 retr_count = retr_count + 1
                 cycle
              end if
@@ -910,6 +917,8 @@ contains
        ! If prior gas profiles were loaded, deallocate them here
        if (allocated(prior_gas_profiles)) deallocate(prior_gas_profiles)
        if (allocated(prior_gas_profiles_pressures)) deallocate(prior_gas_profiles_pressures)
+
+       if (allocated(external_surface_albedo)) deallocate(external_surface_albedo)
 
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
@@ -1607,40 +1616,48 @@ contains
     ! -----------------------------------------------------------------------
 
     albedo_apriori = -1.0d0
-    select type(my_instrument)
-    type is (oco2_instrument)
 
-       allocate(solar_irrad(N_hires))
+    if (allocated(external_surface_albedo)) then
+       ! If external surface albedo is given, we can just supply the value here
+       albedo_apriori = external_surface_albedo(i_fp, i_fr)
 
-       if (CS%algorithm%solar_type == "toon") then
-          ! Allocate Solar continuum (irradiance) array. We do this here already,
-          ! since it's handy to have it for estimating the albedo
+    else
 
-          call calculate_solar_planck_function(6500.0d0, solar_dist, &
-               solar_spectrum_regular(:,1), solar_irrad)
+       select type(my_instrument)
+       type is (oco2_instrument)
 
-       else if (CS%algorithm%solar_type == "oco_hdf") then
-          ! The OCO-HDF-type spectrum needs to be first re-gridded here
-          call pwl_value_1d_v2( &
-               N_solar, &
-               solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
-               N_hires, &
-               solar_spectrum_regular(:,1), solar_irrad(:))
+          allocate(solar_irrad(N_hires))
 
-          solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
+          if (CS%algorithm%solar_type == "toon") then
+             ! Allocate Solar continuum (irradiance) array. We do this here already,
+             ! since it's handy to have it for estimating the albedo
+
+             call calculate_solar_planck_function(6500.0d0, solar_dist, &
+                  solar_spectrum_regular(:,1), solar_irrad)
+
+          else if (CS%algorithm%solar_type == "oco_hdf") then
+             ! The OCO-HDF-type spectrum needs to be first re-gridded here
+             call pwl_value_1d_v2( &
+                  N_solar, &
+                  solar_continuum_from_hdf(:,1), solar_continuum_from_hdf(:,2), &
+                  N_hires, &
+                  solar_spectrum_regular(:,1), solar_irrad(:))
+
+             solar_irrad(:) = solar_irrad(:) / ((solar_dist / AU_UNIT )** 2)
 
 
-       else
-          call logger%error(fname, "Solar type: " // CS%algorithm%solar_type%chars() // "is unknown.")
-       end if
+          else
+             call logger%error(fname, "Solar type: " // CS%algorithm%solar_type%chars() // "is unknown.")
+          end if
 
-       ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
-       ! comes with its own irradiance
-       ! Also take that into account Stokes coef of instrument for the
-       ! incoming solar irradiance
-       albedo_apriori = PI * maxval(radiance_l1b) / &
-            (maxval(solar_irrad) * scn%mu0) / stokes_coef(1, i_fp, i_fr)
-    end select
+          ! Otherwise, if we use an OCO/HDF-like solar spectrum, that already
+          ! comes with its own irradiance
+          ! Also take that into account Stokes coef of instrument for the
+          ! incoming solar irradiance
+          albedo_apriori = PI * maxval(radiance_l1b) / &
+               (maxval(solar_irrad) * scn%mu0) / stokes_coef(1, i_fp, i_fr)
+       end select
+    end if
 
     ! XRTM will NOT allow an unphysical albedo, so might as well just quit here
     if (RT_MODEL == RT_XRTM) then
@@ -1857,6 +1874,10 @@ contains
              ! the actual values of tropopause pressure and surface
              ! pressure are available.
 
+             ! This function overwrite the gas VMR content in the
+             ! scn%atm%gas_vmr array, according to whatever gases
+             ! are present in the prior file.
+
              call rearrange_atmosphere_with_scheme( &
                   scn%atm, &
                   ptropo, &
@@ -1888,15 +1909,6 @@ contains
        scn%num_active_levels = -1
 
        if (CS_win%num_gases > 0) then
-
-          ! After we've taken a copy of the initial atmosphere,
-          ! we might want to replace some of the prior gases with
-          ! some specialized function. This is done in a two-step
-          ! process: first this "wrapper-type" function is called,
-          ! which contains the more intricate calls to the subroutines
-          ! that actually replace the VMR profiles. These prior gases
-          ! tend to be functions of the scene (lon, lat, time etc.),
-          call replace_prior_VMR(scn, CS_win%gas_prior_type)
 
           ! Number of levels in the model atmosphere
           ! AS GIVEN BY THE ATMOSPHERE FILE
@@ -1939,22 +1951,14 @@ contains
                   size(scn%atm%p), &
                   log(scn%atm%p), scn%atm%sh)
 
-             ! For now - take the full MET profile
-             !scn%atm%p(:) = met_P_levels(:,i_fp,i_fr)
-             !scn%atm%T(:) = met_T_profiles(:,i_fp,i_fr)
-             !scn%atm%sh(:) = met_SH_profiles(:,i_fp,i_fr)
              scn%atm%psurf = met_psurf(i_fp,i_fr)
 
+
+             ! We have to map the indices and gas names accordingly
              do i = 1, scn%atm%num_gases
 
                 scn%atm%gas_index(i) = i
                 scn%atm%gas_names(i) = CS%window(i_win)%gases(i)
-
-                !if (CS%window(i_win)%gases(i)%lower() == "h2o") then
-                !   ! Pass
-                !else
-                !   scn%atm%gas_vmr(:, i) = prior_gas_profiles(:,i,i_fp,i_fr)
-                !end if
 
              end do
 
@@ -2524,7 +2528,7 @@ contains
                SV, & ! The statevector
                scn, & ! The retrieval scene
                n_stokes, & ! Number of Stokes parameters to calculate
-               radiance_calc_work_hi_stokes, & ! Radiance esults
+               radiance_calc_work_hi_stokes, & ! Radiance results
                dI_dgas, &  ! Jacobian results
                dI_dsurf, &  ! Jacobian results
                dI_dTemp, &  ! Jacobian results
@@ -2536,6 +2540,10 @@ contains
 
           ! If XRTM failed, no need to continue and move on to next retrieval.
           if (.not. xrtm_success) return
+
+          if (any(ieee_is_nan(radiance_calc_work_hi_stokes))) then
+             call logger%fatal(fname, "NaN(s) in radiance_calc_work_hi_stokes")
+          end if
 
        end select
 
@@ -3676,18 +3684,22 @@ contains
     double precision, intent(inout) :: Sa(:,:)
     double precision, intent(inout) :: Sa_inv(:,:)
 
+
     ! Local variables
     integer :: i
+    character(len=*), parameter :: fname = "populate_prior_covariance"
 
     ! Make the albedo essentially unconstrained. We keep this larger than 1, simply
     ! because we can end up with effective albedos much larger than 1.0 due to
     ! non-Lambertian BRDFs.
     if (SV%num_albedo > 0) then
        do i=1, SV%num_albedo
-          if (i==1) then
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(i))
+
+          if (allocated(CS_win%albedo_cov)) then
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = CS_win%albedo_cov(i)
           else
-             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(1)) ** dble(i)
+             call logger%debug(fname, "No user-supplied albedo covariance - using 1.0d0.")
+             Sa(SV%idx_albedo(i), SV%idx_albedo(i)) = 1.0d0 !* SV%svap(SV%idx_albedo(i))
           end if
        end do
     end if

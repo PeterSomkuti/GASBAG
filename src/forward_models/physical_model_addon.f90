@@ -174,10 +174,6 @@ contains
           end do
 
        end do ! end aerosol type loop
-       !write(*,*) "debug info"
-       !write(*,*) "l, fac, ray, denom: ", l, fac, ray_tau(l), denom
-       !write(*,*) "aer sca: ", aer_sca_tau(l, :)
-       !write(*,*) "coef: ", coef(1:3, :, l) !, aerpmom(1, 1:3, 1, l)
 
 
        ! And add Rayleigh contributions here (after partial aerosol sum)
@@ -226,7 +222,7 @@ contains
 
           this_aero_height = exp(SV%svsv(SV%idx_aerosol_height(i))) * scn%atm%psurf
 
-          call calculate_aero_height_factors( &
+          call calculate_aero_height_factors_Gauss( &
                scn%atm%p_layers(1:n_layer), &
                this_aero_height, &
                CS_aerosol(scn%op%aer_mcs_map(aer_sv_idx))%default_width, &

@@ -316,14 +316,17 @@ contains
                           (scn%atm%ps_factors_viewing(i) / scn%mu)) &
                           * scn%op%gas_tau_dvmr(1,j,i,i_gas)
                   end do
+
                else if (i == num_active_levels) then
                   ! BOA layer
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%atm%ps_factors_solar(i) / scn%mu0) + &
-                          (scn%atm%ps_factors_viewing(i) / scn%mu)) &
-                          * scn%op%gas_tau_dvmr(1,j,i-1,i_gas)
+                          (scn%atm%ps_factors_solar(i-1) / scn%mu0) + &
+                          (scn%atm%ps_factors_viewing(i-1) / scn%mu)) &
+                          * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
+
                   end do
+
                else
                   ! everything in between
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
@@ -332,7 +335,9 @@ contains
                           (scn%atm%ps_factors_viewing(i) / scn%mu)) * &
                           (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
                           scn%op%gas_tau_dvmr(1,j,i,i_gas))
+
                   end do
+
                end if
 
             else
@@ -347,7 +352,7 @@ contains
                   ! BOA layer
                   do j = 1, size(dI_dVMR)
                      dI_dVMR(j) = -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                          * scn%op%gas_tau_dvmr(1,j,i-1,i_gas)
+                          * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
                   end do
                else
                   ! everything in between
@@ -413,7 +418,6 @@ contains
          col_AK(i_gas, 1:num_active_levels) = AK_profile_total(:)
 
       end do
-
 
     end subroutine calculate_BL_scale_AK_corr
 

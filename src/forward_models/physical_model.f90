@@ -462,8 +462,13 @@ contains
 
              if (CS%gas(j)%type%lower() == "absco") then
                 call logger%info(fname, "Reading in ABSCO-type gas: " // CS%window(i_win)%gases(i))
-                call read_absco_HDF(CS%gas(j)%filename%chars(), CS%gas(j), absco_dims, &
-                     CS%gas(j)%hitran_index)
+
+                call read_absco_HDF( &
+                     CS%gas(j)%filename%chars(), &
+                     CS%gas(j), &
+                     CS%gas(j)%hitran_index, &
+                     absco_dims &
+                     )
              else
                 call logger%fatal(fname, "Spectroscopy type: " // CS%gas(j)%type &
                      // " not implemented!")
@@ -775,7 +780,7 @@ contains
        ! (notably: reading spectra, writing to a logfile)
 
 
-       !frame_start = 1359
+       !frame_start = 2775
        !frame_start = 3225
        !frame_stop = 50
 

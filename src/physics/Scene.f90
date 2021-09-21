@@ -5,7 +5,7 @@ module scene_mod
   ! Third-party modules
   use stringifor
   use mod_datetime
-  
+
   implicit none
 
   !> A simple structure to keep the atmosphere data nice and tidy
@@ -434,7 +434,7 @@ contains
        scn%atm%grav(i) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i))
        !-----------------------------------------------------
 
-    end do
+    end do 
 
     ! Some calculations want the layer altitude, so might as well compute them
     ! here and store them along with gravity on layers.

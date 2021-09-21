@@ -46,17 +46,22 @@ contains
 
            if (BL_SPHERICAL) then
               do j = 1, size(radiance)
-                 radiance(j) = radiance(j) * exp(-1.0d0/scn%mu0 * &
-                      sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_solar(1:nlay))) &
-                      * exp(-1.0d0/scn%mu * &
-                      sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_viewing(1:nlay)))
+                 radiance(j) = radiance(j) * exp(&
+                      -1.0d0/scn%mu0 &
+                      * sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_solar(1:nlay)) &
+                      ) &
+                      * exp( &
+                      -1.0d0/scn%mu &
+                      * sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_viewing(1:nlay)) &
+                      )
               end do
            else
               do j = 1, size(radiance)
-                 radiance(j) = radiance(j) * exp(-1.0d0/scn%mu0 * &
-                      sum(scn%op%layer_tau(j,1:scn%num_active_levels-1))) &
-                      * exp(-1.0d0/scn%mu * &
-                      sum(scn%op%layer_tau(j,1:scn%num_active_levels-1)))
+                 radiance(j) = radiance(j) * exp(-1.0d0/scn%mu0 &
+                      * sum(scn%op%layer_tau(j,1:scn%num_active_levels-1))) &
+                      * exp(-1.0d0/scn%mu &
+                      * sum(scn%op%layer_tau(j,1:scn%num_active_levels-1)) &
+                      )
               end do
            end if
         endif
@@ -82,8 +87,8 @@ contains
          do j = 1, size(psurf_jacobian)
             psurf_jacobian(j) = TOA_radiance(j) * sum( &
                  ( &
-                 scn%atm%ps_factors_solar(1:nlay) / scn%mu0 + &
-                 scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
+                 scn%atm%ps_factors_solar(1:nlay) / scn%mu0 &
+                 + scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
                  ) * sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=1) &
                  )
          end do
@@ -115,8 +120,8 @@ contains
          do j = 1, size(temp_jacobian)
             temp_jacobian(j) = -TOA_radiance(j) * sum( &
                  ( &
-                 scn%atm%ps_factors_solar(1:nlay) / scn%mu0 + &
-                 scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
+                 scn%atm%ps_factors_solar(1:nlay) / scn%mu0 &
+                 + scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
                  ) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
                  )
          end do
@@ -200,8 +205,8 @@ contains
          do j = 1, size(gas_jacobian)
             gas_jacobian(j) = -TOA_radiance(j) * sum( &
                  ( &
-                 scn%atm%ps_factors_solar(idx_start:idx_stop) / scn%mu0 + &
-                 scn%atm%ps_factors_viewing(idx_start:idx_stop) / scn%mu &
+                 scn%atm%ps_factors_solar(idx_start:idx_stop) / scn%mu0 &
+                 + scn%atm%ps_factors_viewing(idx_start:idx_stop) / scn%mu &
                  ) * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas) &
                  ) / scale_factor
          end do
@@ -312,18 +317,18 @@ contains
                   ! TOA layer
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%atm%ps_factors_solar(i) / scn%mu0) + &
-                          (scn%atm%ps_factors_viewing(i) / scn%mu)) &
-                          * scn%op%gas_tau_dvmr(1,j,i,i_gas)
+                          (scn%atm%ps_factors_solar(i) / scn%mu0) &
+                          + (scn%atm%ps_factors_viewing(i) / scn%mu) &
+                          ) * scn%op%gas_tau_dvmr(1,j,i,i_gas)
                   end do
 
                else if (i == num_active_levels) then
                   ! BOA layer
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%atm%ps_factors_solar(i-1) / scn%mu0) + &
-                          (scn%atm%ps_factors_viewing(i-1) / scn%mu)) &
-                          * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
+                          (scn%atm%ps_factors_solar(i-1) / scn%mu0) &
+                          + (scn%atm%ps_factors_viewing(i-1) / scn%mu) &
+                          ) * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
 
                   end do
 
@@ -331,9 +336,10 @@ contains
                   ! everything in between
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%atm%ps_factors_solar(i) / scn%mu0) + &
-                          (scn%atm%ps_factors_viewing(i) / scn%mu)) * &
-                          (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
+                          (scn%atm%ps_factors_solar(i) / scn%mu0) &
+                          + (scn%atm%ps_factors_viewing(i) / scn%mu) &
+                          ) &
+                          * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
                           scn%op%gas_tau_dvmr(1,j,i,i_gas))
 
                   end do

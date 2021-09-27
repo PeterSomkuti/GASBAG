@@ -50,6 +50,9 @@ module scene_mod
      double precision, allocatable :: ps_factors_solar(:)
      !> Layer pseudo spherical factors for viewing angles
      double precision, allocatable :: ps_factors_viewing(:)
+     !> Layer Chapman factors (layer, layer)
+     double precision, allocatable :: chapman_solar(:,:)
+     double precision, allocatable :: chapman_viewing(:,:)
 
   end type atmosphere
 
@@ -60,6 +63,10 @@ module scene_mod
      !> Surface albedo
      double precision, allocatable :: albedo(:)
 
+     !> Sphericity factor for the solar path
+     double precision, allocatable :: sph_tau_factor_solar(:,:)
+     !> Sphericity factor for the viewing / LOS path
+     double precision, allocatable :: sph_tau_factor_viewing(:,:)
      !> Gas optical depth (spectral, layer, gas number)
      double precision, allocatable :: gas_tau(:,:,:)
      !> dtau / dtemp (spectral, layer, gas number)
@@ -302,6 +309,8 @@ contains
     deallocate(scn%op%albedo)
     deallocate(scn%op%aer_frac)
 
+    if (allocated(scn%op%sph_tau_factor_solar)) deallocate(scn%op%sph_tau_factor_solar)
+    if (allocated(scn%op%sph_tau_factor_viewing)) deallocate(scn%op%sph_tau_factor_viewing)
     if (allocated(scn%op%gas_tau)) deallocate(scn%op%gas_tau)
     if (allocated(scn%op%gas_tau_dpsurf)) deallocate(scn%op%gas_tau_dpsurf)
     if (allocated(scn%op%gas_tau_dvmr)) deallocate(scn%op%gas_tau_dvmr)
@@ -382,6 +391,56 @@ contains
   end function jpl_gravity
 
 
+  !> @brief Calculate Chapman factors per layer
+  !> @details This code is inspired by MS3 (O'Brien, O'Dell et al.)
+  !> @param scn Scene object
+  subroutine chapman_factors(scn, mu, chapman)
+    type(scene), intent(inout) :: scn
+    double precision, intent(in) :: mu ! either mu or mu0
+    double precision, intent(inout) :: chapman(:,:)
+
+    integer :: i, j
+    integer :: Nlay
+
+    double precision, allocatable :: dz(:)
+    double precision :: dist, lastdist
+    double precision :: r_i, r_j
+
+    Nlay = scn%num_active_levels - 1
+    chapman(:,:) = 0.0d0
+
+    allocate(dz(Nlay))
+
+    ! delta altitude in [m]
+    do i = 1, Nlay
+       dz(i) = scn%atm%altitude_levels(i) - scn%atm%altitude_levels(i+1)
+    end do
+
+    ! To be consistent with MS3 code, we loop from bottom to the top
+    do i = Nlay, 1, -1
+       ! r_i: altitude (from Earth center) at the bottom of layer i
+       r_i = EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(i + 1)
+       dist = 0.0d0
+
+       do j = i, 1, -1
+
+          lastdist = dist
+          ! r_j: altitude (from Earth center) at the top of layer j
+          r_j = EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(j)
+
+          ! dist is from bottom of layer i to TOP of layer j (above layer i)
+          dist = r_i * ( sqrt(mu * mu + (r_j / r_i)**2 - 1.0d0) - mu )
+
+          ! This calculates 1 / mueff
+          chapman(i,j) = (dist - lastdist) / dz(j) ! / (1.0d0 / mu)
+
+       end do
+
+    end do
+
+  end subroutine chapman_factors
+
+
   !> @brief Calculate altitude levels, gravity levels and ndry
   !> @details This code is borrowed from MS3 (O'Brien, O'Dell et al.)
   !> @param scn Scene object
@@ -434,7 +493,7 @@ contains
        scn%atm%grav(i) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i))
        !-----------------------------------------------------
 
-    end do 
+    end do
 
     ! Some calculations want the layer altitude, so might as well compute them
     ! here and store them along with gravity on layers.
@@ -450,9 +509,13 @@ contains
 
     if (allocated(scn%atm%ps_factors_solar)) deallocate(scn%atm%ps_factors_solar)
     if (allocated(scn%atm%ps_factors_viewing)) deallocate(scn%atm%ps_factors_viewing)
+    if (allocated(scn%atm%chapman_solar)) deallocate(scn%atm%chapman_solar)
+    if (allocated(scn%atm%chapman_viewing)) deallocate(scn%atm%chapman_viewing)
 
     allocate(scn%atm%ps_factors_solar(scn%num_levels - 1))
     allocate(scn%atm%ps_factors_viewing(scn%num_levels - 1))
+    allocate(scn%atm%chapman_solar(scn%num_levels - 1, scn%num_levels - 1))
+    allocate(scn%atm%chapman_viewing(scn%num_levels - 1, scn%num_levels - 1))
 
     do i = 1, scn%num_levels - 1
 
@@ -464,6 +527,10 @@ contains
 
     end do
 
+    ! This provides effective 1 / mu0
+    call chapman_factors(scn, scn%mu0, scn%atm%chapman_solar)
+    ! This provides effective 1 / mu
+    call chapman_factors(scn, scn%mu, scn%atm%chapman_viewing)
 
   end subroutine scene_altitude
 

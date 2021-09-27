@@ -189,6 +189,8 @@ module control_mod
      integer :: N_sublayers
      !> The dsigma_square factor to adjust convergence
      double precision :: dsigma_scale
+     !> Number of minimum iterations needed before it is considered converged
+     integer :: min_iterations
      !> Number of iterations after which the rerieval is stopped
      integer :: max_iterations
      !> Location of the atmosphere file which must contain the gases mentioned
@@ -723,6 +725,25 @@ contains
                 call logger%fatal(fname, "Max iterations has to be > 0")
                 stop 1
              end if
+
+             call fini_extract(fini, win_str, 'min_iterations', .false., fini_int)
+             if (fini_int == -9999) then
+                call logger%debug(fname, "Min iterations not supplied - setting to 0.")
+                CS%window(window_nr)%min_iterations = 0
+             else
+                if (fini_int >= 0) then
+                   CS%window(window_nr)%min_iterations = fini_int
+                else
+                   call logger%fatal(fname, "Min iterations has to be >= 0")
+                   stop 1
+                end if
+             end if
+
+             if (CS%window(window_nr)%min_iterations > CS%window(window_nr)%max_iterations) then
+                call logger%fatal(fname, "Min iterations has to be <= max iterations.")
+                stop 1
+             end if
+
 
              call fini_extract(fini, win_str, 'lm_gamma', .true., fini_val)
              if (fini_val >= 0) then

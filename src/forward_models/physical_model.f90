@@ -3171,10 +3171,12 @@ contains
 
        ! Now we check for convergence! Iterations are stopped when either ..
        if ( &
+            (iteration >= CS_win%min_iterations) .and. ( & ! We must have at least reached the minimum number of iterations
             (dsigma_sq < dble(N_sv) * dsigma_scale) .or. & ! Dsigma squire criterion is fulfilled
             (iteration >= CS_win%max_iterations) .or. & ! Number of iterations reach max value
             ((chi2_rel_change < 0.01) .and. (chi2_rel_change >= 0.0d0)) .or. & ! Relative change in CHI2 is smaller than some value
             (num_divergent_steps > 1) & ! Number of divergent steps is reached
+            ) &
             ) then
 
           call logger%debug(fname, "Halting iterations!")

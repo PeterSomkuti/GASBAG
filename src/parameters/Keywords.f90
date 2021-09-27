@@ -227,6 +227,8 @@ contains
        valid_options(this_idx,50) = "external_surface_albedo"
        ! Surface albedo covariance
        valid_options(this_idx,51) = "albedo_covariance"
+       ! Minimum number of iterations
+       valid_options(this_idx,52) = "min_iterations"
 
     end do
 

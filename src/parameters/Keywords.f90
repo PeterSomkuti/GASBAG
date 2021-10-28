@@ -229,6 +229,8 @@ contains
        valid_options(this_idx,51) = "albedo_covariance"
        ! Minimum number of iterations
        valid_options(this_idx,52) = "min_iterations"
+       ! Read-in of external pressure and altitude grids
+       valid_options(this_idx,53) = "external_altitude_pressure"
 
     end do
 

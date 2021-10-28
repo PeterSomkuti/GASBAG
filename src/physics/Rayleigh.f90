@@ -1,6 +1,6 @@
 module Rayleigh_mod
 
-  use math_utils_mod, only : NA, pi, DRY_AIR_MASS
+  use math_utils_mod, only : NA, pi, DRY_AIR_MASS, EPSILON
   public calculate_rayleigh_tau, calculate_rayleigh_depolf, calculate_rayleigh_scatt_matrix
 
 
@@ -67,7 +67,7 @@ contains
     double precision, intent(in) :: g(:)
     double precision, intent(in) :: T(:)
     double precision, optional, intent(in) :: co2(:)
-    
+
     double precision, intent(inout) :: rayleigh_tau(:,:)
 
     double precision, parameter :: Nair_ref = 2.546899d19
@@ -156,6 +156,150 @@ contains
     end if
 
   end subroutine calculate_rayleigh_scatt_matrix
+
+
+
+  !> @brief Calculates extinction and depolarization due to Rayleigh scattering
+  !> @param wl Wavelengths
+  !> @param p Pressure levels
+  !> @param rayleigh_tau Rayleigh optical depth
+  !> @param rayleigh_depolf Rayleigh depolarization factor
+  !> @param co2 Optional CO2 VMR profile
+  subroutine calculate_rayleigh_tau_MS3(wl, p, g, sh, T, rayleigh_tau, co2)
+
+    double precision, intent(in) :: wl(:)
+    double precision, intent(in) :: p(:)
+    double precision, intent(in) :: g(:)
+    double precision, intent(in) :: sh(:)
+    double precision, intent(in) :: T(:)
+    double precision, optional, intent(in) :: co2(:)
+
+    double precision, intent(inout) :: rayleigh_tau(:,:)
+
+    double precision :: F
+
+    double precision :: Nair
+    double precision :: wl2, wl4
+    double precision :: wli2
+    double precision, parameter :: pi3 = pi * pi * pi
+    integer :: i, j, N
+
+    double precision :: n300_1, nCO2_1, ns
+    double precision :: depolf
+    double precision, allocatable :: ray_sigma(:)
+
+
+    allocate(ray_sigma(size(wl)))
+    N = size(p)
+
+    depolf = ray_depol_MS3(wl(1))
+    do j=1, size(p) - 1
+
+       ray_sigma(:) = ray_tau_MS3(wl(:), depolf)
+       rayleigh_tau(:,j) = ray_sigma(:) * (p(j+1) - p(j)) / &
+            (0.5d0 * (g(j+1) + g(j)) * DRY_AIR_MASS) &
+            * (1.0d0 + 0.5d0 * (sh(j+1) + sh(j)) * (1.0d0 - EPSILON) / EPSILON)
+
+    end do
+
+  end subroutine calculate_rayleigh_tau_MS3
+
+
+
+  FUNCTION ray_depol_MS3(wl) RESULT(dpf)
+
+    ! calculates the depolarization factor for a given wavelength
+    ! currently just uses band-averaged values for OCO.
+    ! finds the closest one for the input wavelength
+
+    double precision, intent(in) :: wl
+    double precision             :: dpf
+
+    double precision, dimension(3), parameter :: &
+         OCO_DEPOLF = (/ 0.027706d0, 0.027260d0, 0.027213d0 /)
+    double precision, dimension(3), parameter :: &
+         OCO_WVL    = (/ 0.76d0, 1.61d0, 2.03d0 /)
+
+    integer :: wl_units = 1
+    double precision :: wl_um
+    integer :: i1(1)
+
+    select case(wl_units)
+    case(1) ! microns
+       wl_um = wl
+    case(2) ! nm
+       wl_um = 1d-3 * wl
+    case default ! wavenumbers
+       wl_um = 1d4/wl
+    end select
+
+    i1 = minloc( abs(OCO_WVL - wl_um) )
+    dpf = OCO_DEPOLF(i1(1))
+
+  END FUNCTION ray_depol_MS3
+
+
+
+
+  FUNCTION ray_tau_MS3(wl, dpf) RESULT(ray_ext)
+
+    !
+    !  USES Bodhaine et al. (1999) parameterization of rayleigh scattering
+    !  Bodhaine et al., 1999, Journ. Atm. Oc. Tech., 16, 1854.
+    !
+    !  I use a simple constant in each wavelength band for the depolarization
+    !  factor; this differs only very slightly from Bodhaine.
+    !  The full formula is:
+    !
+    !                  24 PI^3    (ns^2-1)^2   (6+3dpf)
+    !  cross-section = ------- *  ---------- * --------
+    !                 wl^4 Ns^2   (ns^2+2)^2   (6-7dpf)
+    !
+    ! where ns is the index of refraction of standard air at some P,T, and
+    ! Ns is the number of molecules per cubic meter AT THE SAME P,T.
+    ! (the product of those funky terms turns out to be independent of P & T,
+    !  according to Lorenz-Lorentz theory); dpf is the depolarization factor,
+    !  and wl is the wavelength in meters.
+    !
+    ! The result is then the Rayleigh cross section in m^2 per molecule of air.
+    ! Multiplying then by Avogradro's number yields the cross section in m^2/mol
+    ! of (total=moist) air.
+
+    double precision, intent(in), dimension(:) :: wl ! wavelength in units "wl_units"
+    double precision, intent(in) :: dpf ! depolarization factor
+    double precision, dimension(size(wl))   :: ray_ext  ! output: cross section in m^2/mol of moist air
+
+    ! Fit to Peck & Reeder (1972) index of refraction factor, which was for wavelengths > 0.23 microns.
+    ! They had a 4-term fit for the index of refraction of air at T=288.15 K and P = 1013.25 mbar.
+    ! I have fitted the index of refraction factor, ((ns^2-1)/(ns^2+2))^2, which is used in the rayleigh
+    ! formula.  It is well fit by a function of the form A(1) + A(2)/wl^2 + A(3)/wl^4, with wl in microns.
+    double precision, dimension(3), parameter :: Icoeff = (/ 3.302565d-8, 3.7118985d-10, 4.4216716d-12 /)
+
+    ! This is the prefactor in the rayleigh cross section equation: 24*PI^3/(Ns^2)*NA,
+    ! such that you must multiply by 1/wl^4, with wl in microns, and the result will be the cross section
+    ! in m^2 per mole of gas. This is also for P=1013.25 mbar, T=288.15 K air.
+    double precision, parameter :: const = 1.1471954d-24 * NA
+    double precision, dimension(size(wl)) :: index_factor, wl2i, wl4i
+    double precision, dimension(size(wl))   :: wl_um    ! wavelengths in um
+    double precision :: king_factor
+    integer :: wl_units = 1 ! 0=cm-1, 1=um, 2=nm
+
+    select case(wl_units)
+    case(0) ! wavenumbers
+       wl_um = 1d4/wl
+    case(1) ! microns
+       wl_um = wl
+    case(2) ! nm
+       wl_um = 1d-3 * wl
+    end select
+
+    king_factor = (6.0d0+3.0d0*dpf)/(6.0d0-7.0d0*dpf)
+    wl2i = 1.0d0/(wl_um*wl_um)
+    wl4i = wl2i * wl2i
+    index_factor = Icoeff(1) + Icoeff(2)*wl2i + Icoeff(3)*wl4i ! ((ns^2-1)/(ns^2+2))^2
+    ray_ext = const*wl4i*index_factor*king_factor ! rayleigh cross section in m^2/mole
+
+  END FUNCTION ray_tau_MS3
 
 
 

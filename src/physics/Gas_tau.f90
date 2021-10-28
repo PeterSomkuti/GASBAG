@@ -151,7 +151,7 @@ contains
 
     ! Maybe some time later we will let the user decide if log-scaling should be
     ! used or not, but I don't see a reason why you would ever NOT want to use this.
-    log_scaling = .true.
+    log_scaling = .false.
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
@@ -300,17 +300,23 @@ contains
                GK_abscissae_f, GK_weights_f, G_weights_f)
        end if
 
+
        ! -------------------------
        !
        ! Sub-layer loop
        !
        ! -------------------------
-
-       do k=1, N_sub
+       !do k = 1, N_sub
+       do k = 0, N_sub - 1
 
           ! Get the value of pressure according to the Gauss-Kronrod abscissa
           ! value, at which we evaluate the cross section.
-          this_p = GK_abscissae_f(k)
+          !this_p = GK_abscissae_f(k)
+          if (log_scaling) then
+             this_p = log(p_lower) + k * (log(p_higher) - log(p_lower)) / N_sub
+          else
+             this_p = p_lower + k * (p_higher - p_lower) / N_sub
+          end if
 
           ! And get corresponding values for T,sh and the VMR at this (scaled)
           ! pressure value, which is obtained via simple linear interpolation.
@@ -323,13 +329,21 @@ contains
           this_T = (1.0d0 - this_p_fac) * T_lower + this_p_fac * T_higher
           this_sh = (1.0d0 - this_p_fac) * sh_lower + this_p_fac * sh_higher
           this_VMR = (1.0d0 - this_p_fac) * VMR_lower + this_p_fac * VMR_higher
-          this_M = 1.0d3 * DRY_AIR_MASS
           this_grav = (1.0d0 - this_p_fac) * grav_lower + this_p_fac * grav_higher
+          this_M = 1.0d3 * DRY_AIR_MASS
 
           ! Gas CS routine works in H2O VMR rather than SH
-          this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
+          ! this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
+          this_H2O = this_sh * DRY_AIR_MASS / (H2Om + this_sh * (DRY_AIR_MASS - H2Om))
+
 
           if (log_scaling) this_p = exp(this_p)
+
+          if (is_H2O) then
+             H2O_corr = 1.0d0
+          else
+             H2O_corr = (1.0d0 - this_sh)
+          end if
 
           this_CS_value = get_CS_value_at( &
                pre_gridded, &
@@ -342,12 +356,6 @@ contains
                wl_left_indices(1:N_wl) &
                )
 
-          if (is_H2O) then
-             H2O_corr = 1.0d0
-          else
-             H2O_corr = (1.0d0 - this_sh)
-          end if
-
           ! Constant value ~ almost the same as Ndry but without GK weights
           ! and potential factor from log-scale (d(exp(p)) = p * dp)
           C_tmp = 1.0d0 / this_grav * NA * 0.1d0 * H2O_corr / this_M
@@ -355,10 +363,12 @@ contains
           ! Tau for this sublayer
           if (log_scaling) then
              !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp * this_p
-             ndry = GK_weights_f(k) * C_tmp * this_p
+             !ndry = GK_weights_f(k) * C_tmp * this_p
+             ndry = C_tmp * this_p
           else
              !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
-             ndry = GK_weights_f(k) * C_tmp
+             !ndry = GK_weights_f(k) * C_tmp
+             ndry = C_tmp * abs((p_higher - p_lower) / N_sub)
           end if
 
           ! ----------------------------------------------------------------------------------------------
@@ -393,7 +403,8 @@ contains
              this_grav_pert = (1.0d0 - this_p_fac_pert) * grav_lower + this_p_fac_pert * grav_higher
              this_M_pert = 1.0d3 * DRY_AIR_MASS
 
-             this_H2O_pert = this_sh_pert / (1.0d0 - this_sh_pert) * SH_H2O_CONV
+             !this_H2O_pert = this_sh_pert / (1.0d0 - this_sh_pert) * SH_H2O_CONV
+             this_H2O_pert = this_sh_pert * DRY_AIR_MASS / (H2Om + this_sh_pert * (DRY_AIR_MASS - H2Om))
 
              if (log_scaling) this_p_pert = exp(this_p_pert)
 

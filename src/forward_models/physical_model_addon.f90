@@ -67,9 +67,6 @@ module physical_model_addon_mod
      double precision, allocatable :: ndry(:,:)
   end type result_container
 
-
-  public scene_altitude
-
 contains
 
 
@@ -134,8 +131,10 @@ contains
     ray_coef(:,:) = 0.0d0
     aerpmom(:,:,:,:) = 0.0d0
 
+    !call calculate_rayleigh_scatt_matrix(&
+    !     calculate_rayleigh_depolf(wl), ray_coef(:,:))
     call calculate_rayleigh_scatt_matrix(&
-         calculate_rayleigh_depolf(wl), ray_coef(:,:))
+         ray_depol_MS3(wl), ray_coef(:,:))
 
     ! Remember, the total phasefunction coefficients are calculated as follows
     ! beta = (beta_aer * tau_aer_sca + beta_ray * tau_ray) / (tau_aer_sca + tau_ray)
@@ -310,6 +309,32 @@ contains
 
   end subroutine calculate_active_levels
 
+  subroutine calculate_JPL_pressure_grid(ptop, psurf,  Ntotal, p)
+
+    double precision, intent(in) :: ptop
+    double precision, intent(in) :: psurf
+    integer, intent(in) :: Ntotal
+    double precision, allocatable, intent(inout) :: p(:)
+
+    integer :: i
+    double precision :: dp
+    character(len=*), parameter :: fname = "calculate_JPL_pressure_grid"
+
+    ! Allocate the pressure grid
+    allocate(p(Ntotal))
+    dp = (psurf - ptop) / dble(Ntotal - 1)
+
+    do i = 1, Ntotal
+       if (i == 1) then
+          p(i) = 0.0001 * psurf
+       else
+          p(i) = psurf * (i - 1) / (Ntotal - 1)
+       end if
+    end do
+
+
+  end subroutine calculate_JPL_pressure_grid
+
 
   subroutine calculate_UoL_pressure_grid(ptropo, psurf,  Ntotal, p)
 
@@ -322,8 +347,8 @@ contains
 
     integer :: i
 
-    if (Ntotal < 8) then
-       call logger%error(fname, "Need at least 8 levels in this scheme!")
+    if (Ntotal < 9) then
+       call logger%error(fname, "Need at least 9 levels in this scheme!")
        stop 1
     end if
 
@@ -334,25 +359,26 @@ contains
     p(1) = 10.0d0
     p(2) = 100.0d0
     p(3) = 1000.0d0
-    p(4) = 5000.0d0
-    p(5) = 8000.0d0
+    p(4) = 3000.0d0
+    p(5) = 5000.0d0
+    p(6) = 8000.0d0
 
 
     ! Set level 6 between 8000 Pa and tropopause,
     ! but only if the tropopause pressure is > 8000.0.
     if (ptropo <= 8000.0) then
-       p(6) = 11500.0d0
-       p(7) = 15000.0d0
+       p(7) = 11500.0d0
+       p(8) = 15000.0d0
     else
-       p(6) = (ptropo - 8000.0) / 2.0 + 8000.0
-       p(7) = ptropo
+       p(7) = (ptropo - 8000.0) / 2.0 + 8000.0
+       p(8) = ptropo
     end if
 
 
     ! Scale linearly down from tropopause to surface
     do i = 1, Ntotal - 7
 
-       p(7+i) = p(7) + (psurf - p(7)) / (Ntotal - 7) * i
+       p(8+i) = p(8) + (psurf - p(8)) / (Ntotal - 8) * i
 
     end do
 
@@ -487,6 +513,74 @@ contains
   end subroutine read_L2CPr_file
 
 
+  subroutine rearrange_atmosphere_with_external(atm, plevels, vmr_plevels, vmr_profiles)
+    type(atmosphere), intent(inout) :: atm
+    double precision, intent(in) :: plevels(:)
+    double precision, intent(in) :: vmr_plevels(:)
+    double precision, intent(in) :: vmr_profiles(:,:)
+
+    integer :: num_levels, num_gases
+    double precision, allocatable :: tmp_vmr(:,:)
+    integer :: i, j
+
+    num_gases = size(atm%gas_names)
+    num_levels = size(plevels)
+    atm%num_levels = num_levels
+
+    allocate(tmp_vmr(num_levels, num_gases))
+    tmp_vmr(:,:) = 0.0d0
+
+
+    ! Deallocate all the non gas-vmr objects (those are filled in later)
+    if (allocated(atm%T)) deallocate(atm%T)
+    if (allocated(atm%sh)) deallocate(atm%sh)
+    if (allocated(atm%sh_layers)) deallocate(atm%sh_layers)
+    if (allocated(atm%altitude_levels)) deallocate(atm%altitude_levels)
+    if (allocated(atm%altitude_layers)) deallocate(atm%altitude_layers)
+    if (allocated(atm%grav)) deallocate(atm%grav)
+    if (allocated(atm%grav_layers)) deallocate(atm%grav_layers)
+    if (allocated(atm%ndry)) deallocate(atm%ndry)
+
+
+    if (allocated(atm%p)) deallocate(atm%p)
+    allocate(atm%p(num_levels))
+    atm%p(:) = plevels(:)
+
+    ! Re-allocate with the new number of levels
+    allocate(atm%T(num_levels))
+    allocate(atm%sh(num_levels))
+    allocate(atm%sh_layers(num_levels - 1))
+    allocate(atm%altitude_levels(num_levels))
+    allocate(atm%altitude_layers(num_levels - 1))
+    allocate(atm%grav(num_levels))
+    allocate(atm%grav_layers(num_levels - 1))
+    allocate(atm%ndry(num_levels))
+
+    ! Resample all gas VMRs to new pressure grid
+    do i = 1, num_gases
+
+       if (atm%gas_names(i)%lower() == "h2o") cycle
+
+       call pwl_value_1d_v2( &
+            size(vmr_plevels), &
+            log(vmr_plevels), vmr_profiles(:, i), &
+            size(atm%p), &
+            log(atm%p), tmp_vmr(:, i))
+
+    end do
+
+    ! Get rid of old vmr array and supply new one
+
+    deallocate(atm%gas_vmr)
+    allocate(atm%gas_vmr(num_levels, num_gases))
+    atm%gas_vmr(:,:) = tmp_vmr(:,:)
+
+
+
+  end subroutine rearrange_atmosphere_with_external
+
+
+
   subroutine rearrange_atmosphere_with_scheme(atm, ptropo, plevels, vmr_profiles)
     type(atmosphere), intent(inout) :: atm
     double precision, intent(in) :: ptropo
@@ -495,11 +589,10 @@ contains
 
     integer :: num_levels, num_gases
     double precision, allocatable :: tmp_vmr(:,:)
-    double precision, allocatable :: old_p(:)
     integer :: i, j
 
     num_gases = size(atm%gas_names)
-    num_levels = 20
+    num_levels = 40
     atm%num_levels = num_levels
 
     allocate(tmp_vmr(num_levels, num_gases))
@@ -507,6 +600,8 @@ contains
 
     ! Step #2
     ! Create a new pressure grid according to some scheme
+
+
     deallocate(atm%p)
     call calculate_UoL_pressure_grid( &
          ptropo, &
@@ -514,6 +609,15 @@ contains
          num_levels, &
          atm%p &
          )
+
+    !deallocate(atm%p)
+    !call calculate_JPL_pressure_grid( &
+    !     plevels(1), &
+    !     atm%psurf, &
+    !     num_levels, &
+    !     atm%p &
+    !     )
+
 
     ! Step #3
     ! Deallocate all the non gas-vmr objects (those are filled in later)

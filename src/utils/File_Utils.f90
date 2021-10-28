@@ -520,6 +520,7 @@ contains
        call logger%fatal(fname, msg)
        stop 1
     end if
+
   end subroutine check_hdf_error
 
   subroutine check_fini_error(fini_error, fname, msg)

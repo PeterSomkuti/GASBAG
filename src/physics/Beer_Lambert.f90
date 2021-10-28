@@ -34,7 +34,7 @@ contains
         double precision, intent(inout) :: radiance(:)
 
         integer :: Nlay, Nspec
-        integer :: i, j
+        integer :: i, j, k
 
         double precision :: this_chapman_fac
         double precision, allocatable :: cum_slopd_solar(:), cum_slopd_viewing(:)
@@ -42,72 +42,6 @@ contains
 
         Nlay = scn%num_active_levels - 1
         Nspec = size(radiance)
-
-        ! Step zero:
-        ! If the user wants a spherical Earth,
-        ! we must modify the plane-parallel optical
-        ! depths do a slant-path formulation.
-
-        ! The scene Chapman factors
-        !   scn%atm%chapman_solar
-        !   scn%atm%chapman_viewing
-        ! have a (1/mu) factor
-        ! built into them, so we can use the same formalism
-        ! for both plane-parallel and curved atmospheres, without
-        ! needing to change the equations.
-        ! We just modify the optical depths.
-
-        if (BL_SPHERICAL) then
-
-           allocate(slopd_solar(Nlay)) ! this is 1/mu * tau
-           allocate(cum_slopd_solar(Nlay)) ! this is cumulative 1/mu * tau
-           allocate(slopd_viewing(Nlay)) ! this is 1/mu * tau
-           allocate(cum_slopd_viewing(Nlay)) ! this is cumulative 1/mu * tau
-
-           ! This quantity represents the ratio
-           !
-           ! slant optical depth (spherical)
-           ! ===============================
-           ! optical depth (plane-parallel)
-
-           allocate(scn%op%sph_tau_factor_solar(Nspec, Nlay))
-           allocate(scn%op%sph_tau_factor_viewing(Nspec, Nlay))
-
-           do j = 1, size(radiance)
-
-              ! This bit here is confusing - taken from MS3
-              ! Calculates cumulative optical depth from layer i
-              ! up to TOA?
-              do i = Nlay, 1, -1
-                 cum_slopd_solar(i) = sum( &
-                      scn%op%layer_tau(j,i:1:-1) * &
-                      scn%atm%chapman_solar(i,i:1:-1) &
-                      )
-                 cum_slopd_viewing(i) = sum( &
-                      scn%op%layer_tau(j,i:1:-1) * &
-                      scn%atm%chapman_viewing(i,i:1:-1) &
-                      )
-              end do
-
-              ! Calculates the per-layer optical depth
-              do i = Nlay, 2, -1
-                 slopd_solar(i) = cum_slopd_solar(i) - cum_slopd_solar(i-1)
-                 slopd_viewing(i) = cum_slopd_viewing(i) - cum_slopd_viewing(i-1)
-              end do
-              slopd_solar(1) = scn%op%layer_tau(j, 1) * scn%atm%chapman_solar(1, 1)
-              slopd_viewing(1) = scn%op%layer_tau(j, 1) * scn%atm%chapman_viewing(1, 1)
-
-              ! Factor needed to upscale plane parallel optical depths
-              do i = 1, Nlay
-                 scn%op%sph_tau_factor_solar(j,i) = slopd_solar(i) / (scn%op%layer_tau(j,i) / scn%mu0)
-                 scn%op%sph_tau_factor_viewing(j,i) = slopd_viewing(i) / (scn%op%layer_tau(j,i) / scn%mu)
-              end do
-
-           end do
-
-        end if
-
-
 
         ! First, calculate the radiance reflected JUST above the surface
         radiance(:) = scn%op%albedo(:) / PI * scn%mu0
@@ -117,37 +51,13 @@ contains
         ! radiance by the optical depths, which pass through the atmosphere twice.
         if (allocated(scn%op%total_tau)) then
            ! Have gas absorbers in the atmosphere?
-
-           if (BL_SPHERICAL) then
               do j = 1, size(radiance)
-
-                 radiance(j) = radiance(j) * exp(&
-                      -1.0d0/scn%mu0 &
-                      * sum(scn%op%layer_tau(j,1:nlay) * scn%op%sph_tau_factor_solar(j,1:nlay)) &
-                      ) &
-                      * exp( &
-                      -1.0d0 / scn%mu &
-                      * sum(scn%op%layer_tau(j,1:nlay) * scn%op%sph_tau_factor_viewing(j,1:nlay)) &
-                      )
-
-                 !radiance(j) = radiance(j) * exp(&
-                 !     -1.0d0/scn%mu0 &
-                 !     * sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_solar(1:nlay)) &
-                 !     ) &
-                 !     * exp( &
-                 !     -1.0d0/scn%mu &
-                 !     * sum(scn%op%layer_tau(j,1:nlay) * scn%atm%ps_factors_viewing(1:nlay)) &
-                 !     )
+                 radiance(j) = radiance(j) &
+                      * exp( -1.0d0 &
+                      * sum((1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%op%layer_tau(j,1:nlay) * scn%atm%layer_slant_path_solar(1:nlay)) ) &
+                      * exp( -1.0d0 &
+                      * sum((1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%op%layer_tau(j,1:nlay) * scn%atm%layer_slant_path_viewing(1:nlay))  )
               end do
-           else
-              do j = 1, size(radiance)
-                 radiance(j) = radiance(j) * exp(-1.0d0/scn%mu0 &
-                      * sum(scn%op%layer_tau(j,1:scn%num_active_levels-1))) &
-                      * exp(-1.0d0/scn%mu &
-                      * sum(scn%op%layer_tau(j,1:scn%num_active_levels-1)) &
-                      )
-              end do
-           end if
         endif
 
     end subroutine
@@ -167,30 +77,12 @@ contains
 
       nlay = scn%num_active_levels - 1
 
-      if (BL_SPHERICAL) then
-
-         do j = 1, size(psurf_jacobian)
-
-            psurf_jacobian(j) = TOA_radiance(j) * sum( &
-                 ( &
-                 scn%op%sph_tau_factor_solar(j, 1:nlay) / scn%mu0 &
-                 + 1.0d0 / scn%mu &
-                 ) * sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=2) &
-                 )
-
-            !psurf_jacobian(j) = TOA_radiance(j) * sum( &
-            !     ( &
-            !     scn%atm%ps_factors_solar(1:nlay) / scn%mu0 &
-            !     + scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
-            !     ) * sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=2) &
-            !     )
-         end do
-      else
-         do j = 1, size(psurf_jacobian)
-            psurf_jacobian(j) = TOA_radiance(j) * (1.0d0 / scn%mu0 + 1.0d0 / scn%mu) &
-                 * (sum(sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=1), dim=1))
-         end do
-      end if
+      do j = 1, size(psurf_jacobian)
+         psurf_jacobian(j) = TOA_radiance(j) * sum(&
+              scn%atm%layer_slant_path_solar(1:nlay) &
+              + scn%atm%layer_slant_path_viewing(1:nlay) &
+              * sum(scn%op%gas_tau_dpsurf(j,1:nlay,:), dim=2))
+      end do
 
     end subroutine calculate_BL_psurf_jacobian
 
@@ -205,34 +97,18 @@ contains
       type(scene), intent(in) :: scn
       double precision, intent(inout) :: temp_jacobian(:)
 
-      integer :: j, nlay
+      integer :: j, g, nlay
 
       nlay = scn%num_active_levels - 1
 
-      if (BL_SPHERICAL) then
-         do j = 1, size(temp_jacobian)
+      temp_jacobian(:) = 0.0d0
 
-            temp_jacobian(j) = -TOA_radiance(j) * sum( &
-                 ( &
-                 scn%op%sph_tau_factor_solar(j, 1:nlay) / scn%mu0 &
-                 + scn%op%sph_tau_factor_viewing(j, 1:nlay) / scn%mu &
-                 ) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
-                 )
-
-
-            !temp_jacobian(j) = -TOA_radiance(j) * sum( &
-            !     ( &
-            !     scn%atm%ps_factors_solar(1:nlay) / scn%mu0 &
-            !     + scn%atm%ps_factors_viewing(1:nlay) / scn%mu &
-            !     ) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
-            !     )
-         end do
-      else
-         do j = 1, size(temp_jacobian)
-            temp_jacobian(j) =  -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                 * (sum(sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=1), dim=1))
-         end do
-      end if
+      do j = 1, size(temp_jacobian)
+         temp_jacobian(j) =  -TOA_radiance(j) * sum( &
+              (1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%atm%layer_slant_path_solar(1:nlay) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
+              + (1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%atm%layer_slant_path_viewing(1:nlay) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
+              )
+      end do
 
 
     end subroutine calculate_BL_temp_jacobian
@@ -302,31 +178,12 @@ contains
       integer :: j, nlay
       nlay = scn%num_active_levels - 1
 
-
-      if (BL_SPHERICAL) then
-         do j = 1, size(gas_jacobian)
-
-            gas_jacobian(j) = -TOA_radiance(j) * sum( &
-                 ( &
-                 scn%op%sph_tau_factor_solar(j, idx_start:idx_stop) / scn%mu0 &
-                 + scn%op%sph_tau_factor_viewing(j, idx_start:idx_stop) / scn%mu &
-                 ) * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas) &
-                 ) / scale_factor
-
-            !gas_jacobian(j) = -TOA_radiance(j) * sum( &
-            !     ( &
-            !     scn%atm%ps_factors_solar(idx_start:idx_stop) / scn%mu0 &
-            !     + scn%atm%ps_factors_viewing(idx_start:idx_stop) / scn%mu &
-            !     ) * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas) &
-            !     ) / scale_factor
-         end do
-      else
-         do j = 1, size(gas_jacobian)
-            gas_jacobian(j) = -TOA_radiance(j) * ((1.0d0 / scn%mu0) + (1.0d0 / scn%mu)) &
-                 * sum(scn%op%gas_tau(j,idx_start:idx_stop,idx_gas), dim=1) / scale_factor
-         end do
-      end if
-
+      do j = 1, size(gas_jacobian)
+         gas_jacobian(j) = -TOA_radiance(j) * sum( &
+              (scn%atm%layer_slant_path_solar(idx_start:idx_stop) &
+              + scn%atm%layer_slant_path_viewing(idx_start:idx_stop)) &
+              * (1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas)) / scale_factor
+      end do
 
     end subroutine calculate_BL_gas_subcolumn_jacobian
 
@@ -427,28 +284,28 @@ contains
                   ! TOA layer
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%op%sph_tau_factor_solar(j,i) / scn%mu0) &
-                          + (scn%op%sph_tau_factor_viewing(j,i) / scn%mu) &
-                          ) * scn%op%gas_tau_dvmr(1,j,i,i_gas)
+                          scn%atm%layer_slant_path_solar(i) &
+                          + scn%atm%layer_slant_path_viewing(i) &
+                          ) * (1.0d0 - scn%op%layer_omega(j,i)) * scn%op%gas_tau_dvmr(1,j,i,i_gas)
                   end do
 
                else if (i == num_active_levels) then
                   ! BOA layer
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%op%sph_tau_factor_solar(j,i-1) / scn%mu0) &
-                          + (scn%op%sph_tau_factor_viewing(j,i-1) / scn%mu) &
-                          ) * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
+                          scn%atm%layer_slant_path_solar(i-1) &
+                          + scn%atm%layer_slant_path_viewing(i-1) &
+                          ) * (1.0d0 - scn%op%layer_omega(j,i)) * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
                   end do
 
                else
                   ! everything in between
                   do j = 1, size(dI_dVMR) ! Loop over spectral indices
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
-                          (scn%op%sph_tau_factor_solar(j,i) / scn%mu0) &
-                          + (scn%op%sph_tau_factor_solar(j,i) / scn%mu) &
+                          scn%atm%layer_slant_path_solar(i) &
+                          + scn%atm%layer_slant_path_viewing(i) &
                           ) &
-                          * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
+                          * (1.0d0 - scn%op%layer_omega(j,i)) * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
                           scn%op%gas_tau_dvmr(1,j,i,i_gas))
                   end do
 

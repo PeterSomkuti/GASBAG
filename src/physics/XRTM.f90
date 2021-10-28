@@ -38,7 +38,7 @@ contains
     double precision, intent(inout) :: ltau(:,:,:)
     double precision, intent(inout) :: lomega(:,:,:)
 
-    integer :: i
+    integer :: idx_start, idx_stop
     integer :: j
     integer :: l
     integer :: n_lay
@@ -47,20 +47,19 @@ contains
 
        n_lay = scn%num_active_levels - 1
 
-       do i = SV%s_start(j), SV%s_stop(j) - 1
+       idx_start = SV%s_start(j)
+       idx_stop = SV%s_stop(j) - 1
 
-          do l = 1, size(scn%op%wl)
+       do l = 1, size(scn%op%wl)
 
-             ltau(l, SV%idx_wf_gas(j), 1:n_lay) = &
-                  scn%op%gas_tau(l, 1:n_lay, SV%gas_idx_lookup(j)) / &
-                  SV%svsv(SV%idx_gas(j, 1))
+          ltau(l, SV%idx_wf_gas(j), idx_start:idx_stop) = &
+               scn%op%gas_tau(l, idx_start:idx_stop, SV%gas_idx_lookup(j)) / &
+               SV%svsv(SV%idx_gas(j, 1))
 
-             lomega(l, SV%idx_wf_gas(j), 1:n_lay) = &
-                  (-scn%op%layer_omega(l, 1:n_lay)) &
-                  / scn%op%layer_tau(l, 1:n_lay) &
-                  * ltau(l, SV%idx_wf_gas(j), 1:n_lay)
-
-          end do
+          lomega(l, SV%idx_wf_gas(j), idx_start:idx_stop) = &
+               (-scn%op%layer_omega(l, idx_start:idx_stop)) &
+               / scn%op%layer_tau(l, idx_start:idx_stop) &
+               * ltau(l, SV%idx_wf_gas(j), idx_start:idx_stop)
        end do
     end do
 
@@ -277,6 +276,7 @@ contains
        ! by default. Also, only return upwelling radiances.
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_CALC_DERIVS)
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_PSA)
+       !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_NO_AZIMUTHAL)
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_UPWELLING_OUTPUT)
        !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DOWNWELLING_OUTPUT)
        xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_OUTPUT_AT_LEVELS)
@@ -311,8 +311,9 @@ contains
           ! Single scattering only
           call logger%debug(fname, "Using XRTM in single-scattering mode")
           xrtm_solvers(i) = XRTM_SOLVER_SINGLE
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
-          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
+          xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_SFI)
+          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_N_T_TMS)
+          !xrtm_options(i) = ior(xrtm_options(i), XRTM_OPTION_DELTA_M)
 
        else if (tmp_str == "TWO_STREAM") then
 
@@ -1354,10 +1355,10 @@ contains
 
     !n_coef(:) = 3
     !if (scn%num_aerosols > 0) then
-       ! Loop through all layers and look at how much aerosol
-       ! extinction is present if below some threshold value,
-       ! we just assume that 3 coefficients is enough for a
-       ! (at best) Rayleigh-only layer
+    ! Loop through all layers and look at how much aerosol
+    ! extinction is present if below some threshold value,
+    ! we just assume that 3 coefficients is enough for a
+    ! (at best) Rayleigh-only layer
     !   do l = 1, n_layers
     !      if (sum(scn%op%aer_ext_tau(1,l,:)) < 1.0d-6) then
     !         n_coef(l) = 3
@@ -1673,7 +1674,7 @@ contains
 
     if (iand(xrtm_solver, XRTM_SOLVER_SOS) /= 0) then
 
-       call xrtm_set_sos_params_f90(xrtm, 4, 10.0d0, 0.01d0, xrtm_error)
+       call xrtm_set_sos_params_f90(xrtm, 10, 1.0d0, 0.01d0, xrtm_error)
        if (xrtm_error /= 0) then
           call logger%error(fname, "Error calling xrtm_set_sos_params_f90")
           return
@@ -1987,67 +1988,67 @@ contains
        ! Format string for derivative debug output
        ! .. but only go into this branch when debug is requested
        !if ((i == 1) .and. (CS_general%loglevel <= 10)) then
-          !call logger%debug(fname, "--- First wavelength ----------------------------------------------")
+       !call logger%debug(fname, "--- First wavelength ----------------------------------------------")
 
-          ! Write XRTM inputs
-          !call logger%debug(fname, "-------------------------------------------------------------------")
-          !call logger%debug(fname, "Layer, input optical depth, input single scatter albedo, # of coefs")
-          !do m = 1, n_layers
-          !   write(tmp_str, '(I5, ES15.5, ES15.5, I6)') m, tau(m), omega(m), n_coef(m)
-          !   call logger%debug(fname, trim(tmp_str))
-          !end do
+       ! Write XRTM inputs
+       !call logger%debug(fname, "-------------------------------------------------------------------")
+       !call logger%debug(fname, "Layer, input optical depth, input single scatter albedo, # of coefs")
+       !do m = 1, n_layers
+       !   write(tmp_str, '(I5, ES15.5, ES15.5, I6)') m, tau(m), omega(m), n_coef(m)
+       !   call logger%debug(fname, trim(tmp_str))
+       !end do
 
-          !call logger%debug(fname, "-------------------------------------------------------")
-          !call logger%debug(fname, "Layer, input linearized optical depth inputs")
-          !do m = 1, n_layers
-          !   write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
-          !   write(tmp_str, trim(fmt_str)) m, single_ltau(:,m)
-          !   call logger%debug(fname, trim(tmp_str))
-          !end do
+       !call logger%debug(fname, "-------------------------------------------------------")
+       !call logger%debug(fname, "Layer, input linearized optical depth inputs")
+       !do m = 1, n_layers
+       !   write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
+       !   write(tmp_str, trim(fmt_str)) m, single_ltau(:,m)
+       !   call logger%debug(fname, trim(tmp_str))
+       !end do
 
-          !call logger%debug(fname, "----------------------------------------------------")
-          !call logger%debug(fname, "Layer, input linearized single scatter albedo inputs")
-          !do m = 1, n_layers
-          !   write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
-          !   write(tmp_str, trim(fmt_str)) m, single_lomega(:,m)
-          !   call logger%debug(fname, trim(tmp_str))
-          !end do
+       !call logger%debug(fname, "----------------------------------------------------")
+       !call logger%debug(fname, "Layer, input linearized single scatter albedo inputs")
+       !do m = 1, n_layers
+       !   write(fmt_str, '(A, G0.1, A)') "(I5, ", size(derivs, 3), "ES15.5)"
+       !   write(tmp_str, trim(fmt_str)) m, single_lomega(:,m)
+       !   call logger%debug(fname, trim(tmp_str))
+       !end do
 
-          !call logger%debug(fname, "------------------------------------------------")
-          !call logger%debug(fname, "Layer, first few phasefunction expansion coeffs.")
-          !do m = 1, n_layers
-          !   do q = 1, size(this_coef, 2)
-          !      ! (pfmom, elem, n_layers)
-          !      write(tmp_str, '(A, G0.1, I5, 3ES15.5)') "Element #", q, m, this_coef(1:3, q, m)
-          !      call logger%debug(fname, trim(tmp_str))
-          !   end do
-          !end do
+       !call logger%debug(fname, "------------------------------------------------")
+       !call logger%debug(fname, "Layer, first few phasefunction expansion coeffs.")
+       !do m = 1, n_layers
+       !   do q = 1, size(this_coef, 2)
+       !      ! (pfmom, elem, n_layers)
+       !      write(tmp_str, '(A, G0.1, I5, 3ES15.5)') "Element #", q, m, this_coef(1:3, q, m)
+       !      call logger%debug(fname, trim(tmp_str))
+       !   end do
+       !end do
 
-          !call logger%debug(fname, "-----------------------------------------------------------------------")
-          !call logger%debug(fname, "Layer, derivative, first few linearized phasefunction expansion coeffs.")
-          !do m = 1, n_layers
-          !   do k = 1, n_derivs
-          !      ! (pfmom, elem, n_derivs, n_layers)
-          !      write(tmp_str, '(I5, I5, 3ES15.5)') m, k, this_lcoef(1:3, 1, k, m)
-          !      call logger%debug(fname, trim(tmp_str))
-          !   end do
-          !end do
-          !call logger%debug(fname, "-----------------------------------------------------------------------")
+       !call logger%debug(fname, "-----------------------------------------------------------------------")
+       !call logger%debug(fname, "Layer, derivative, first few linearized phasefunction expansion coeffs.")
+       !do m = 1, n_layers
+       !   do k = 1, n_derivs
+       !      ! (pfmom, elem, n_derivs, n_layers)
+       !      write(tmp_str, '(I5, I5, 3ES15.5)') m, k, this_lcoef(1:3, 1, k, m)
+       !      call logger%debug(fname, trim(tmp_str))
+       !   end do
+       !end do
+       !call logger%debug(fname, "-----------------------------------------------------------------------")
 
-          !write(fmt_str, '(A,G0.1,A)') "(A, G0.1, A, ", size(derivs, 3), "ES15.5)"
-          !do q = 1, n_stokes
-          !   write(tmp_str, '(A, G0.1, A, ES20.10)') "XRTM radiance, Stokes # ", q, "          : ", I_p(q,1,1,1)
-          !   call logger%debug(fname, trim(tmp_str))
-          !   write(tmp_str, '(A, G0.1, A, ES20.10)') "Cumulative XRTM radiance, Stokes #", q, ": ", radiance(i,q)
-          !   call logger%debug(fname, trim(tmp_str))
-          !end do
+       !write(fmt_str, '(A,G0.1,A)') "(A, G0.1, A, ", size(derivs, 3), "ES15.5)"
+       !do q = 1, n_stokes
+       !   write(tmp_str, '(A, G0.1, A, ES20.10)') "XRTM radiance, Stokes # ", q, "          : ", I_p(q,1,1,1)
+       !   call logger%debug(fname, trim(tmp_str))
+       !   write(tmp_str, '(A, G0.1, A, ES20.10)') "Cumulative XRTM radiance, Stokes #", q, ": ", radiance(i,q)
+       !   call logger%debug(fname, trim(tmp_str))
+       !end do
 
-          !do q = 1, n_stokes
-          !   write(tmp_str, trim(fmt_str)) "XRTM weighting functions, Stokes #", q, "           : ", K_p(q,1,1,:,1)
-          !   call logger%debug(fname, trim(tmp_str))
-          !   write(tmp_str, trim(fmt_str)) "Cumulative XRTM weighting functions, Stokes #", q, ": ", derivs(i,q,:)
-          !   call logger%debug(fname, trim(tmp_str))
-          !end do
+       !do q = 1, n_stokes
+       !   write(tmp_str, trim(fmt_str)) "XRTM weighting functions, Stokes #", q, "           : ", K_p(q,1,1,:,1)
+       !   call logger%debug(fname, trim(tmp_str))
+       !   write(tmp_str, trim(fmt_str)) "Cumulative XRTM weighting functions, Stokes #", q, ": ", derivs(i,q,:)
+       !   call logger%debug(fname, trim(tmp_str))
+       !end do
 
 
        !end if
@@ -2074,5 +2075,186 @@ contains
     success = .true.
 
   end subroutine calculate_XRTM_radiance
+
+  subroutine calculate_XRTM_scale_AK_corr( &
+       dI_dgas, &
+       stokes_coeffs, &
+       scn, &
+       SV, &
+       gain_matrix, &
+       ILS_delta_lambda, &
+       ILS_relative_response, &
+       dispersion, &
+       psurf, &
+       num_active_levels, &
+       N_stokes, &
+       N_spec, &
+       idx_start, &
+       idx_stop, &
+       col_AK &
+       )
+
+    implicit none
+    double precision, intent(in) :: dI_dgas(:,:,:)
+    double precision, intent(in) :: stokes_coeffs(:)
+    type(scene), intent(in) :: scn
+    type(statevector), intent(in) :: SV
+    double precision, intent(in) :: gain_matrix(:,:)
+    real, intent(in) :: ILS_delta_lambda(:,:)
+    real, intent(in) :: ILS_relative_response(:,:)
+    double precision, intent(in) :: dispersion(:)
+    double precision, intent(in) :: psurf
+    integer, intent(in) :: num_active_levels
+    integer, intent(in) :: N_stokes
+    integer, intent(in) :: N_spec
+    integer, intent(in) :: idx_start(:)
+    integer, intent(in) :: idx_stop(:)
+    double precision, intent(inout) :: col_AK(:,:)
+
+
+    logical :: ILS_success
+
+    double precision, allocatable :: dI_dVMR_stokes(:,:)
+    double precision, allocatable :: dI_dVMR(:)
+    double precision, allocatable :: dI_dVMR_conv(:,:)
+    double precision :: pwgts(num_active_levels)
+    double precision :: prior_VMR(num_active_levels), this_VMR(num_active_levels)
+    double precision :: s_bar(num_active_levels)
+
+    double precision, allocatable :: AK_profile(:,:), AK_profile_total(:)
+    double precision, allocatable :: tmp_v1(:), tmp_v2(:)
+
+    integer :: idx1, idx2
+
+    integer :: N_gas, nlay, N_hires
+    integer :: i_gas, i_SV
+    integer :: i, j, q
+
+    N_hires = size(scn%op%wl)
+    N_gas = size(scn%op%gas_tau, 3)
+    nlay = scn%num_active_levels - 1
+
+    allocate(dI_dVMR(N_hires))
+    allocate(dI_dVMR_stokes(N_hires, N_stokes))
+    allocate(dI_dVMR_conv(N_spec, num_active_levels))
+    allocate(tmp_v1(size(SV%svap)))
+    allocate(tmp_v2(num_active_levels))
+    allocate(AK_profile(SV%num_gas, num_active_levels))
+    allocate(AK_profile_total(num_active_levels))
+
+    call logger%fatal("calculate_XRTM_scale_AK_corr", &
+         "This function is not implemented correctly!")
+    stop 1
+
+    ! dI_dgas: (N_hires, N_gas, N_stokes)
+
+    ! Calculate this for every retrieved gas
+    do i_gas=1, N_gas
+
+       ! Is this gas found in ANY of the state vector elements?
+       ! If not - skip this gas
+       if (count(SV%gas_idx_lookup(:) == i_gas) == 0) cycle
+
+       dI_dVMR_stokes(:,:) = 0.0d0
+       dI_dVMR_conv(:,:) = 0.0d0
+       pwgts(:) = 0.0d0
+       prior_VMR(:) = 0.0d0
+       this_VMR(:) = 0.0d0
+
+       do i=1, num_active_levels
+
+          ! THIS IS WRONG
+          ! dI_dgas must be replaced by dI_dTau
+          ! which unfortunately we do not get from XRTM
+          ! at the moment.
+          ! The main reason is that the number of weighting
+          ! functions to be calculated would increase so much
+          ! and slow down the entire algorithm.
+
+
+          if (i == 1) then
+             ! TOA layer
+             do j = 1, N_hires
+                dI_dVMR_stokes(j,:) = dI_dgas(j, i_gas, :) &
+                     * scn%op%gas_tau_dvmr(1,j,i,i_gas)
+             end do
+          else if (i == num_active_levels) then
+             ! BOA layer
+             do j = 1, N_hires
+                dI_dVMR_stokes(j,:) = dI_dgas(j, i_gas, :) &
+                     * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
+             end do
+          else
+             ! everything in between
+             do j = 1, N_hires
+                dI_dVMR_stokes(j,:) = dI_dgas(j, i_gas, :) &
+                     * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) &
+                     + scn%op%gas_tau_dvmr(1,j,i,i_gas))
+             end do
+          end if
+
+          ! Sum up the dI_dVMR stokes components to get
+          dI_dVMR(:) = 0.0d0
+          do q=1, N_stokes
+             dI_dVMR(:) = dI_dVMR(:) + dI_dVMR_stokes(:, q) * stokes_coeffs(q)
+          end do
+
+          call oco_type_convolution(scn%op%wl, &
+               dI_dVMR(:), &
+               ILS_delta_lambda(:,:), &
+               ILS_relative_response(:,:), &
+               dispersion(:), &
+               dI_dVMR_conv(:,i), &
+               ILS_success)
+
+       end do ! End level loop
+
+       ! Compute / adjust the VMRs given the prior scale factor (not necessarily 1.0)
+       ! and the region of the column in which the sub-column is retrieved
+       prior_VMR = scn%atm%gas_vmr(1:num_active_levels, i_gas)
+       this_VMR = scn%atm%gas_vmr(1:num_active_levels, i_gas)
+
+       do i_SV=1, SV%num_gas
+          if (i_gas /= SV%gas_idx_lookup(i_SV)) cycle
+
+          idx1 = max(idx_start(i_SV), 1)
+          idx2 = min(idx_stop(i_SV), num_active_levels)
+
+          prior_VMR(idx1:idx2) = prior_VMR(idx1:idx2) &
+               * SV%svap(SV%idx_gas(i_SV, 1))
+          this_VMR(idx1:idx2) = this_VMR(idx1:idx2) &
+               * SV%svsv(SV%idx_gas(i_SV, 1))
+       end do
+
+       AK_profile_total(:) = 0.0d0
+       do i_SV=1, SV%num_gas
+          if (i_gas /= SV%gas_idx_lookup(i_SV)) cycle
+
+          idx1 = max(idx_start(i_SV), 1)
+          idx2 = min(idx_stop(i_SV), num_active_levels)
+
+          s_bar(:) = 0.0d0
+          s_bar(idx1:idx2) = 1.0d0
+
+          tmp_v2(:) = 0.0d0
+          do i=1, num_active_levels
+             ! G dot dI/dVMR is a vector of length(SV)
+             tmp_v1(:) = matmul(gain_matrix, dI_dVMR_conv(:, i))
+             ! Now multiply by (h^T dot [prior_VMR * s_bar])
+             AK_profile(i_SV, i) = tmp_v1(SV%idx_gas(i_SV, 1)) * dot_product(scn%atm%pwgts, prior_VMR * s_bar)
+             AK_profile_total(i) = AK_profile_total(i) + AK_profile(i_SV, i)
+
+          end do
+
+       end do
+
+       col_AK(i_gas, 1:num_active_levels) = AK_profile_total(:)
+
+
+
+
+    end do ! End gas loop
+
+  end subroutine calculate_XRTM_scale_AK_corr
 
 end module XRTM_mod

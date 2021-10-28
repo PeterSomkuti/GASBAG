@@ -914,7 +914,11 @@ void chapman_functions(int n_layers, double mu_0, double z0, double *z, double *
                else
                     chap[i][j] = (sqrt(r1*r1 - b) - sqrt(r2*r2 - b)) / (r1 - r2);
           }
+
+          //printf("%d, %15.8f, %15.8f ..  %15.8f\n", i, chap[i][i], 1.0 / mu_0,  chap[i][i] /  (1.0 / mu_0));
      }
+
+     //scanf("%d", &i);
 }
 
 

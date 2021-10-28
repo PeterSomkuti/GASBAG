@@ -125,6 +125,10 @@ module physical_model_mod
 
   !> Externally used surface albedo values (footprint, frame)
   double precision, allocatable :: external_surface_albedo(:,:)
+  !> Externally used pressure levels (footprint, frame, level)
+  double precision, allocatable :: external_pressure_levels(:,:,:)
+  !> Externally used altitude levels (footprint, frame, level)
+  double precision, allocatable :: external_altitude_levels(:,:,:)
 
   ! The initial atmosphere provided by the config file, this is the basis
   ! for all scene-dependent atmospheres. The pressure levels of initial_atm
@@ -522,6 +526,18 @@ contains
 
           end if
 
+          if (CS%window(i_win)%external_altitude_pressure /= "") then
+
+             call h5fopen_f(CS%window(i_win)%external_altitude_pressure%chars(), &
+                  H5F_ACC_RDONLY_F, tmp_file_id, hdferr)
+             call read_DP_hdf_dataset(tmp_file_id, "vector_pressure_levels", &
+                  external_pressure_levels, dset_dims)
+             call read_DP_hdf_dataset(tmp_file_id, "vector_altitude_levels", &
+                  external_altitude_levels, dset_dims)
+
+          end if
+
+
 
        end if
 
@@ -581,6 +597,11 @@ contains
        ! This is the amount by which we have to pad the hi-resolution grid in order to
        ! allow for ILS protrusion. (and add small percentage to be on the safe side)
        hires_pad = (ils_max_wl - ils_min_wl) * 1.025d0
+
+       ! TODO:
+       ! Add an option here to use the native spectroscopy spacing. If we undersample
+       ! the spectroscopy by a lot, this simple way of re-gridding might actually
+       ! create rather large errors!
 
        ! Grab the desired high-resolution wavelength grid spacing
        hires_spacing = CS%window(i_win)%wl_spacing
@@ -779,8 +800,7 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-
-       !frame_start = 2775
+       !frame_start = 2349
        !frame_start = 3225
        !frame_stop = 50
 
@@ -924,6 +944,8 @@ contains
        if (allocated(prior_gas_profiles_pressures)) deallocate(prior_gas_profiles_pressures)
 
        if (allocated(external_surface_albedo)) deallocate(external_surface_albedo)
+       if (allocated(external_pressure_levels)) deallocate(external_pressure_levels)
+       if (allocated(external_altitude_levels)) deallocate(external_altitude_levels)
 
        ! Clear and deallocate the result container
        call logger%info(fname, "Clearing up results container.")
@@ -1285,7 +1307,7 @@ contains
        ! If the user requested polarization, let them know that they're
        ! asking for something 'wrong'
        if (CS_win%do_polarization) then
-          call logger%debug(fname, "BEER-LAMBERT is scalar only! Change config file!")
+           call logger%debug(fname, "BEER-LAMBERT is scalar only! Change config file!")
        end if
     else if (CS_win%RT_model%lower() == "xrtm") then
        RT_model = RT_XRTM
@@ -1587,15 +1609,15 @@ contains
 
     ! REMOVE ME!!!!!!!
     ! REMOVE ME!!!!!!!
-    call random_seed(size=seed_size)
-    allocate(seed(seed_size))
-    seed(:) = 111
-    seed(1) = i_fp
-    seed(2) = i_fr
+    !call random_seed(size=seed_size)
+    !allocate(seed(seed_size))
+    !seed(:) = 111
+    !seed(1) = i_fp
+    !seed(2) = i_fr
 
 
-    call random_seed(put=seed)
-    call random_number(random_psurf)
+    !call random_seed(put=seed)
+    !call random_number(random_psurf)
     !met_psurf(i_fp, i_fr) = met_psurf(i_fp, i_fr) + (random_psurf - 0.5d0) * 10000.d0
     ! REMOVE ME!!!!!!!
     ! REMOVE ME!!!!!!!
@@ -1883,12 +1905,31 @@ contains
              ! scn%atm%gas_vmr array, according to whatever gases
              ! are present in the prior file.
 
-             call rearrange_atmosphere_with_scheme( &
-                  scn%atm, &
-                  ptropo, &
-                  prior_gas_profiles_pressures(:, i_fp, i_fr), &
-                  prior_gas_profiles(:, :, i_fp, i_fr) &
-                  )
+             if (allocated(external_pressure_levels)) then
+
+                call rearrange_atmosphere_with_external( &
+                     scn%atm, &
+                     external_pressure_levels(:, i_fp, i_fr), &
+                     prior_gas_profiles_pressures(:, i_fp, i_fr), &
+                     prior_gas_profiles(:, :, i_fp, i_fr) &
+                     )
+             else
+
+                !scn%atm%p(:) = prior_gas_profiles_pressures(:, i_fp, i_fr)
+                !do i = 1, size(scn%atm%gas_names)
+                !   if (scn%atm%gas_names(i)%lower() == "h2o") cycle
+                !   scn%atm%gas_vmr(:,i) = prior_gas_profiles(:, i, i_fp, i_fr)
+                !end do
+
+                call rearrange_atmosphere_with_scheme( &
+                     scn%atm, &
+                     ptropo, &
+                     prior_gas_profiles_pressures(:, i_fp, i_fr), &
+                     prior_gas_profiles(:, :, i_fp, i_fr) &
+                     )
+
+             end if
+
 
           end if
 
@@ -1994,7 +2035,8 @@ contains
                 ! If H2O needs to be retrieved, take it from the MET atmosphere
                 ! specific humidty directly, rather than the H2O column of the
                 ! atmosphere text file.
-                scn%atm%gas_vmr(:,i) = scn%atm%sh / (1.0d0 - scn%atm%sh) * SH_H2O_CONV
+                !scn%atm%gas_vmr(:,i) = scn%atm%sh / (1.0d0 - scn%atm%sh) * SH_H2O_CONV
+                scn%atm%gas_vmr(:,i) = scn%atm%sh * DRY_AIR_MASS / (H2Om + scn%atm%sh * (DRY_AIR_MASS - H2Om))
 
              end if
           end do
@@ -2118,7 +2160,27 @@ contains
           ! Calculate mid-layer pressures
           call calculate_layer_pressure(scn)
           ! Calculate the scene gravity and altitude for levels
-          call scene_altitude(scn)
+          call scene_altitude(scn, CS_win%N_sublayers)
+
+          if (allocated(external_altitude_levels)) then
+             ! Inject altitude levels
+
+             scn%atm%altitude_levels(:) = external_altitude_levels(:, i_fp, i_fr)
+
+             do i = 1, scn%num_levels
+                scn%atm%grav(i) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i))
+             end do
+
+             do i = 1, scn%num_levels - 1
+                scn%atm%grav_layers(i) = 0.5d0 * (scn%atm%grav(i) + scn%atm%grav(i+1))
+             end do
+
+             ! This provides effective 1 / mu0
+             call chapman_factors(scn, scn%mu0, EARTH_EQUATORIAL_RADIUS, scn%atm%chapman_solar)
+             ! This provides effective 1 / mu
+             call chapman_factors(scn, scn%mu, EARTH_EQUATORIAL_RADIUS, scn%atm%chapman_viewing)
+          end if
+
        end if
 
        K_hi(:,:) = 0.0d0
@@ -2385,13 +2447,17 @@ contains
           ! The depolarization factors depend on wavelength only
           ! ----------------------------------------------------------
 
-          call calculate_rayleigh_tau( &
+          call calculate_rayleigh_tau_MS3( &
                scn%op%wl, &
                scn%atm%p, &
                scn%atm%grav, &
+               scn%atm%sh, &
                scn%atm%T, &
                scn%op%ray_tau &
                )
+
+          !scn%op%ray_tau(:,:) = scn%op%ray_tau(:,:) * 1.25d0
+          !scn%op%ray_tau(:,:) = 1.0d-15
 
           ! ---------------------------------------------------------------
           ! If there are aerosols in the scene, calculate the aerosol
@@ -2971,6 +3037,7 @@ contains
        type is (oco2_instrument)
 
           ! Convolution of the TOA radiances
+          call logger%debug(fname, "Convolving TOA radiances.")
           call oco_type_convolution(scn%op%wl, radiance_calc_work_hi, &
                this_ILS_delta_lambda(:,:), &
                ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max,i_fp,band), &
@@ -2984,7 +3051,7 @@ contains
 
           if (any(ieee_is_nan(radiance_calc_work))) then
              call logger%error(fname, "NaNs in convolved radiance.")
-             return
+             !return
           end if
 
           ! Convolution of any high-res Jacobians
@@ -3164,8 +3231,10 @@ contains
             matmul(Shat_inv, old_sv - SV%svsv), 1)
 
        ! Calculate the chi2 of this iteration
+       !this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
+       !     noise_work, N_spec - N_sv)
        this_chi2 = calculate_chi2(radiance_meas_work, radiance_calc_work, &
-            noise_work, N_spec - N_sv)
+            noise_work, N_spec)
 
        chi2_rel_change = abs(this_chi2 - old_chi2) / old_chi2
 
@@ -3285,21 +3354,47 @@ contains
                 ! Averaging kernels for gases are computationally slightly costly,
                 ! (repeated convolutions), thus we skip this part if not requested.
 
-                call calculate_BL_scale_AK_corr( &
-                     radiance_calc_work_hi(:), &
-                     scn, &
-                     SV, &
-                     gain_matrix(:,:), &
-                     this_ILS_delta_lambda(:,:), &
-                     ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
-                     this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
-                     scn%atm%psurf, &
-                     num_active_levels, &
-                     N_spec, &
-                     s_start, &
-                     s_stop, &
-                     results%col_ak(i_fp, i_fr, :, :) &
-                     )
+                select case (RT_model)
+                case (RT_BEER_LAMBERT)
+
+                   call calculate_BL_scale_AK_corr( &
+                        radiance_calc_work_hi(:), &
+                        scn, &
+                        SV, &
+                        gain_matrix(:,:), &
+                        this_ILS_delta_lambda(:,:), &
+                        ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
+                        this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                        scn%atm%psurf, &
+                        num_active_levels, &
+                        N_spec, &
+                        s_start, &
+                        s_stop, &
+                        results%col_ak(i_fp, i_fr, :, :) &
+                        )
+
+                case (RT_XRTM)
+
+                   call calculate_XRTM_scale_AK_corr( &
+                        dI_dgas(:,:,:), &
+                        stokes_coef(:, i_fp, i_fr), &
+                        scn, &
+                        SV, &
+                        gain_matrix(:,:), &
+                        this_ILS_delta_lambda(:,:), &
+                        ils_relative_response(:,l1b_wl_idx_min:l1b_wl_idx_max, i_fp, band), &
+                        this_dispersion(l1b_wl_idx_min:l1b_wl_idx_max), &
+                        scn%atm%psurf, &
+                        num_active_levels, &
+                        n_stokes, &
+                        N_spec, &
+                        s_start, &
+                        s_stop, &
+                        results%col_ak(i_fp, i_fr, :, :) &
+                        )
+
+                end select
+
              end if
 
           end if
@@ -3456,15 +3551,17 @@ contains
           call logger%debug(fname, "---------------------------------")
           write(tmp_str, '(A,G0.1,A,G0.1)') "Frame: ", i_fr, ", Footprint: ", i_fp
           call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, '(A, G0.1)') "Sounding ID: ", sounding_ids(i_fp, i_fr)
+          call logger%debug(fname, trim(tmp_str))
           write(tmp_str, '(A, F10.3)') "SNR: ", mean(radiance_meas_work / noise_work)
           call logger%debug(fname, trim(tmp_str))
 
 
           ! Write out some atmopsheric properties for the first spectral index
-          call logger%debug(fname, "Pressure mid-layer, Rayleigh OD, total gas OD, SSA")
+          call logger%debug(fname, "Pressure mid-layer, ndry, Rayleigh OD, total gas OD, SSA")
           do i=1, num_active_levels - 1
-             write(tmp_str, '(G0.1, ES15.5, ES15.5, ES15.5, F8.3)') i, 0.5d0 * (scn%atm%p(i+1) + scn%atm%p(i)), &
-                  scn%op%ray_tau(1, i), sum(scn%op%gas_tau(1, i, :)), scn%op%layer_omega(1,i)
+             write(tmp_str, '(I3.3, ES15.5, ES15.5, ES15.5, ES15.5, F8.3)') i, 0.5d0 * (scn%atm%p(i+1) + scn%atm%p(i)), &
+                  scn%atm%ndry(i),scn%op%ray_tau(1, i), sum(scn%op%gas_tau(1, i, :)), scn%op%layer_omega(1,i)
              call logger%debug(fname, trim(tmp_str))
           end do
 
@@ -3478,6 +3575,7 @@ contains
           ! Calculate the averaging kernel
           AK(:,:) = matmul(Shat, KtSeK) !matmul(gain_matrix, K) ! - these should be the same?
 
+          ! Correlation matrix from the posterior covariance
           do i=1, N_sv
              do j=1, N_sv
                 Shat_corr(i,j) = Shat(i,j) / sqrt(Shat(i,i) * Shat(j,j))
@@ -3525,6 +3623,13 @@ contains
           end do
           close(funit)
           call logger%debug(fname, "Written file: gain_matrix.dat (spectral x statevector)")
+
+          open(file="atmosphere_gases_prior.dat", newunit=funit)
+          do i=1, scn%num_active_levels
+             write(funit, *) (scn%atm%gas_vmr(i, j), j=1, scn%num_gases)
+          end do
+          close(funit)
+
 
           open(file="spectra.dat", newunit=funit)
           do i=1, N_spec
@@ -3622,6 +3727,11 @@ contains
           ! Halt the execution here and wait for user keypress
           call logger%debug(fname, "-----------------------------------")
           call logger%debug(fname, "Press ENTER to continue")
+
+
+          !do i = 1, scn%num_active_levels
+          !   write(*,*) scn%atm%altitude_levels(i), scn%atm%p(i)
+          !end do
 
           read(*,*)
 

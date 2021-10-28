@@ -51,10 +51,33 @@ contains
     logical :: gas_exists
     integer :: N_wl
 
+    integer, parameter :: max_attempts = 10
+    integer :: i
+
+
     call logger%trivia(fname, "Reading in ABSCO HDF file at: " // trim(filename))
 
     ! Try and open the ABSCO hdf file
-    call h5fopen_f(trim(filename), H5F_ACC_RDONLY_F, absco_file_id, hdferr)
+
+    ! This can occasionally fail in a processing environment with many
+    ! processes trying to access the same file(s). We can try to just open
+    ! the file a few times and if it still does not work after some
+    ! attempts - call it a day and quit.
+
+
+    hdferr = -1
+    i = 0
+    do while ((i < max_attempts) .and. (hdferr < 0))
+       call h5fopen_f(trim(filename), H5F_ACC_RDONLY_F, absco_file_id, hdferr)
+       i = i + 1
+
+       if (hdferr < 0) then
+          write(tmp_str, "(A, G0.1, A, A)") "Attempt #", i, "to read ABSCO file: ", trim(filename)
+          call logger%debug(fname, trim(tmp_str))
+       end if
+
+    end do
+
     call check_hdf_error(hdferr, fname, "Could not open ABSCO HDF file at: " // trim(filename))
 
     ! And now populate the required fields of the 'gas' structure ..
@@ -167,6 +190,10 @@ contains
        call read_DP_hdf_dataset(absco_file_id, "Broadener_" // gas_index(1:2) // "_VMR", gas%H2O, dset_dims)
 
     end if
+
+    call h5fclose_f(absco_file_id, hdferr)
+    call check_hdf_error(hdferr, fname, "Could not close ABSCO file.")
+
 
 
   end subroutine read_absco_HDF

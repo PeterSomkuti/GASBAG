@@ -53,6 +53,9 @@ module scene_mod
      !> Layer Chapman factors (layer, layer)
      double precision, allocatable :: chapman_solar(:,:)
      double precision, allocatable :: chapman_viewing(:,:)
+     !> Layer effective (slant) paths (1 / mu_eff)
+     double precision, allocatable :: layer_slant_path_solar(:)
+     double precision, allocatable :: layer_slant_path_viewing(:)
 
   end type atmosphere
 
@@ -394,49 +397,45 @@ contains
   !> @brief Calculate Chapman factors per layer
   !> @details This code is inspired by MS3 (O'Brien, O'Dell et al.)
   !> @param scn Scene object
-  subroutine chapman_factors(scn, mu, chapman)
+  subroutine chapman_factors(scn, mu, z0, chapman)
     type(scene), intent(inout) :: scn
     double precision, intent(in) :: mu ! either mu or mu0
+    double precision, intent(in) :: z0 ! Earth radius at this scene
     double precision, intent(inout) :: chapman(:,:)
 
     integer :: i, j
     integer :: Nlay
 
-    double precision, allocatable :: dz(:)
-    double precision :: dist, lastdist
-    double precision :: r_i, r_j
+    double precision :: a, b
+    double precision :: r1, r2
 
     Nlay = scn%num_active_levels - 1
     chapman(:,:) = 0.0d0
 
-    allocate(dz(Nlay))
 
-    ! delta altitude in [m]
-    do i = 1, Nlay
-       dz(i) = scn%atm%altitude_levels(i) - scn%atm%altitude_levels(i+1)
-    end do
+    a = sin(acos(mu))
+    a = a * a
 
-    ! To be consistent with MS3 code, we loop from bottom to the top
     do i = Nlay, 1, -1
-       ! r_i: altitude (from Earth center) at the bottom of layer i
-       r_i = EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(i + 1)
-       dist = 0.0d0
 
-       do j = i, 1, -1
+       b = z0 + scn%atm%altitude_levels(i+1)
+       b = b * b * a
 
-          lastdist = dist
-          ! r_j: altitude (from Earth center) at the top of layer j
-          r_j = EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(j)
+       do j = Nlay, i, -1
 
-          ! dist is from bottom of layer i to TOP of layer j (above layer i)
-          dist = r_i * ( sqrt(mu * mu + (r_j / r_i)**2 - 1.0d0) - mu )
+          r1 = z0 + scn%atm%altitude_levels(j+1)
+          r2 = z0 + scn%atm%altitude_levels(j)
 
-          ! This calculates 1 / mueff
-          chapman(i,j) = (dist - lastdist) / dz(j) ! / (1.0d0 / mu)
+          !if (r1 == r2) then
+          !   chapman(i,j) = chapman(i, j-1)
+          !else
+             ! This calculates 1 / mueff
+          chapman(i,j) = (sqrt(r1*r1 - b) - sqrt(r2*r2 - b)) / (r1 - r2)
+          !end if
 
        end do
-
     end do
+
 
   end subroutine chapman_factors
 
@@ -444,53 +443,88 @@ contains
   !> @brief Calculate altitude levels, gravity levels and ndry
   !> @details This code is borrowed from MS3 (O'Brien, O'Dell et al.)
   !> @param scn Scene object
-  subroutine scene_altitude(scn)
+  subroutine scene_altitude(scn, N_sub)
     type(scene), intent(inout) :: scn
+    integer, intent(in) :: N_sub
 
     ! Local stuff
-    double precision :: SH_layer, g_layer, p_layer, T_layer, Tv, dP
-    double precision :: logratio, dz, constant
+    double precision :: SH_layer, g_layer, p_layer, T_layer, Tv, dP, dT, dQ
+    double precision :: logratio, dz, constant, zlo, plo, tlo, tbar, qlo
     double precision :: alt_tmp
+    double precision :: gclat, radius
+    double precision, parameter  :: con = 0.006738d0
+
+
     ! Loop variable
-    integer :: i
+    integer :: i, j
 
     scn%atm%altitude_layers(:) = 0.0d0
-    ! Set altitudes to zero, and the lowest level to the altitude
+    ! Set altitudes to zero, and the lowest level to the scene altitude
     scn%atm%altitude_levels(:) = 0.0d0
     scn%atm%altitude_levels(scn%num_active_levels) = scn%alt
     scn%atm%grav(scn%num_active_levels) = jpl_gravity(scn%lat, scn%alt)
+
     scn%atm%ndry(:) = 0.0d0
 
     ! Loop through layers, starting with the bottom-most (surface) one
-    do i = scn%num_active_levels - 1, 1, -1
+    do i = scn%num_active_levels, 2, -1
 
-       if (i == scn%num_active_levels - 1) then
-          ! Surface level
-          p_layer = (scn%atm%p(i) + scn%atm%psurf) * 0.5d0
-          dP = scn%atm%psurf - scn%atm%p(i)
-          logratio = log(scn%atm%psurf / scn%atm%p(i))
+       zlo = scn%atm%altitude_levels(i)
+
+       if (i == scn%num_active_levels) then
+         ! Surface level
+          dP = (scn%atm%psurf - scn%atm%p(i)) / N_sub
        else
           ! Any other level
-          p_layer = (scn%atm%p(i) + scn%atm%p(i+1)) * 0.5d0
-          dP = scn%atm%p(i+1) - scn%atm%p(i)
-          logratio = log(scn%atm%p(i+1) / scn%atm%p(i))
+          dP = (scn%atm%p(i-1) - scn%atm%p(i)) / N_sub
        end if
 
-       g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1))
-       SH_layer = (scn%atm%sh(i) + scn%atm%sh(i+1)) * 0.5d0
-       T_layer = (scn%atm%T(i) + scn%atm%T(i+1)) * 0.5d0
-       Tv = T_layer * (1.0d0 + SH_layer * (1.0d0 - EPSILON) / EPSILON)
+       dT = (scn%atm%T(i-1) - scn%atm%T(i)) / N_sub
+       dQ = (scn%atm%sh(i-1) - scn%atm%sh(i)) / N_sub
 
-       dz = logratio * Tv * Rd / g_layer
-       g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1) + 0.5d0 * dz)
-       dz = logratio * Tv * Rd / g_layer
-       constant = dP / (DRY_AIR_MASS * g_layer)
+       do j = 0, N_sub - 1
+
+          if (i == scn%num_active_levels - 1) then
+             plo = scn%atm%psurf + j * dP
+          else
+             plo = scn%atm%p(i) + j * dP
+          end if
+
+          logratio = log(plo / (plo + dP))
+
+          tlo = scn%atm%T(i) + j * dT
+          tbar = tlo + 0.5 * dT
+          qlo = scn%atm%sh(i) + j * dQ
+
+          g_layer = jpl_gravity(scn%lat, zlo)
+
+          dz = (Rd * tbar / g_layer) * logratio
+          zlo = zlo + dz
+
+          scn%atm%ndry(i-1) = scn%atm%ndry(i-1) + dP / (DRY_AIR_MASS * g_layer) * (1.0d0 - qlo)
+
+       end do
+
+       !g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1))
+       !SH_layer = (scn%atm%sh(i) + scn%atm%sh(i+1)) * 0.5d0
+       !T_layer = (scn%atm%T(i) + scn%atm%T(i+1)) * 0.5d0
+       !Tv = T_layer * (1.0d0 + SH_layer * (1.0d0 - EPSILON) / EPSILON)
+
+       !dz = logratio * Tv * Rd / g_layer
+       !g_layer = jpl_gravity(scn%lat, scn%atm%altitude_levels(i+1) + 0.5d0 * dz)
+       !dz = logratio * Tv * Rd / g_layer
+       !constant = dP / (DRY_AIR_MASS * g_layer)
 
        ! Write the important stuff back into the scene object
        !-----------------------------------------------------
-       scn%atm%ndry(i) = constant * (1.0d0 - SH_layer)
-       scn%atm%altitude_levels(i) = scn%atm%altitude_levels(i+1) + dz
-       scn%atm%grav(i) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i))
+       !scn%atm%ndry(i-1) = constant * (1.0d0 - SH_layer)
+       !scn%atm%altitude_levels(i) = scn%atm%altitude_levels(i+1) + dz
+       !scn%atm%altitude_levels(i) = scn%atm%altitude_levels(i) * 1.045
+
+       scn%atm%altitude_levels(i-1) = zlo * 1.0d0
+       scn%atm%grav(i-1) = jpl_gravity(scn%lat, scn%atm%altitude_levels(i-1))
+       scn%atm%ndry(i-1) = (scn%atm%p(i) - scn%atm%p(i-1)) / (DRY_AIR_MASS * scn%atm%grav(i-1)) &
+            * (1.0d0 - 0.5d0 * (scn%atm%sh(i) + scn%atm%sh(i-1)))
        !-----------------------------------------------------
 
     end do
@@ -511,26 +545,43 @@ contains
     if (allocated(scn%atm%ps_factors_viewing)) deallocate(scn%atm%ps_factors_viewing)
     if (allocated(scn%atm%chapman_solar)) deallocate(scn%atm%chapman_solar)
     if (allocated(scn%atm%chapman_viewing)) deallocate(scn%atm%chapman_viewing)
+    if (allocated(scn%atm%layer_slant_path_viewing)) deallocate(scn%atm%layer_slant_path_viewing)
+    if (allocated(scn%atm%layer_slant_path_solar)) deallocate(scn%atm%layer_slant_path_solar)
 
+    allocate(scn%atm%layer_slant_path_solar(scn%num_levels - 1))
+    allocate(scn%atm%layer_slant_path_viewing(scn%num_levels - 1))
     allocate(scn%atm%ps_factors_solar(scn%num_levels - 1))
     allocate(scn%atm%ps_factors_viewing(scn%num_levels - 1))
     allocate(scn%atm%chapman_solar(scn%num_levels - 1, scn%num_levels - 1))
     allocate(scn%atm%chapman_viewing(scn%num_levels - 1, scn%num_levels - 1))
 
+
+
+    ! Get a better estimate for radius of earth at this latitude
+    gclat = atan(tan(DEG2RAD*scn%lat)/(1+con))
+    radius = EARTH_EQUATORIAL_RADIUS/sqrt(1.0d0+con*sin(gclat)**2)
+    !radius = EARTH_EQUATORIAL_RADIUS
+
     do i = 1, scn%num_levels - 1
 
        ! Maybe replace this by geoid radius..
-       alt_tmp = EARTH_EQUATORIAL_RADIUS / (EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(i))
-
+       !alt_tmp = EARTH_EQUATORIAL_RADIUS / (EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(i))
+       alt_tmp = radius / (radius + scn%atm%altitude_layers(i))
        scn%atm%ps_factors_solar(i) = cos(scn%SZA * DEG2RAD) / sqrt(1.0d0 - sin(scn%SZA * DEG2RAD)**2 * alt_tmp * alt_tmp)
        scn%atm%ps_factors_viewing(i) = cos(scn%VZA * DEG2RAD) / sqrt(1.0d0 - sin(scn%VZA * DEG2RAD)**2 * alt_tmp * alt_tmp)
 
     end do
 
     ! This provides effective 1 / mu0
-    call chapman_factors(scn, scn%mu0, scn%atm%chapman_solar)
+    call chapman_factors(scn, scn%mu0, radius, scn%atm%chapman_solar)
+
     ! This provides effective 1 / mu
-    call chapman_factors(scn, scn%mu, scn%atm%chapman_viewing)
+    call chapman_factors(scn, scn%mu, radius, scn%atm%chapman_viewing)
+
+    do i = 1, scn%num_levels - 1
+       scn%atm%layer_slant_path_viewing(i) = scn%atm%chapman_viewing(i,i) * 0.99d0
+       scn%atm%layer_slant_path_solar(i) = scn%atm%chapman_solar(i,i)
+    end do
 
   end subroutine scene_altitude
 

@@ -183,6 +183,8 @@ module control_mod
      double precision, allocatable :: aerosol_height_cov(:)
      !> Extenrally supplemented surface albedo values
      type(string) :: external_surface_albedo
+     !> Extenrally supplemented altitude level and pressure level values
+     type(string) :: external_altitude_pressure
      !> Do we keep the scattering coefficients constant throughout the band? Speedup!
      logical :: constant_coef
      !> What is the number of sublayers to be used for gas OD calculations
@@ -941,13 +943,7 @@ contains
 
           call fini_extract(fini, win_str, 'sublayers', .false., fini_int)
           ! We round the number of sublayers to the next odd value > 2
-          if (fini_int < 2) then
-             CS%window(window_nr)%N_sublayers = 3
-          else if (mod(fini_int, 2) == 0) then
-             CS%window(window_nr)%N_sublayers = fini_int + 1
-          else
-             CS%window(window_nr)%N_sublayers = fini_int
-          end if
+          CS%window(window_nr)%N_sublayers = fini_int
 
           call fini_extract(fini, win_str, 'psurf_covariance', .false., fini_val)
           CS%window(window_nr)%psurf_cov = fini_val
@@ -1106,6 +1102,9 @@ contains
 
           call fini_extract(fini, win_str, 'external_surface_albedo', .false., fini_char)
           CS%window(window_nr)%external_surface_albedo = trim(fini_char)
+
+          call fini_extract(fini, win_str, 'external_altitude_pressure', .false., fini_char)
+          CS%window(window_nr)%external_altitude_pressure = trim(fini_char)
 
           call fini_extract(fini, win_str, 'atmosphere', .false., fini_char)
           CS%window(window_nr)%atmosphere_file = trim(fini_char)

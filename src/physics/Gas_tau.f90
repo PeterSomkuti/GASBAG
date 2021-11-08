@@ -151,7 +151,7 @@ contains
 
     ! Maybe some time later we will let the user decide if log-scaling should be
     ! used or not, but I don't see a reason why you would ever NOT want to use this.
-    log_scaling = .false.
+    log_scaling = .true.
 
     ! Just to make sure there's nothing in there already..
     gas_tau(:,:) = 0.0d0
@@ -322,6 +322,7 @@ contains
           ! pressure value, which is obtained via simple linear interpolation.
           if (log_scaling) then
              this_p_fac = (this_p - log(p_higher)) / (log(p_lower) - log(p_higher))
+             this_p = exp(this_p)
           else
              this_p_fac = (this_p - p_higher) / (p_lower - p_higher)
           end if
@@ -335,9 +336,6 @@ contains
           ! Gas CS routine works in H2O VMR rather than SH
           ! this_H2O = this_sh / (1.0d0 - this_sh) * SH_H2O_CONV
           this_H2O = this_sh * DRY_AIR_MASS / (H2Om + this_sh * (DRY_AIR_MASS - H2Om))
-
-
-          if (log_scaling) this_p = exp(this_p)
 
           if (is_H2O) then
              H2O_corr = 1.0d0
@@ -364,7 +362,12 @@ contains
           if (log_scaling) then
              !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp * this_p
              !ndry = GK_weights_f(k) * C_tmp * this_p
-             ndry = C_tmp * this_p
+             ndry = C_tmp * ( &
+                  exp(log(p_lower) + k * (log(p_higher) - log(p_lower)) / N_sub) &
+                  - exp(log(p_lower) + (k + 1) * (log(p_higher) - log(p_lower)) / N_sub) &
+                  )
+             ! The expression in the brackets is delta pressure in log-spaced intervals
+
           else
              !gas_tmp(:) = GK_weights_f(k) * this_CS_value(:) * this_VMR * C_tmp
              !ndry = GK_weights_f(k) * C_tmp
@@ -431,11 +434,19 @@ contains
 
              if (log_scaling) then
                 ! this_p_pert is already exponentiated here!!
-                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * C_tmp * this_p_pert &
-                     * this_CS_value(1:N_wl) * this_VMR_pert
+                !gas_tmp(1:N_wl) = GK_weights_f_pert(k) * C_tmp * this_p_pert &
+                !     * this_CS_value(1:N_wl) * this_VMR_pert
+                gas_tmp(1:N_wl) = C_tmp * this_CS_value(1:N_wl) * this_VMR_pert &
+                     * ( &
+                     exp(log(p_lower) + k * (log(p_higher) - log(p_lower)) / N_sub) &
+                     - exp(log(p_lower) + (k + 1) * (log(p_higher) - log(p_lower)) / N_sub) &
+                     )
              else
-                gas_tmp(1:N_wl) = GK_weights_f_pert(k) * C_tmp &
-                     * this_CS_value(1:N_wl) * this_VMR_pert
+                !gas_tmp(1:N_wl) = GK_weights_f_pert(k) * C_tmp &
+                !     * this_CS_value(1:N_wl) * this_VMR_pert
+                gas_tmp(1:N_wl) = C_tmp * this_CS_value(1:N_wl) * this_VMR_pert &
+                     * abs((p_higher - p_lower) / N_sub)
+
              end if
 
              gas_tau_dpsurf(1:N_wl,l-1) = gas_tau_dpsurf(1:N_wl,l-1) + gas_tmp(1:N_wl)

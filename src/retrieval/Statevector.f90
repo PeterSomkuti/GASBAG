@@ -76,6 +76,7 @@ module statevector_mod
      integer, allocatable :: idx_wf_psurf(:)
      integer, allocatable :: idx_wf_temp(:)
      integer, allocatable :: idx_wf_gas(:)
+     integer, allocatable :: idx_wf_taugas(:)
      integer, allocatable :: idx_wf_aerosol_aod(:)
      integer, allocatable :: idx_wf_aerosol_height(:)
 
@@ -1215,8 +1216,10 @@ contains
 
   end subroutine replace_statevector_with_former
 
-  subroutine assign_RT_jacobian_indices(SV)
+  subroutine assign_RT_jacobian_indices(SV, need_gas_averaging_kernels, num_lay)
     type(statevector), intent(inout) :: SV
+    logical, intent(in) :: need_gas_averaging_kernels
+    integer, intent(in) :: num_lay
 
     integer :: i
     integer :: total
@@ -1231,6 +1234,8 @@ contains
          + SV%num_aerosol_aod &
          + SV%num_aerosol_height
 
+    if (need_gas_averaging_kernels) total = total + num_lay
+
     SV%num_rt_wf = total
 
     write(tmp_str, '(A, G0.1)') "Number of RT weighting functions: ", SV%num_rt_wf
@@ -1240,6 +1245,7 @@ contains
     if (allocated(SV%idx_wf_psurf)) deallocate(SV%idx_wf_psurf)
     if (allocated(SV%idx_wf_temp)) deallocate(SV%idx_wf_temp)
     if (allocated(SV%idx_wf_gas)) deallocate(SV%idx_wf_gas)
+    if (allocated(SV%idx_wf_taugas)) deallocate(SV%idx_wf_taugas)
     if (allocated(SV%idx_wf_aerosol_aod)) deallocate(SV%idx_wf_aerosol_aod)
     if (allocated(SV%idx_wf_aerosol_height)) deallocate(SV%idx_wf_aerosol_height)
 
@@ -1292,6 +1298,18 @@ contains
        SV%idx_wf_aerosol_height(i) = count
        count = count + 1
     end do
+
+    if (need_gas_averaging_kernels) then
+       allocate(SV%idx_wf_taugas(num_lay))
+       do i = 1, num_lay
+          ! Gas-tau for layer i
+          SV%idx_wf_taugas(i) = count
+          write(tmp_str, '(A, G0.1)') "Adding one layer tau-gas derivative at position: ", count
+          call logger%debug(fname, trim(tmp_str))
+          count = count + 1
+       end do
+    end if
+
 
   end subroutine assign_RT_jacobian_indices
 

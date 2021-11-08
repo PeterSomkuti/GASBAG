@@ -33,6 +33,8 @@ module physical_model_addon_mod
      double precision, allocatable :: sv_uncertainty(:,:,:)
      !> Column-average dry air mixing ratio for retrieved gases (footprint, frame, gas_number)
      double precision, allocatable :: xgas(:,:,:)
+     !> Column-average dry air mixing ratio uncertainty for retrieved gases (footprint, frame, gas_number)
+     double precision, allocatable :: xgas_uncertainty(:,:,:)
      !> Column-average dry air mixing ratio for prior gases! (footprint, frame, gas_number)
      double precision, allocatable :: xgas_prior(:,:,:)
      !> Pressure levels (footprint, frame, pressure level)
@@ -376,7 +378,7 @@ contains
 
 
     ! Scale linearly down from tropopause to surface
-    do i = 1, Ntotal - 7
+    do i = 1, Ntotal - 8
 
        p(8+i) = p(8) + (psurf - p(8)) / (Ntotal - 8) * i
 
@@ -592,7 +594,7 @@ contains
     integer :: i, j
 
     num_gases = size(atm%gas_names)
-    num_levels = 40
+    num_levels = 20
     atm%num_levels = num_levels
 
     allocate(tmp_vmr(num_levels, num_gases))
@@ -951,6 +953,7 @@ contains
     allocate(results%sv_prior(num_fp, num_frames, num_SV))
     allocate(results%sv_uncertainty(num_fp, num_frames, num_SV))
     allocate(results%xgas(num_fp, num_frames, num_gas))
+    allocate(results%xgas_uncertainty(num_fp, num_frames, num_gas))
     allocate(results%xgas_prior(num_fp, num_frames, num_gas))
     allocate(results%pwgts(num_fp, num_frames, num_level))
     allocate(results%col_ak(num_fp, num_frames, num_gas, num_level))
@@ -1012,6 +1015,7 @@ contains
     deallocate(results%sv_prior)
     deallocate(results%sv_uncertainty)
     deallocate(results%xgas)
+    deallocate(results%xgas_uncertainty)
     deallocate(results%xgas_prior)
     deallocate(results%pwgts)
     deallocate(results%vmr_prior)
@@ -1315,6 +1319,13 @@ contains
           call write_DP_hdf_dataset(output_file_id, &
                trim(tmp_str), &
                results%xgas(:,:,i), out_dims2d, -9999.99d0)
+
+          write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
+               lower_str%chars(), "_uncertainty_", CS_general%code_name
+          call logger%info(fname, "Writing out: " // trim(tmp_str))
+          call write_DP_hdf_dataset(output_file_id, &
+               trim(tmp_str), &
+               results%xgas_uncertainty(:,:,i), out_dims2d, -9999.99d0)
 
           write(tmp_str, '(A,A,A,A,A)') trim(group_name), "/x", &
                lower_str%chars(), "_apriori_", CS_general%code_name

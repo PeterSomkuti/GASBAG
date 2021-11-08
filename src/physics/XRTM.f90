@@ -32,6 +32,34 @@ module XRTM_mod
 contains
 
 
+  subroutine calculate_XRTM_ltaugas_inputs(SV, scn, ltau, lomega)
+    type(statevector), intent(in) :: SV
+    type(scene), intent(in) :: scn
+    double precision, intent(inout) :: ltau(:,:,:)
+    double precision, intent(inout) :: lomega(:,:,:)
+
+
+    integer :: i, j, l
+    integer :: n_lay
+
+    n_lay = scn%num_active_levels - 1
+
+    do i = 1, n_lay
+       do j = 1, n_lay
+
+          if (i /= j) cycle
+
+          do l = 1, size(scn%op%wl)
+
+             ltau(l, SV%idx_wf_taugas(j), j) = 1.0d0
+             lomega(l, SV%idx_wf_taugas(j), j) = -scn%op%layer_omega(l, j) / scn%op%layer_tau(l, j)
+
+          end do
+       end do
+    end do
+
+  end subroutine calculate_XRTM_ltaugas_inputs
+
   subroutine calculate_XRTM_lgas_inputs(SV, scn, ltau, lomega)
     type(statevector), intent(in) :: SV
     type(scene), intent(in) :: scn
@@ -43,9 +71,9 @@ contains
     integer :: l
     integer :: n_lay
 
-    do j = 1, SV%num_gas
+    n_lay = scn%num_active_levels - 1
 
-       n_lay = scn%num_active_levels - 1
+    do j = 1, SV%num_gas
 
        idx_start = SV%s_start(j)
        idx_stop = SV%s_stop(j) - 1
@@ -462,6 +490,8 @@ contains
        dI_dAOD, &
        dI_dAHeight, &
        dI_dpsurf, &
+       dI_dtaugas, &
+       need_gas_averaging_kernels, &
        xrtm_success)
 
     type(CS_window_t), intent(in) :: CS_win
@@ -472,12 +502,16 @@ contains
     integer, intent(in) :: n_stokes
 
     double precision, intent(inout) :: radiance_calc_work_hi_stokes(:,:)
+
     double precision, allocatable, intent(inout) :: dI_dgas(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dsurf(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dTemp(:,:)
     double precision, allocatable, intent(inout) :: dI_dAOD(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dAHeight(:,:,:)
     double precision, allocatable, intent(inout) :: dI_dpsurf(:,:)
+    double precision, allocatable, intent(inout) :: dI_dtaugas(:,:,:)
+
+    logical, intent(in) :: need_gas_averaging_kernels
 
     logical, intent(inout) :: xrtm_success
 
@@ -558,7 +592,7 @@ contains
     end if
 
     ! Assign RT weighting function <-> SV Jacobian mapping
-    call assign_RT_jacobian_indices(SV)
+    call assign_RT_jacobian_indices(SV, need_gas_averaging_kernels, num_lay)
 
 
     ! -----------------------------------------------------------------------
@@ -642,6 +676,7 @@ contains
        lsurf(:,:) = 0.0d0
 
        call calculate_XRTM_lgas_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_ltaugas_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_ltemp_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_lpsurf_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_laerosol_aod_inputs(SV, scn, ltau, lomega)
@@ -898,6 +933,7 @@ contains
        lsurf_pca(:,:) = 0.0d0
 
        call calculate_XRTM_lgas_inputs(SV, scn, ltau, lomega)
+       call calculate_XRTM_ltaugas_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_ltemp_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_lpsurf_inputs(SV, scn, ltau, lomega)
        call calculate_XRTM_laerosol_aod_inputs(SV, scn, ltau, lomega)
@@ -1111,13 +1147,6 @@ contains
 
        radiance_calc_work_hi_stokes(:,:) = monochr_radiance(:,:)
 
-       !call calculate_XRTM_gas_jacobians(SV, scn, monochr_weighting_functions, dI_dgas)
-       !call calculate_XRTM_temp_jacobians(SV, scn, monochr_weighting_functions, dI_dTemp)
-       !call calculate_XRTM_albedo_jacobians(SV, scn, monochr_weighting_functions, dI_dsurf)
-       !call calculate_XRTM_aerosol_aod_jacobians(SV, scn, monochr_weighting_functions, dI_dAOD)
-       !call calculate_XRTM_aerosol_height_jacobians(SV, scn, CS_aerosol, monochr_weighting_functions, dI_dAHeight)
-       !call calculate_XRTM_psurf_jacobians(SV, scn, monochr_weighting_functions, dI_dPsurf)
-
        do j=1, SV%num_aerosol_aod
           ! If this AOD retrieval is in log-space, we need to multiply by
           ! the (linear-space) AOD itself. df/d(ln(x)) = df/dx * x
@@ -1158,6 +1187,11 @@ contains
        dI_dgas(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_gas(i))
     end do
 
+    if (allocated(SV%idx_wf_taugas)) then
+       do i = 1, num_lay
+          dI_dtaugas(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_taugas(i))
+       end do
+    end if
 
     do i = 1, SV%num_albedo
        dI_dsurf(:,i,:) = monochr_weighting_functions(:,:,SV%idx_wf_albedo(i))
@@ -2077,7 +2111,8 @@ contains
   end subroutine calculate_XRTM_radiance
 
   subroutine calculate_XRTM_scale_AK_corr( &
-       dI_dgas, &
+       solar_hires, &
+       dI_dtaugas, &
        stokes_coeffs, &
        scn, &
        SV, &
@@ -2095,7 +2130,8 @@ contains
        )
 
     implicit none
-    double precision, intent(in) :: dI_dgas(:,:,:)
+    double precision, intent(in) :: solar_hires(:)
+    double precision, intent(in) :: dI_dtaugas(:,:,:)
     double precision, intent(in) :: stokes_coeffs(:)
     type(scene), intent(in) :: scn
     type(statevector), intent(in) :: SV
@@ -2142,11 +2178,7 @@ contains
     allocate(AK_profile(SV%num_gas, num_active_levels))
     allocate(AK_profile_total(num_active_levels))
 
-    call logger%fatal("calculate_XRTM_scale_AK_corr", &
-         "This function is not implemented correctly!")
-    stop 1
-
-    ! dI_dgas: (N_hires, N_gas, N_stokes)
+    ! dI_dtaugas: (N_hires, N_gas, N_stokes)
 
     ! Calculate this for every retrieved gas
     do i_gas=1, N_gas
@@ -2171,23 +2203,22 @@ contains
           ! functions to be calculated would increase so much
           ! and slow down the entire algorithm.
 
-
           if (i == 1) then
              ! TOA layer
              do j = 1, N_hires
-                dI_dVMR_stokes(j,:) = dI_dgas(j, i_gas, :) &
+                dI_dVMR_stokes(j,:) = solar_hires(j) * dI_dtaugas(j, i, :) &
                      * scn%op%gas_tau_dvmr(1,j,i,i_gas)
              end do
           else if (i == num_active_levels) then
              ! BOA layer
              do j = 1, N_hires
-                dI_dVMR_stokes(j,:) = dI_dgas(j, i_gas, :) &
+                dI_dVMR_stokes(j,:) = solar_hires(j) * dI_dtaugas(j, i-1, :) &
                      * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
              end do
           else
              ! everything in between
              do j = 1, N_hires
-                dI_dVMR_stokes(j,:) = dI_dgas(j, i_gas, :) &
+                dI_dVMR_stokes(j,:) = solar_hires(j) * dI_dtaugas(j, i, :) &
                      * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) &
                      + scn%op%gas_tau_dvmr(1,j,i,i_gas))
              end do
@@ -2249,9 +2280,6 @@ contains
        end do
 
        col_AK(i_gas, 1:num_active_levels) = AK_profile_total(:)
-
-
-
 
     end do ! End gas loop
 

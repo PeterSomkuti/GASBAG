@@ -54,9 +54,9 @@ contains
               do j = 1, size(radiance)
                  radiance(j) = radiance(j) &
                       * exp( -1.0d0 &
-                      * sum((1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%op%layer_tau(j,1:nlay) * scn%atm%layer_slant_path_solar(1:nlay)) ) &
+                      * sum(scn%op%layer_tau(j,1:nlay) * scn%atm%layer_slant_path_solar(1:nlay)) ) &
                       * exp( -1.0d0 &
-                      * sum((1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%op%layer_tau(j,1:nlay) * scn%atm%layer_slant_path_viewing(1:nlay))  )
+                      * sum(scn%op%layer_tau(j,1:nlay) * scn%atm%layer_slant_path_viewing(1:nlay))  )
               end do
         endif
 
@@ -105,8 +105,8 @@ contains
 
       do j = 1, size(temp_jacobian)
          temp_jacobian(j) =  -TOA_radiance(j) * sum( &
-              (1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%atm%layer_slant_path_solar(1:nlay) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
-              + (1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%atm%layer_slant_path_viewing(1:nlay) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
+              scn%atm%layer_slant_path_solar(1:nlay) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
+              + scn%atm%layer_slant_path_viewing(1:nlay) * sum(scn%op%gas_tau_dtemp(j,1:nlay,:), dim=2) &
               )
       end do
 
@@ -182,7 +182,7 @@ contains
          gas_jacobian(j) = -TOA_radiance(j) * sum( &
               (scn%atm%layer_slant_path_solar(idx_start:idx_stop) &
               + scn%atm%layer_slant_path_viewing(idx_start:idx_stop)) &
-              * (1.0d0 - scn%op%layer_omega(j,1:nlay)) * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas)) / scale_factor
+              * scn%op%gas_tau(j,idx_start:idx_stop,idx_gas)) / scale_factor
       end do
 
     end subroutine calculate_BL_gas_subcolumn_jacobian
@@ -286,7 +286,7 @@ contains
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
                           scn%atm%layer_slant_path_solar(i) &
                           + scn%atm%layer_slant_path_viewing(i) &
-                          ) * (1.0d0 - scn%op%layer_omega(j,i)) * scn%op%gas_tau_dvmr(1,j,i,i_gas)
+                          ) * scn%op%gas_tau_dvmr(1,j,i,i_gas)
                   end do
 
                else if (i == num_active_levels) then
@@ -295,7 +295,7 @@ contains
                      dI_dVMR(j) = -TOA_radiance(j) * ( &
                           scn%atm%layer_slant_path_solar(i-1) &
                           + scn%atm%layer_slant_path_viewing(i-1) &
-                          ) * (1.0d0 - scn%op%layer_omega(j,i)) * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
+                          ) * scn%op%gas_tau_dvmr(2,j,i-1,i_gas)
                   end do
 
                else
@@ -305,7 +305,7 @@ contains
                           scn%atm%layer_slant_path_solar(i) &
                           + scn%atm%layer_slant_path_viewing(i) &
                           ) &
-                          * (1.0d0 - scn%op%layer_omega(j,i)) * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
+                          * (scn%op%gas_tau_dvmr(2,j,i-1,i_gas) + &
                           scn%op%gas_tau_dvmr(1,j,i,i_gas))
                   end do
 

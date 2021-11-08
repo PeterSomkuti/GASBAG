@@ -1036,12 +1036,14 @@ contains
     ! (spectral, parameter, stokes)
     double precision, allocatable :: dI_dgas(:,:,:)
     double precision, allocatable :: dI_dsurf(:,:,:)
+    double precision, allocatable :: dI_dtaugas(:,:,:)
     ! (spectral, stokes)
     double precision, allocatable :: dI_dTemp(:,:)
     double precision, allocatable :: dI_dpsurf(:,:)
     ! (spectral, aerosol, stokes)
     double precision, allocatable :: dI_dAOD(:,:,:)
     double precision, allocatable :: dI_dAHeight(:,:,:)
+
 
     ! Radiative transfer models - which one are we using?
     integer :: RT_model
@@ -2251,6 +2253,8 @@ contains
              ! d) Every retrieved aerosol OD
              ! e) Every retrieved aerosol height
              ! f) One surface pressure jacobian
+             ! g) One per-layer for dI/dVMR
+             !    (this will only be produced if gas column AKs are needed)
 
              if (SV%num_gas > 0) then
                 allocate(dI_dgas(N_hires, SV%num_gas, n_stokes))
@@ -2275,6 +2279,11 @@ contains
              if (SV%num_psurf == 1) then
                 allocate(dI_dpsurf(N_hires, n_stokes))
              end if
+
+             if (CS%output%gas_averaging_kernels) then
+                allocate(dI_dtaugas(N_hires, num_active_levels - 1, n_stokes))
+             end if
+
           end if
 
           ! If we retrieve surface pressure, grab it from the state vector,
@@ -2606,7 +2615,9 @@ contains
                dI_dAOD, &  ! Jacobian results
                dI_dAHeight, & ! Jacobian results
                dI_dpsurf, & ! Jacobian results
-               xrtm_success & ! Jacobian results
+               dI_dtaugas, & ! Jacobian results
+               CS%output%gas_averaging_kernels, & ! Need gas AKs?
+               xrtm_success & ! Any errors?
                )
 
           ! If XRTM failed, no need to continue and move on to next retrieval.
@@ -3271,6 +3282,11 @@ contains
           ! factor from the state vector, and calculate the pressure weighting function
           ! as well as the XGAS.
 
+          ! Calculate state vector element uncertainties from Shat
+          do i=1, N_sv
+             SV%sver(i) = sqrt(Shat(i,i))
+          end do
+
           if (SV%num_gas > 0) then
 
              ! We also want to have the corresponding number of molecules of dry air
@@ -3290,6 +3306,7 @@ contains
                 results%pwgts(i_fp, i_fr, i) = scn%atm%pwgts(i)
              end do
 
+             results%xgas_uncertainty(i_fp, i_fr, :) = 0.0d0
              do j=1, CS_win%num_gases
 
                 ! Allocate array for pressure weights
@@ -3337,7 +3354,7 @@ contains
                 results%xgas(i_fp, i_fr, j) = ddot( &
                      num_active_levels, &
                      scn%atm%pwgts, 1, &
-                     this_vmr_profile(:, j), 1 &
+                     results%vmr_retrieved(i_fp, i_fr, j, 1:num_active_levels), 1 &
                      )
 
                 ! Compute XGAS as the sum of pgwts times GAS VMRs.
@@ -3346,6 +3363,34 @@ contains
                      scn%atm%pwgts, 1, &
                      prior_vmr_profile(:, j), 1 &
                      )
+
+                ! Compute the XGAS uncertainty
+
+                do i=1, SV%num_gas
+
+                   if (SV%gas_idx_lookup(i) == j) then
+                      ! Sum up all contributions (variances) from the partial columns
+                      ! posterior variance on the gas column is (x .. state vector):
+                      ! dxgas / dx * S * dxgas / dx
+                      !
+                      ! For the scaling retrieval, dxgas / dscale_factor = xgas_prior
+                      ! since xgas_retrieved = xgas_prior * scale_factor
+
+                      results%xgas_uncertainty(i_fp, i_fr, j) = results%xgas_uncertainty(i_fp, i_fr, j) + &
+                           results%xgas_prior(i_fp, i_fr, j) * results%xgas_prior(i_fp, i_fr, j) &
+                           * Shat(SV%idx_gas(i, 1), SV%idx_gas(i, 1))
+
+                           !sum( &
+                           !(scn%atm%pwgts(s_start(i):s_stop(i)) ** 2) &
+                           !* (SV%sver(SV%idx_gas(i, 1)) ** 2) &
+                           !* (this_vmr_profile(s_start(i):s_stop(i), j) ** 2) &
+                           !)
+                   end if
+
+                end do
+
+                ! Return the uncertainty rather than variance
+                results%xgas_uncertainty(i_fp, i_fr, j) = sqrt(results%xgas_uncertainty(i_fp, i_fr, j))
 
              end do
 
@@ -3376,7 +3421,8 @@ contains
                 case (RT_XRTM)
 
                    call calculate_XRTM_scale_AK_corr( &
-                        dI_dgas(:,:,:), &
+                        this_solar(:,2), &
+                        dI_dtaugas(:,:,:), &
                         stokes_coef(:, i_fp, i_fr), &
                         scn, &
                         SV, &
@@ -3401,11 +3447,6 @@ contains
 
           ! Save the final dSigma-squared value (in case anyone needs it)
           results%dsigma_sq(i_fp, i_fr) = dsigma_sq
-
-          ! Calculate state vector element uncertainties from Shat
-          do i=1, N_sv
-             SV%sver(i) = sqrt(Shat(i,i))
-          end do
 
           ! Put the SV uncertainty into the result container
           results%sv_uncertainty(i_fp, i_fr, :) = SV%sver(:)
@@ -3764,6 +3805,7 @@ contains
        if (allocated(prior_vmr_profile)) deallocate(prior_vmr_profile)
 
        if (allocated(dI_dgas)) deallocate(dI_dgas)
+       if (allocated(dI_dtaugas)) deallocate(dI_dtaugas)
        if (allocated(dI_dsurf)) deallocate(dI_dsurf)
        if (allocated(dI_dTemp)) deallocate(dI_dTemp)
        if (allocated(dI_dAOD)) deallocate(dI_dAOD)

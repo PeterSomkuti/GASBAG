@@ -566,7 +566,7 @@ contains
 
        ! Maybe replace this by geoid radius..
        !alt_tmp = EARTH_EQUATORIAL_RADIUS / (EARTH_EQUATORIAL_RADIUS + scn%atm%altitude_levels(i))
-       alt_tmp = radius / (radius + scn%atm%altitude_layers(i))
+       alt_tmp = radius / (radius + scn%atm%altitude_levels(i+1))
        scn%atm%ps_factors_solar(i) = cos(scn%SZA * DEG2RAD) / sqrt(1.0d0 - sin(scn%SZA * DEG2RAD)**2 * alt_tmp * alt_tmp)
        scn%atm%ps_factors_viewing(i) = cos(scn%VZA * DEG2RAD) / sqrt(1.0d0 - sin(scn%VZA * DEG2RAD)**2 * alt_tmp * alt_tmp)
 
@@ -579,8 +579,11 @@ contains
     call chapman_factors(scn, scn%mu, radius, scn%atm%chapman_viewing)
 
     do i = 1, scn%num_levels - 1
-       scn%atm%layer_slant_path_viewing(i) = scn%atm%chapman_viewing(i,i) * 0.99d0
-       scn%atm%layer_slant_path_solar(i) = scn%atm%chapman_solar(i,i)
+       !scn%atm%layer_slant_path_viewing(i) = scn%atm%chapman_viewing(i,i)
+       !scn%atm%layer_slant_path_solar(i) = scn%atm%chapman_solar(i,i)
+
+       scn%atm%layer_slant_path_viewing(i) = 1.0d0 / (cos(scn%VZA * DEG2RAD)) * scn%atm%ps_factors_viewing(i)
+       scn%atm%layer_slant_path_solar(i) = 1.0d0 / (cos(scn%SZA * DEG2RAD)) * scn%atm%ps_factors_solar(i)
     end do
 
   end subroutine scene_altitude

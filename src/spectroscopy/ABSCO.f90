@@ -66,14 +66,29 @@ contains
 
 
     hdferr = -1
-    i = 0
+    i = 1
     do while ((i < max_attempts) .and. (hdferr < 0))
+
+       write(tmp_str, "(A, G0.1, A, A)") "Attempt #", i, " to read ABSCO file: ", trim(filename)
+       call logger%info(fname, trim(tmp_str))
+
        call h5fopen_f(trim(filename), H5F_ACC_RDONLY_F, absco_file_id, hdferr)
        i = i + 1
 
        if (hdferr < 0) then
-          write(tmp_str, "(A, G0.1, A, A)") "Attempt #", i, "to read ABSCO file: ", trim(filename)
-          call logger%debug(fname, trim(tmp_str))
+          write(tmp_str, "(A)") "Attempt failed - pausing three seconds and then trying again.."
+          call logger%info(fname, trim(tmp_str))
+          ! This only works with gfortran
+          call sleep(3)
+       else
+          write(tmp_str, "(A)") "Attempt successful."
+          call logger%info(fname, trim(tmp_str))
+          exit
+       end if
+
+       if (i == max_attempts) then
+          write(tmp_str, "(A)") "Maximum number of attempts reached."
+          call logger%info(fname, trim(tmp_str))
        end if
 
     end do

@@ -800,7 +800,7 @@ contains
        ! only one thread at a time is accessing and reading from the HDF5 file.
        ! (notably: reading spectra, writing to a logfile)
 
-       !frame_start = 2349
+       !frame_start = 1
        !frame_start = 3225
        !frame_stop = 50
 
@@ -1616,7 +1616,6 @@ contains
     !seed(:) = 111
     !seed(1) = i_fp
     !seed(2) = i_fr
-
 
     !call random_seed(put=seed)
     !call random_number(random_psurf)

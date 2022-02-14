@@ -14,6 +14,7 @@ module file_utils_mod
 
   implicit none
 
+  integer :: MAX_HDF_ATTEMPTS = 10
 
   !> Interface for writing double precision arrays into HDF files
   interface write_DP_hdf_dataset
@@ -189,6 +190,7 @@ contains
     integer, dimension(:,:), allocatable, intent(inout) :: array
     integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_2D_INT_dataset"
@@ -198,7 +200,18 @@ contains
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1), dset_dims(2)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
+
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_INTEGER, array, dset_dims, hdferr)
@@ -213,6 +226,7 @@ contains
     integer, dimension(:,:,:), allocatable, intent(inout) :: array
     integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_3D_DP_dataset"
@@ -222,7 +236,18 @@ contains
     call get_HDF5_dset_dims(file_id, trim(dset_name), dset_dims)
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
+
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_INTEGER, array, dset_dims, hdferr)
@@ -237,6 +262,7 @@ contains
     double precision, allocatable, intent(inout) :: array(:,:,:,:,:)
     integer(hsize_t), allocatable, intent(inout) :: dset_dims(:)
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=999) :: tmp_str
@@ -255,7 +281,18 @@ contains
 
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4), dset_dims(5)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
+
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
@@ -271,6 +308,7 @@ contains
     real, allocatable, intent(inout) :: array(:,:,:,:)
     integer(hsize_t), allocatable, intent(inout) :: dset_dims(:)
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=999) :: tmp_str
@@ -289,7 +327,17 @@ contains
 
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_REAL, array, dset_dims, hdferr)
@@ -304,6 +352,7 @@ contains
     double precision, allocatable, intent(inout) :: array(:,:,:,:)
     integer(hsize_t), allocatable, intent(inout) :: dset_dims(:)
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=999) :: tmp_str
@@ -322,7 +371,17 @@ contains
 
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3), dset_dims(4)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
@@ -337,6 +396,7 @@ contains
     double precision, dimension(:,:,:), allocatable, intent(inout) :: array
     integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=999) :: tmp_str
@@ -354,8 +414,17 @@ contains
     end if
 
     allocate(array(dset_dims(1), dset_dims(2), dset_dims(3)))
-
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
@@ -371,6 +440,7 @@ contains
     real, dimension(:,:), allocatable, intent(inout) :: array
     integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_2D_SP_dataset"
@@ -388,7 +458,17 @@ contains
 
     allocate(array(dset_dims(1), dset_dims(2)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_REAL, array, dset_dims, hdferr)
@@ -403,6 +483,7 @@ contains
     double precision, dimension(:,:), allocatable, intent(inout) :: array
     integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=*), parameter :: fname = "read_2D_DP_dataset"
@@ -420,7 +501,17 @@ contains
 
     allocate(array(dset_dims(1), dset_dims(2)))
 
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
@@ -435,6 +526,7 @@ contains
     double precision, dimension(:), allocatable, intent(inout) :: array
     integer(hsize_t), dimension(:), allocatable, intent(inout) :: dset_dims
 
+    integer :: i
     integer :: hdferr
     integer(hid_t) :: dset_id
     character(len=999) :: tmp_str
@@ -452,8 +544,17 @@ contains
     end if
 
     allocate(array(dset_dims(1)))
-
-    call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+    hdferr = -1
+    i = 1
+    do while ((hdferr < 0) .and. (i <= MAX_HDF_ATTEMPTS))
+       call h5dopen_f(file_id, trim(dset_name), dset_id, hdferr)
+       i = i + 1
+       if (hdferr < 0) then
+          call sleep(3)
+       else
+          exit
+       end if
+    end do
     call check_hdf_error(hdferr, fname, "Error. Could not open " // trim(dset_name))
 
     call h5dread_f(dset_id, H5T_NATIVE_DOUBLE, array, dset_dims, hdferr)
